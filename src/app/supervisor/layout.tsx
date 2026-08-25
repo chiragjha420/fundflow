@@ -7,7 +7,7 @@ import { createBrowserClient } from '@/lib/supabase/browser-client';
 import { logout } from '@/app/actions/auth';
 import { OfflineStatusBar } from '@/components/offline-status-bar';
 import { formatINR } from '@/lib/utils';
-import { LogOut, Home, Users } from 'lucide-react';
+import { LogOut, Home, Users, Receipt, ArrowLeftRight } from 'lucide-react';
 import { getOfflineCache, setOfflineCache } from '@/lib/offline-db';
 
 export default function SupervisorLayout({
@@ -170,10 +170,24 @@ export default function SupervisorLayout({
         </Link>
         <Link
           href="/supervisor/workers"
-          className="flex-1 flex flex-col items-center justify-center text-slate-600 hover:text-slate-900 min-h-[44px]"
+          className="flex-1 flex flex-col items-center justify-center text-slate-600 hover:text-slate-900 border-r border-slate-100 min-h-[44px]"
         >
           <Users className="h-5 w-5" />
           <span className="text-[10px] font-semibold mt-1">Workers</span>
+        </Link>
+        <Link
+          href="/supervisor/expenses"
+          className="flex-1 flex flex-col items-center justify-center text-slate-600 hover:text-slate-900 border-r border-slate-100 min-h-[44px]"
+        >
+          <Receipt className="h-5 w-5" />
+          <span className="text-[10px] font-semibold mt-1">Expenses</span>
+        </Link>
+        <Link
+          href="/supervisor/transfers"
+          className="flex-1 flex flex-col items-center justify-center text-slate-600 hover:text-slate-900 min-h-[44px]"
+        >
+          <ArrowLeftRight className="h-5 w-5" />
+          <span className="text-[10px] font-semibold mt-1">Transfers</span>
         </Link>
       </nav>
     </div>

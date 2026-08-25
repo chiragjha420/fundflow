@@ -98,6 +98,7 @@ export function AdminDashboard({
   const [selectedFactoryId, setSelectedFactoryId] = useState<string>('all');
   const [selectedSupervisorId, setSelectedSupervisorId] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
+  const [selectedPurpose, setSelectedPurpose] = useState<string>('all');
 
   // Handle office disbursement submission
   const handleDisbursementSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -221,54 +222,98 @@ export function AdminDashboard({
     };
   }).sort((a, b) => b.totalHandled - a.totalHandled);
 
-  // --- 3. Filter Transactions ---
-  const filteredTransactions = transactions.filter(tx => {
-    // Factory Filter
-    if (selectedFactoryId !== 'all') {
-      const matchToSup = tx.to_sup && tx.to_sup.factory_id === selectedFactoryId;
-      const matchFromSup = supervisors.find(s => s.id === tx.from_supervisor_id)?.factory_id === selectedFactoryId;
-      const matchToWorker = tx.to_work && tx.to_work.factory_id === selectedFactoryId;
-      if (!matchToSup && !matchFromSup && !matchToWorker) return false;
-    }
-
-    // Supervisor Filter
-    if (selectedSupervisorId !== 'all') {
-      const matchFrom = tx.from_supervisor_id === selectedSupervisorId;
-      const matchTo = tx.to_supervisor_id === selectedSupervisorId;
-      if (!matchFrom && !matchTo) return false;
-    }
-
-    // Status Filter
-    if (selectedStatus !== 'all' && tx.status !== selectedStatus) {
-      return false;
-    }
-
-    return true;
-  });
-
   // Check if a transaction is pending and older than 24 hours
   const isOlderThan24Hours = (createdAt: string) => {
     const hours = (new Date().getTime() - new Date(createdAt).getTime()) / (1000 * 60 * 60);
     return hours >= 24;
   };
 
+  // --- 3. Combine and Filter Ledger Entries (Transactions + Expenses) ---
+  const filteredLedger = [
+    ...transactions.map(tx => {
+      let purpose: 'Wages' | 'Expenses' | 'Transfers' = 'Transfers';
+      if (tx.type === 'supervisor_to_worker') {
+        purpose = 'Wages';
+      }
+      
+      let factoryId: string | null = null;
+      if (tx.to_sup) {
+        factoryId = tx.to_sup.factory_id;
+      } else if (tx.to_work) {
+        factoryId = tx.to_work.factory_id;
+      } else if (tx.from_supervisor_id) {
+        factoryId = supervisors.find(s => s.id === tx.from_supervisor_id)?.factory_id || null;
+      }
+
+      return {
+        id: tx.id,
+        created_at: tx.created_at,
+        amount: Number(tx.amount),
+        status: tx.status,
+        note: tx.note,
+        type: tx.type,
+        purpose,
+        fromLabel: tx.type === 'office_to_supervisor' ? 'Office' : tx.from?.name || 'Supervisor',
+        toLabel: tx.type === 'supervisor_to_worker' ? tx.to_work?.name || 'Worker' : tx.to_sup?.name || 'Supervisor',
+        factoryId,
+        supervisorId: tx.from_supervisor_id || tx.to_supervisor_id,
+        isFlagged: tx.status === 'pending' && isOlderThan24Hours(tx.created_at),
+      };
+    }),
+    ...expenses.map(exp => {
+      return {
+        id: exp.id,
+        created_at: exp.created_at,
+        amount: Number(exp.amount),
+        status: 'confirmed',
+        note: `${exp.category}${exp.note ? `: ${exp.note}` : ''}`,
+        type: 'expense',
+        purpose: 'Expenses' as const,
+        fromLabel: exp.supervisors?.name || 'Supervisor',
+        toLabel: 'Vendor / Shop',
+        factoryId: exp.factory_id,
+        supervisorId: exp.supervisor_id,
+        isFlagged: false,
+      };
+    })
+  ].filter(entry => {
+    // Factory Filter
+    if (selectedFactoryId !== 'all' && entry.factoryId !== selectedFactoryId) {
+      return false;
+    }
+
+    // Supervisor Filter
+    if (selectedSupervisorId !== 'all' && entry.supervisorId !== selectedSupervisorId) {
+      return false;
+    }
+
+    // Status Filter
+    if (selectedStatus !== 'all' && entry.status !== selectedStatus) {
+      return false;
+    }
+
+    // Purpose Filter
+    if (selectedPurpose !== 'all' && entry.purpose.toLowerCase() !== selectedPurpose.toLowerCase()) {
+      return false;
+    }
+
+    return true;
+  }).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
   // --- 4. CSV Export ---
   const exportToCSV = () => {
-    const headers = ['Transaction ID', 'Type', 'From Supervisor', 'To Supervisor/Worker', 'Amount (INR)', 'Status', 'Notes', 'Created At', 'Confirmed At'];
-    const rows = filteredTransactions.map(tx => {
-      const typeLabel = tx.type.replace(/_/g, ' ').toUpperCase();
-      const fromLabel = tx.type === 'office_to_supervisor' ? 'OFFICE' : tx.from?.name || '';
-      const toLabel = tx.type === 'supervisor_to_worker' ? tx.to_work?.name || '' : tx.to_sup?.name || '';
+    const headers = ['Record ID', 'Purpose', 'Type/Category', 'From', 'To/Vendor', 'Amount (INR)', 'Status', 'Notes', 'Created At'];
+    const rows = filteredLedger.map(entry => {
       return [
-        tx.id,
-        typeLabel,
-        fromLabel,
-        toLabel,
-        tx.amount,
-        tx.status.toUpperCase(),
-        tx.note || '',
-        new Date(tx.created_at).toLocaleString(),
-        tx.confirmed_at ? new Date(tx.confirmed_at).toLocaleString() : '',
+        entry.id,
+        entry.purpose,
+        entry.type.replace(/_/g, ' ').toUpperCase(),
+        entry.fromLabel,
+        entry.toLabel,
+        entry.amount,
+        entry.status.toUpperCase(),
+        entry.note || '',
+        new Date(entry.created_at).toLocaleString(),
       ];
     });
 
@@ -280,7 +325,7 @@ export function AdminDashboard({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    link.setAttribute('download', `fundflow_transactions_${new Date().toISOString().split('T')[0]}.csv`);
+    link.setAttribute('download', `fundflow_ledger_${new Date().toISOString().split('T')[0]}.csv`);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
@@ -522,7 +567,7 @@ export function AdminDashboard({
             <h2 className="text-sm font-bold uppercase tracking-wider text-slate-900">Ledger Transactions Log</h2>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
             {/* Factory Filter */}
             <div>
               <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">Factory</label>
@@ -567,11 +612,26 @@ export function AdminDashboard({
                 <option value="disputed">Disputed</option>
               </select>
             </div>
+
+            {/* Purpose Filter */}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">Purpose</label>
+              <select
+                value={selectedPurpose}
+                onChange={(e) => setSelectedPurpose(e.target.value)}
+                className="mt-1 block w-full rounded border-slate-300 text-xs py-1.5 focus:border-slate-500 focus:outline-none focus:ring-slate-500 min-h-[38px] text-slate-900 bg-white"
+              >
+                <option value="all">All Purposes</option>
+                <option value="wages">Wages</option>
+                <option value="expenses">Expenses</option>
+                <option value="transfers">Transfers</option>
+              </select>
+            </div>
           </div>
         </div>
 
         {/* Transactions Feed list */}
-        {filteredTransactions.length === 0 ? (
+        {filteredLedger.length === 0 ? (
           <div className="p-8 text-center text-sm text-slate-500">
             No transactions found matching the filters.
           </div>
@@ -581,54 +641,65 @@ export function AdminDashboard({
               <thead className="bg-slate-50 text-slate-700 font-medium text-xs uppercase tracking-wider">
                 <tr>
                   <th className="px-6 py-3">Timestamp</th>
-                  <th className="px-6 py-3">Type</th>
+                  <th className="px-6 py-3">Purpose</th>
+                  <th className="px-6 py-3">Type/Category</th>
                   <th className="px-6 py-3">From</th>
-                  <th className="px-6 py-3">To</th>
+                  <th className="px-6 py-3">To/Vendor</th>
                   <th className="px-6 py-3 text-right">Amount</th>
                   <th className="px-6 py-3">Status</th>
                   <th className="px-6 py-3">Note</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 bg-white text-slate-900">
-                {filteredTransactions.map((tx) => {
-                  const isFlagged = tx.status === 'pending' && isOlderThan24Hours(tx.created_at);
+                {filteredLedger.map((entry) => {
                   return (
-                    <tr key={tx.id} className={`hover:bg-slate-50 ${isFlagged ? 'bg-red-50/30' : ''}`}>
+                    <tr key={entry.id} className={`hover:bg-slate-50 ${entry.isFlagged ? 'bg-red-50/30' : ''}`}>
                       <td className="px-6 py-4 whitespace-nowrap text-slate-500 text-xs">
-                        {new Date(tx.created_at).toLocaleString('en-IN', {
+                        {new Date(entry.created_at).toLocaleString('en-IN', {
                           day: 'numeric',
                           month: 'short',
                           hour: '2-digit',
                           minute: '2-digit',
                         })}
                       </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-bold border ${
+                          entry.purpose === 'Wages' 
+                            ? 'bg-blue-50 text-blue-700 border-blue-100' 
+                            : entry.purpose === 'Expenses' 
+                            ? 'bg-red-50 text-red-700 border-red-100' 
+                            : 'bg-purple-50 text-purple-700 border-purple-100'
+                        }`}>
+                          {entry.purpose}
+                        </span>
+                      </td>
                       <td className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-600">
-                        {tx.type.replace(/_/g, ' ')}
+                        {entry.type.replace(/_/g, ' ')}
                       </td>
                       <td className="px-6 py-4 text-slate-700">
-                        {tx.type === 'office_to_supervisor' ? 'Office' : tx.from?.name || 'Unknown'}
+                        {entry.fromLabel}
                       </td>
                       <td className="px-6 py-4 font-semibold">
-                        {tx.type === 'supervisor_to_worker' ? tx.to_work?.name : tx.to_sup?.name}
+                        {entry.toLabel}
                       </td>
                       <td className="px-6 py-4 text-right font-bold text-slate-800">
-                        {formatINR(tx.amount)}
+                        {formatINR(entry.amount)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex flex-col gap-1">
                           <span
                             className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-bold ${
-                              tx.status === 'confirmed'
+                              entry.status === 'confirmed'
                                 ? 'bg-emerald-50 text-emerald-700 border border-emerald-100'
-                                : tx.status === 'disputed'
+                                : entry.status === 'disputed'
                                 ? 'bg-red-50 text-red-700 border border-red-100'
-                                : 'bg-amber-50 text-amber-700 border border-amber-100 animate-pulse'
+                                : 'bg-amber-50 text-amber-700 border border-amber-100'
                             }`}
                           >
-                            {tx.status.toUpperCase()}
+                            {entry.status.toUpperCase()}
                           </span>
                           
-                          {isFlagged && (
+                          {entry.isFlagged && (
                             <span className="flex items-center gap-1 text-[10px] font-bold text-red-600 uppercase">
                               <AlertTriangle className="h-3 w-3" />
                               <span>Over 24h old</span>
@@ -637,7 +708,7 @@ export function AdminDashboard({
                         </div>
                       </td>
                       <td className="px-6 py-4 text-slate-500 text-xs italic max-w-xs truncate">
-                        {tx.note || '-'}
+                        {entry.note || '-'}
                       </td>
                     </tr>
                   );
