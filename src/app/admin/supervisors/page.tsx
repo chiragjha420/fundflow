@@ -4,6 +4,7 @@ import { FactoryForm } from './factory-form';
 import { SupervisorForm } from './supervisor-form';
 import { ToggleSupervisorButton } from './toggle-button';
 import { DeleteSupervisorButton } from './delete-button';
+import { CollapsibleCard } from './collapsible-card';
 
 export const revalidate = 0; // Disable static caching for real-time admin view
 
@@ -34,16 +35,14 @@ export default async function SupervisorsAdminPage() {
         {/* Left Column: Management Forms */}
         <div className="space-y-6 lg:col-span-1">
           {/* Add Factory Card */}
-          <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
-            <h2 className="text-base font-bold text-slate-950 mb-4">Add New Factory</h2>
+          <CollapsibleCard title="Add New Factory">
             <FactoryForm />
-          </div>
+          </CollapsibleCard>
 
           {/* Provision Supervisor Card */}
-          <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
-            <h2 className="text-base font-bold text-slate-950 mb-4">Provision Supervisor</h2>
+          <CollapsibleCard title="Provision Supervisor">
             <SupervisorForm factories={factories || []} />
-          </div>
+          </CollapsibleCard>
         </div>
 
         {/* Right Column: Supervisors List */}
