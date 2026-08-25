@@ -69,30 +69,13 @@ export async function clearSyncQueue(): Promise<void> {
   await tx.done;
 }
 
-// Cache Operations for Offline Reading
-export async function setOfflineCache<T>(key: string, data: T): Promise<void> {
-  try {
-    const db = await getDB();
-    if (!db) return;
-    const tx = db.transaction('cache', 'readwrite');
-    const store = tx.objectStore('cache');
-    await store.put(data, key);
-    await tx.done;
-  } catch (e) {
-    console.error('Failed to set offline cache:', e);
-  }
+// Cache Operations for Offline Reading (Bypassed - Caching disabled per requirements)
+export async function setOfflineCache<T>(_key: string, _data: T): Promise<void> {
+  // Caching disabled to guarantee fresh online data fetches
+  return;
 }
 
-export async function getOfflineCache<T>(key: string): Promise<T | null> {
-  try {
-    const db = await getDB();
-    if (!db) return null;
-    const tx = db.transaction('cache', 'readonly');
-    const store = tx.objectStore('cache');
-    const data = await store.get(key);
-    return data || null;
-  } catch (e) {
-    console.error('Failed to get offline cache:', e);
-    return null;
-  }
+export async function getOfflineCache<T>(_key: string): Promise<T | null> {
+  // Caching disabled to guarantee fresh online data fetches
+  return null;
 }
