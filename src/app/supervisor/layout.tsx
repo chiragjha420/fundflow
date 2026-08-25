@@ -7,7 +7,7 @@ import { createBrowserClient } from '@/lib/supabase/browser-client';
 import { logout } from '@/app/actions/auth';
 import { OfflineStatusBar } from '@/components/offline-status-bar';
 import { formatINR } from '@/lib/utils';
-import { LogOut, Home, Users, Receipt, ArrowLeftRight } from 'lucide-react';
+import { LogOut, Home, Users, IndianRupee, ArrowLeftRight } from 'lucide-react';
 import { getOfflineCache, setOfflineCache } from '@/lib/offline-db';
 
 export default function SupervisorLayout({
@@ -179,7 +179,7 @@ export default function SupervisorLayout({
           href="/supervisor/expenses"
           className="flex-1 flex flex-col items-center justify-center text-slate-600 hover:text-slate-900 border-r border-slate-100 min-h-[44px]"
         >
-          <Receipt className="h-5 w-5" />
+          <IndianRupee className="h-5 w-5" />
           <span className="text-[10px] font-semibold mt-1">Expenses</span>
         </Link>
         <Link

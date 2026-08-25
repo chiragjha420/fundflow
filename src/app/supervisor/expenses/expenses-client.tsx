@@ -7,7 +7,7 @@ import { getOfflineCache, setOfflineCache } from '@/lib/offline-db';
 import { formatINR } from '@/lib/utils';
 import { 
   Search, 
-  Receipt, 
+  IndianRupee, 
   Calendar, 
   X, 
   RefreshCw,
@@ -131,7 +131,7 @@ export function SupervisorExpensesClientPage() {
                 <div className="flex items-start justify-between">
                   <div className="flex gap-3">
                     <div className="h-10 w-10 rounded-lg bg-red-50 border border-red-100 flex items-center justify-center text-red-500 shrink-0">
-                      <Receipt className="h-5 w-5" />
+                      <IndianRupee className="h-5 w-5" />
                     </div>
                     <div>
                       <h4 className="text-sm font-extrabold text-slate-900 uppercase tracking-wide">{exp.category}</h4>
