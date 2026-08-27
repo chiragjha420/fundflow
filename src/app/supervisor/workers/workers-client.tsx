@@ -14,7 +14,8 @@ import {
   X, 
   Check, 
   RefreshCw,
-  AlertCircle
+  AlertCircle,
+  Trash2
 } from 'lucide-react';
 
 interface Worker {
@@ -53,6 +54,45 @@ export function SupervisorWorkersClientPage() {
 
   const [actionLoading, setActionLoading] = useState(false);
   const [actionMessage, setActionMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const handleDeleteWorker = async () => {
+    if (!editingWorker) return;
+    setActionLoading(true);
+    setActionMessage(null);
+    setConfirmDelete(false);
+
+    try {
+      // 1. Try to hard-delete first
+      const { error: deleteError } = await supabase
+        .from('workers')
+        .delete()
+        .eq('id', editingWorker.worker_id);
+
+      if (deleteError) {
+        // If delete fails due to foreign key violations (restrict constraint), soft-delete
+        if (deleteError.code === '23503') {
+          const { error: updateError } = await supabase
+            .from('workers')
+            .update({ active: false })
+            .eq('id', editingWorker.worker_id);
+          
+          if (updateError) throw updateError;
+        } else {
+          throw deleteError;
+        }
+      }
+
+      setActionMessage({ type: 'success', text: 'Worker successfully removed.' });
+      setEditingWorker(null);
+      queryClient.invalidateQueries({ queryKey: ['workers'] });
+    } catch (e: any) {
+      console.error('Delete worker failed:', e);
+      setActionMessage({ type: 'error', text: e.message || 'Failed to remove worker.' });
+    } finally {
+      setActionLoading(false);
+    }
+  };
 
   // 1. Get Supervisor Info
   const { data: supervisor } = useQuery({
@@ -299,20 +339,31 @@ export function SupervisorWorkersClientPage() {
                 </div>
               )}
 
-              <button
-                type="submit"
-                disabled={actionLoading}
-                className="w-full flex justify-center items-center rounded-md bg-slate-900 py-3 text-sm font-semibold text-white shadow hover:bg-slate-800 disabled:opacity-50 min-h-[44px] gap-2"
-              >
-                {actionLoading ? (
-                  <RefreshCw className="h-4 w-4 animate-spin" />
-                ) : (
-                  <>
-                    <Check className="h-4 w-4" />
-                    <span>Save Profile</span>
-                  </>
-                )}
-              </button>
+              <div className="flex gap-3">
+                <button
+                  type="submit"
+                  disabled={actionLoading}
+                  className="flex-1 flex justify-center items-center rounded-md bg-slate-900 py-3 text-sm font-semibold text-white shadow hover:bg-slate-800 disabled:opacity-50 min-h-[44px] gap-2"
+                >
+                  {actionLoading ? (
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <>
+                      <Check className="h-4 w-4" />
+                      <span>Save Profile</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  disabled={actionLoading}
+                  onClick={() => setConfirmDelete(true)}
+                  className="px-4 flex justify-center items-center rounded-md bg-red-50 hover:bg-red-100 border border-red-200 text-sm font-bold text-red-600 disabled:opacity-50 min-h-[44px]"
+                  title="Remove Worker"
+                >
+                  <Trash2 className="h-4.5 w-4.5" />
+                </button>
+              </div>
             </form>
 
             {/* Worker Payment History */}
@@ -438,6 +489,35 @@ export function SupervisorWorkersClientPage() {
           </ul>
         )}
       </div>
+
+      {/* Delete Confirmation Modal Overlay */}
+      {confirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white border border-slate-200 rounded-lg shadow-2xl p-6 max-w-sm w-full space-y-4">
+            <h3 className="text-base font-bold text-slate-900">Remove Worker?</h3>
+            <p className="text-xs text-slate-600">
+              Are you sure you want to remove <span className="font-extrabold">{editingWorker?.worker_name}</span>? 
+              This worker will be deactivated and removed from the active registry.
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(false)}
+                className="flex-1 rounded-md border border-slate-300 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 min-h-[44px]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteWorker}
+                className="flex-1 rounded-md bg-red-600 py-2.5 text-xs font-bold text-white hover:bg-red-700 min-h-[44px]"
+              >
+                Yes, Remove
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
