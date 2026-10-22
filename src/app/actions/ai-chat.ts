@@ -32,7 +32,7 @@ export async function askDatabaseAI(
   userQuery: string,
   history: ChatMessage[] = [],
   apiKeyOverride?: string,
-  modelRequested: string = 'gemini-2.5-flash'
+  modelRequested: string = 'gemini-3.8-flash'
 ): Promise<ChatResponse> {
   try {
     // 1. Security Check: Verify Admin Authentication
@@ -295,12 +295,13 @@ ${JSON.stringify(expenseList.slice(0, 25).map(e => ({
 - Use GitHub markdown: bold key metrics, bulleted lists, and clean tables where comparison is helpful.
 - If no discrepancies or records exist for a specific filter, clearly state that everything is clean and balanced.`;
 
-    // 5. Call the Google Gemini API with the Requested Model
+    // 5. Call the Google Gemini API with the Requested Model (Latest Gemini 3.8 / 3.5 Generation)
     const candidateModels = [
       modelRequested,
-      'gemini-2.5-flash',
-      'gemini-2.5-pro',
-      'gemini-2.0-flash'
+      'gemini-3.8-flash',
+      'gemini-3.8-pro',
+      'gemini-3.5-flash',
+      'gemini-3.5-pro'
     ];
 
     // Remove duplicates while preserving order

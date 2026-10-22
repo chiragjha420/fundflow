@@ -34,7 +34,7 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
   const [customApiKey, setCustomApiKey] = useState<string>('');
   const [showKeyModal, setShowKeyModal] = useState<boolean>(false);
   const [showKeySecret, setShowKeySecret] = useState<boolean>(false);
-  const [selectedModel, setSelectedModel] = useState<string>('gemini-2.5-flash');
+  const [selectedModel, setSelectedModel] = useState<string>('gemini-3.8-flash');
   const [customModelInput, setCustomModelInput] = useState<string>('');
   const [isCustomModel, setIsCustomModel] = useState<boolean>(false);
 
@@ -49,14 +49,15 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
     }
 
     const savedModel = localStorage.getItem('fundflow_gemini_model');
-    if (savedModel) {
-      if (['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'].includes(savedModel)) {
-        setSelectedModel(savedModel);
-      } else {
-        setIsCustomModel(true);
-        setCustomModelInput(savedModel);
-        setSelectedModel(savedModel);
-      }
+    if (savedModel && ['gemini-3.8-flash', 'gemini-3.8-pro', 'gemini-3.5-flash', 'gemini-3.5-pro'].includes(savedModel)) {
+      setSelectedModel(savedModel);
+    } else if (savedModel && savedModel !== 'gemini-2.5-flash' && savedModel !== 'gemini-2.0-flash' && savedModel !== 'gemini-1.5-flash') {
+      setIsCustomModel(true);
+      setCustomModelInput(savedModel);
+      setSelectedModel(savedModel);
+    } else {
+      setSelectedModel('gemini-3.8-flash');
+      localStorage.setItem('fundflow_gemini_model', 'gemini-3.8-flash');
     }
 
     checkServerGeminiKeyConfigured().then(res => {
@@ -371,9 +372,9 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
                 className="bg-slate-800 border border-slate-700 text-emerald-300 text-xs rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-emerald-400 min-h-[34px] font-mono cursor-pointer font-semibold"
                 title="Select Gemini Model"
               >
-                <option value="gemini-2.5-flash">⚡ gemini-2.5-flash (Latest Thinking)</option>
-                <option value="gemini-2.5-pro">🧠 gemini-2.5-pro (Deep Reasoning)</option>
-                <option value="gemini-2.0-flash">🚀 gemini-2.0-flash (High Speed)</option>
+                <option value="gemini-3.8-flash">⚡ gemini-3.8-flash (Latest Thinking)</option>
+                <option value="gemini-3.8-pro">🧠 gemini-3.8-pro (Deep Reasoning)</option>
+                <option value="gemini-3.5-flash">🚀 gemini-3.5-flash</option>
                 <option value="custom">⚙️ Custom Model...</option>
               </select>
             </div>
@@ -436,7 +437,7 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
             </div>
             <button
               type="button"
-              onClick={() => { setIsCustomModel(false); setSelectedModel('gemini-2.5-flash'); }}
+              onClick={() => { setIsCustomModel(false); setSelectedModel('gemini-3.8-flash'); }}
               className="text-slate-400 hover:text-white"
             >
               Cancel
