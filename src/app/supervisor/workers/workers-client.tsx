@@ -13,9 +13,11 @@ import {
   Edit2, 
   X, 
   Check, 
-  RefreshCw,
-  AlertCircle,
-  Trash2
+  RefreshCw, 
+  AlertCircle, 
+  Trash2,
+  CalendarDays,
+  Clock
 } from 'lucide-react';
 
 interface Worker {
@@ -36,6 +38,7 @@ interface WorkerPayment {
   note: string | null;
   created_at: string;
   status: string;
+  to_worker_id?: string | null;
 }
 
 export function SupervisorWorkersClientPage() {
@@ -43,6 +46,8 @@ export function SupervisorWorkersClientPage() {
   const queryClient = useQueryClient();
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
   const [editingWorker, setEditingWorker] = useState<Worker | null>(null);
   const [expandedWorkerId, setExpandedWorkerId] = useState<string | null>(null);
   
@@ -145,6 +150,75 @@ export function SupervisorWorkersClientPage() {
     enabled: !!editingWorker?.worker_id,
   });
 
+  // 4. Fetch All Worker Transactions for this factory for date filtering
+  const { data: allWorkerDisbursements } = useQuery({
+    queryKey: ['factory-worker-disbursements', factoryId],
+    queryFn: async () => {
+      if (!factoryId) return [];
+      const { data, error } = await supabase
+        .from('cash_transactions')
+        .select('id, amount, note, created_at, status, to_worker_id')
+        .eq('type', 'supervisor_to_worker');
+
+      if (error) throw error;
+      return (data || []) as WorkerPayment[];
+    },
+    enabled: !!factoryId,
+  });
+
+  const isWithinDateRange = (isoStr: string, from?: string, to?: string) => {
+    if (!from && !to) return true;
+    const d = new Date(isoStr);
+    if (from) {
+      const start = new Date(from + 'T00:00:00');
+      if (d < start) return false;
+    }
+    if (to) {
+      const end = new Date(to + 'T23:59:59.999');
+      if (d > end) return false;
+    }
+    return true;
+  };
+
+  const setDatePreset = (preset: 'today' | 'this_week' | 'this_month' | 'all') => {
+    const now = new Date();
+    if (preset === 'today') {
+      const today = now.toISOString().split('T')[0];
+      setFromDate(today);
+      setToDate(today);
+    } else if (preset === 'this_week') {
+      const d = new Date();
+      const day = d.getDay();
+      const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+      const monday = new Date(d.setDate(diff)).toISOString().split('T')[0];
+      const today = now.toISOString().split('T')[0];
+      setFromDate(monday);
+      setToDate(today);
+    } else if (preset === 'this_month') {
+      const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+      const today = now.toISOString().split('T')[0];
+      setFromDate(firstDay);
+      setToDate(today);
+    } else if (preset === 'all') {
+      setFromDate('');
+      setToDate('');
+    }
+  };
+
+  const getWorkerPeriodAdvance = (workerId: string) => {
+    if (!allWorkerDisbursements) return 0;
+    return allWorkerDisbursements
+      .filter(tx => tx.to_worker_id === workerId && tx.status === 'confirmed' && isWithinDateRange(tx.created_at, fromDate, toDate))
+      .reduce((sum, tx) => sum + Number(tx.amount), 0);
+  };
+
+  const getWorkerPeriodCount = (workerId: string) => {
+    if (!allWorkerDisbursements) return 0;
+    return allWorkerDisbursements
+      .filter(tx => tx.to_worker_id === workerId && tx.status === 'confirmed' && isWithinDateRange(tx.created_at, fromDate, toDate))
+      .length;
+  };
+
   const [cachedWorkers, setCachedWorkers] = useState<Worker[]>([]);
   useEffect(() => {
     if (factoryId) {
@@ -235,10 +309,21 @@ export function SupervisorWorkersClientPage() {
     }
   };
 
-  const filteredWorkers = activeWorkers.filter(w => 
-    w.worker_name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-    (w.worker_phone && w.worker_phone.includes(searchQuery))
-  );
+  const filteredWorkers = activeWorkers
+    .filter(w => 
+      w.worker_name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+      (w.worker_phone && w.worker_phone.includes(searchQuery))
+    )
+    .sort((a, b) => {
+      if (fromDate || toDate) {
+        const periodDiff = getWorkerPeriodAdvance(b.worker_id) - getWorkerPeriodAdvance(a.worker_id);
+        if (periodDiff !== 0) return periodDiff;
+      }
+      return Number(b.running_advance) - Number(a.running_advance);
+    });
+
+  const totalPeriodSum = filteredWorkers.reduce((sum, w) => sum + getWorkerPeriodAdvance(w.worker_id), 0);
+  const workersWithPeriodAdvanceCount = filteredWorkers.filter(w => getWorkerPeriodAdvance(w.worker_id) > 0).length;
 
   return (
     <div className="space-y-6">
@@ -414,16 +499,105 @@ export function SupervisorWorkersClientPage() {
 
       {/* Workers List Panel */}
       <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">
-        {/* Search */}
-        <div className="p-3 bg-white border-b border-slate-200 flex items-center relative">
-          <Search className="absolute left-6 h-4 w-4 text-slate-400 pointer-events-none" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search workers by name or phone..."
-            className="w-full pl-9 pr-3 py-2 rounded border border-slate-300 text-xs focus:ring-slate-500 focus:border-slate-500 text-slate-950 min-h-[44px]"
-          />
+        {/* Search & Date Filter Bar */}
+        <div className="p-4 bg-slate-50/70 border-b border-slate-200 space-y-3">
+          {/* Search Row */}
+          <div className="flex items-center relative">
+            <Search className="absolute left-3.5 h-4 w-4 text-slate-400 pointer-events-none" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search workers by name or phone..."
+              className="w-full pl-9 pr-3 py-2 rounded border border-slate-300 text-xs focus:ring-slate-500 focus:border-slate-500 text-slate-950 min-h-[42px] bg-white shadow-sm"
+            />
+          </div>
+
+          {/* Date Range Inputs & Presets */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
+                <CalendarDays className="h-3.5 w-3.5 text-slate-400" />
+                Date Range:
+              </span>
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="date"
+                  value={fromDate}
+                  onChange={(e) => setFromDate(e.target.value)}
+                  className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-900 bg-white min-h-[36px]"
+                  title="Start Date"
+                />
+                <span className="text-xs text-slate-400">to</span>
+                <input
+                  type="date"
+                  value={toDate}
+                  onChange={(e) => setToDate(e.target.value)}
+                  className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-900 bg-white min-h-[36px]"
+                  title="End Date"
+                />
+              </div>
+            </div>
+
+            {/* Quick Presets */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+              <button
+                type="button"
+                onClick={() => setDatePreset('all')}
+                className={`px-2.5 py-1 rounded text-[11px] font-semibold border transition-colors ${
+                  !fromDate && !toDate
+                    ? 'bg-slate-900 text-white border-slate-900'
+                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                All Time
+              </button>
+              <button
+                type="button"
+                onClick={() => setDatePreset('today')}
+                className="px-2.5 py-1 rounded text-[11px] font-semibold bg-white text-slate-600 border border-slate-200 hover:bg-slate-100 transition-colors"
+              >
+                Today
+              </button>
+              <button
+                type="button"
+                onClick={() => setDatePreset('this_week')}
+                className="px-2.5 py-1 rounded text-[11px] font-semibold bg-white text-slate-600 border border-slate-200 hover:bg-slate-100 transition-colors"
+              >
+                This Week
+              </button>
+              <button
+                type="button"
+                onClick={() => setDatePreset('this_month')}
+                className="px-2.5 py-1 rounded text-[11px] font-semibold bg-white text-slate-600 border border-slate-200 hover:bg-slate-100 transition-colors"
+              >
+                This Month
+              </button>
+            </div>
+          </div>
+
+          {/* Active Filter Period Indicator Banner */}
+          {(fromDate || toDate) && (
+            <div className="bg-indigo-50 border border-indigo-200 rounded-md p-2.5 text-xs flex items-center justify-between gap-2 animate-fadeIn">
+              <div className="flex items-center gap-2 text-indigo-900 font-medium">
+                <Clock className="h-4 w-4 text-indigo-600 shrink-0" />
+                <span>
+                  Showing advances from{' '}
+                  <strong>{fromDate ? new Date(fromDate + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Start'}</strong>{' '}
+                  to{' '}
+                  <strong>{toDate ? new Date(toDate + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Today'}</strong>
+                  : Total <strong className="text-indigo-950 font-black">{formatINR(totalPeriodSum)}</strong> ({workersWithPeriodAdvanceCount} workers)
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setFromDate(''); setToDate(''); }}
+                className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 underline shrink-0"
+              >
+                Clear Filter
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Workers List */}
@@ -434,58 +608,88 @@ export function SupervisorWorkersClientPage() {
           </div>
         ) : filteredWorkers.length === 0 ? (
           <div className="p-8 text-center text-xs text-slate-500">
-            No workers found. Add workers on the Dashboard.
+            No workers found matching the search.
           </div>
         ) : (
           <ul className="divide-y divide-slate-100 bg-white">
-            {filteredWorkers.map((w) => (
-              <li key={w.worker_id} className="border-b border-slate-100 flex flex-col bg-white">
-                {/* Collapsible header container */}
-                <div 
-                  onClick={() => setExpandedWorkerId(prev => prev === w.worker_id ? null : w.worker_id)}
-                  className="p-4 flex items-center justify-between hover:bg-slate-50 cursor-pointer transition-colors duration-150"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="relative h-12 w-12 rounded-full border border-slate-200 bg-slate-100 overflow-hidden flex items-center justify-center">
-                      {w.worker_photo_url ? (
-                        <img src={w.worker_photo_url} alt={w.worker_name} className="object-cover h-full w-full" />
-                      ) : (
-                        <User className="h-6 w-6 text-slate-400" />
-                      )}
-                    </div>
-                    <div>
-                      <h4 className="text-sm font-bold text-slate-900">{w.worker_name}</h4>
-                      <p className="text-xs text-slate-500">
-                        {w.worker_phone ? w.worker_phone : 'No phone linked'}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <div className="text-right">
-                      <span className="text-xs text-slate-400 block">Advance</span>
-                      <span className="text-sm font-black text-red-600">{formatINR(w.running_advance)}</span>
-                    </div>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation(); // Avoid expanding/collapsing row when edit is clicked
-                        handleEditClick(w);
-                      }}
-                      className="flex h-11 w-11 items-center justify-center rounded border border-slate-200 text-slate-500 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 min-h-[44px] min-w-[44px]"
-                      title="Edit Profile"
-                    >
-                      <Edit2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
+            {filteredWorkers.map((w) => {
+              const periodAdvance = getWorkerPeriodAdvance(w.worker_id);
+              const periodCount = getWorkerPeriodCount(w.worker_id);
 
-                {/* Collapsible body showing payment history */}
-                {expandedWorkerId === w.worker_id && (
-                  <div className="bg-slate-50 px-4 py-3 border-t border-b border-slate-100/80 animate-fadeIn">
-                    <WorkerInlineHistory workerId={w.worker_id} />
+              return (
+                <li key={w.worker_id} className="border-b border-slate-100 flex flex-col bg-white">
+                  {/* Collapsible header container */}
+                  <div 
+                    onClick={() => setExpandedWorkerId(prev => prev === w.worker_id ? null : w.worker_id)}
+                    className="p-4 flex items-center justify-between hover:bg-slate-50 cursor-pointer transition-colors duration-150"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="relative h-12 w-12 rounded-full border border-slate-200 bg-slate-100 overflow-hidden flex items-center justify-center shrink-0">
+                        {w.worker_photo_url ? (
+                          <img src={w.worker_photo_url} alt={w.worker_name} className="object-cover h-full w-full" />
+                        ) : (
+                          <User className="h-6 w-6 text-slate-400" />
+                        )}
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-bold text-slate-900">{w.worker_name}</h4>
+                        <p className="text-xs text-slate-500">
+                          {w.worker_phone ? w.worker_phone : 'No phone linked'}
+                        </p>
+                        {fromDate || toDate ? (
+                          <span className="text-[10px] text-indigo-600 font-semibold block mt-0.5">
+                            {periodCount > 0 ? `${periodCount} advance payment${periodCount > 1 ? 's' : ''} in period` : 'No advance in period'}
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <div className="text-right">
+                        {fromDate || toDate ? (
+                          <>
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 block">
+                              Period Advance
+                            </span>
+                            <span className={`text-sm font-black ${periodAdvance > 0 ? 'text-red-600' : 'text-slate-400'}`}>
+                              {formatINR(periodAdvance)}
+                            </span>
+                            <span className="text-[10px] text-slate-400 block">
+                              All-Time: {formatINR(w.running_advance)}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-xs text-slate-400 block">Advance</span>
+                            <span className="text-sm font-black text-red-600">{formatINR(w.running_advance)}</span>
+                          </>
+                        )}
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation(); // Avoid expanding/collapsing row when edit is clicked
+                          handleEditClick(w);
+                        }}
+                        className="flex h-11 w-11 items-center justify-center rounded border border-slate-200 text-slate-500 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 min-h-[44px] min-w-[44px]"
+                        title="Edit Profile"
+                      >
+                        <Edit2 className="h-4 w-4" />
+                      </button>
+                    </div>
                   </div>
-                )}
-              </li>
-            ))}
+
+                  {/* Collapsible body showing payment history */}
+                  {expandedWorkerId === w.worker_id && (
+                    <div className="bg-slate-50 px-4 py-3 border-t border-b border-slate-100/80 animate-fadeIn">
+                      <WorkerInlineHistory 
+                        workerId={w.worker_id} 
+                        fromDate={fromDate}
+                        toDate={toDate}
+                      />
+                    </div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>
@@ -523,7 +727,15 @@ export function SupervisorWorkersClientPage() {
 }
 
 // Compact on-demand query component for displaying history inside lists
-function WorkerInlineHistory({ workerId }: { workerId: string }) {
+function WorkerInlineHistory({ 
+  workerId, 
+  fromDate, 
+  toDate 
+}: { 
+  workerId: string; 
+  fromDate?: string; 
+  toDate?: string; 
+}) {
   const supabase = createBrowserClient();
   
   const { data: payments, isLoading } = useQuery({
@@ -550,6 +762,25 @@ function WorkerInlineHistory({ workerId }: { workerId: string }) {
     );
   }
 
+  const isWithinDate = (isoStr: string) => {
+    if (!fromDate && !toDate) return true;
+    const d = new Date(isoStr);
+    if (fromDate) {
+      const start = new Date(fromDate + 'T00:00:00');
+      if (d < start) return false;
+    }
+    if (toDate) {
+      const end = new Date(toDate + 'T23:59:59.999');
+      if (d > end) return false;
+    }
+    return true;
+  };
+
+  const filteredPayments = payments?.filter(pmt => isWithinDate(pmt.created_at)) || [];
+  const periodTotal = filteredPayments
+    .filter(p => p.status === 'confirmed')
+    .reduce((sum, p) => sum + Number(p.amount), 0);
+
   if (!payments || payments.length === 0) {
     return (
       <p className="text-xs text-slate-500 py-2 text-center">
@@ -558,18 +789,33 @@ function WorkerInlineHistory({ workerId }: { workerId: string }) {
     );
   }
 
+  if (filteredPayments.length === 0) {
+    return (
+      <div className="py-3 text-center text-xs text-slate-500 bg-white rounded border border-slate-200">
+        No disbursements recorded in the selected date range ({fromDate || 'Start'} to {toDate || 'Today'}).
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-2">
-      <h5 className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-        Disbursement Ledger
-      </h5>
+      <div className="flex justify-between items-center">
+        <h5 className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          Disbursement Ledger
+        </h5>
+        {(fromDate || toDate) && (
+          <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded">
+            Period Total: {formatINR(periodTotal)} ({filteredPayments.length} payment{filteredPayments.length > 1 ? 's' : ''})
+          </span>
+        )}
+      </div>
       <div className="divide-y divide-slate-100 border border-slate-200/80 rounded bg-white overflow-hidden max-h-[220px] overflow-y-auto">
-        {payments.map((pmt) => (
+        {filteredPayments.map((pmt) => (
           <div key={pmt.id} className="p-2.5 text-xs flex justify-between items-start gap-3 hover:bg-slate-50">
             <div>
               <span className="font-extrabold text-slate-900 block">{formatINR(pmt.amount)}</span>
               <span className="text-[9px] text-slate-400">
-                {new Date(pmt.created_at).toLocaleDateString(undefined, { dateStyle: 'medium' })}
+                {new Date(pmt.created_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
               </span>
               {pmt.note && (
                 <span className="text-[9px] text-slate-500 italic block mt-0.5 bg-slate-50/50 border border-slate-100 rounded px-1.5 py-0.5 w-max max-w-full truncate">

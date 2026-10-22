@@ -12,7 +12,14 @@ import {
   Plus, 
   TrendingUp, 
   Activity,
-  History
+  History,
+  Calendar,
+  CalendarDays,
+  Search,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  User
 } from 'lucide-react';
 
 interface Factory {
@@ -94,11 +101,21 @@ export function AdminDashboard({
   const [formSuccess, setFormSuccess] = useState(false);
   const [formLoading, setFormLoading] = useState(false);
 
-  // Filters State
+  // Ledger Filters State
   const [selectedFactoryId, setSelectedFactoryId] = useState<string>('all');
   const [selectedSupervisorId, setSelectedSupervisorId] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [selectedPurpose, setSelectedPurpose] = useState<string>('all');
+  const [ledgerFromDate, setLedgerFromDate] = useState<string>('');
+  const [ledgerToDate, setLedgerToDate] = useState<string>('');
+
+  // Worker Advances Filter State
+  const [workerFromDate, setWorkerFromDate] = useState<string>('');
+  const [workerToDate, setWorkerToDate] = useState<string>('');
+  const [workerFactoryId, setWorkerFactoryId] = useState<string>('all');
+  const [workerSupervisorId, setWorkerSupervisorId] = useState<string>('all');
+  const [workerSearchQuery, setWorkerSearchQuery] = useState<string>('');
+  const [expandedWorkerId, setExpandedWorkerId] = useState<string | null>(null);
 
   // Handle office disbursement submission
   const handleDisbursementSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -297,8 +314,31 @@ export function AdminDashboard({
       return false;
     }
 
+    // Ledger Date Range Filters
+    if (ledgerFromDate && !isWithinDateRange(entry.created_at, ledgerFromDate, undefined)) {
+      return false;
+    }
+    if (ledgerToDate && !isWithinDateRange(entry.created_at, undefined, ledgerToDate)) {
+      return false;
+    }
+
     return true;
   }).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+  // Helper for date range checks
+  function isWithinDateRange(isoStr: string, from?: string, to?: string) {
+    if (!from && !to) return true;
+    const d = new Date(isoStr);
+    if (from) {
+      const start = new Date(from + 'T00:00:00');
+      if (d < start) return false;
+    }
+    if (to) {
+      const end = new Date(to + 'T23:59:59.999');
+      if (d > end) return false;
+    }
+    return true;
+  }
 
   // --- 4. CSV Export ---
   const exportToCSV = () => {
@@ -326,6 +366,119 @@ export function AdminDashboard({
     const link = document.createElement('a');
     link.setAttribute('href', url);
     link.setAttribute('download', `fundflow_ledger_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // --- 5. Worker Advances Reporting by Date Range ---
+  const setWorkerDatePreset = (preset: 'today' | 'this_week' | 'this_month' | 'last_month' | 'all') => {
+    const now = new Date();
+    if (preset === 'today') {
+      const today = now.toISOString().split('T')[0];
+      setWorkerFromDate(today);
+      setWorkerToDate(today);
+    } else if (preset === 'this_week') {
+      const d = new Date();
+      const day = d.getDay();
+      const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+      const monday = new Date(d.setDate(diff)).toISOString().split('T')[0];
+      const today = now.toISOString().split('T')[0];
+      setWorkerFromDate(monday);
+      setWorkerToDate(today);
+    } else if (preset === 'this_month') {
+      const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+      const today = now.toISOString().split('T')[0];
+      setWorkerFromDate(firstDay);
+      setWorkerToDate(today);
+    } else if (preset === 'last_month') {
+      const firstDay = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().split('T')[0];
+      const lastDay = new Date(now.getFullYear(), now.getMonth(), 0).toISOString().split('T')[0];
+      setWorkerFromDate(firstDay);
+      setWorkerToDate(lastDay);
+    } else if (preset === 'all') {
+      setWorkerFromDate('');
+      setWorkerToDate('');
+    }
+  };
+
+  const workerReports = workers.map(w => {
+    const allDisbursements = transactions.filter(
+      t => t.type === 'supervisor_to_worker' && t.to_worker_id === w.worker_id && t.status === 'confirmed'
+    );
+    const periodDisbursements = allDisbursements.filter(t => 
+      isWithinDateRange(t.created_at, workerFromDate, workerToDate)
+    );
+    const periodAdvance = periodDisbursements.reduce((sum, t) => sum + Number(t.amount), 0);
+    const factoryName = factories.find(f => f.id === w.factory_id)?.name || 'Unknown Factory';
+    const supervisorName = supervisors.find(s => s.id === w.supervisor_id)?.name || 'Unknown Supervisor';
+
+    return {
+      worker: w,
+      periodAdvance,
+      periodCount: periodDisbursements.length,
+      periodDisbursements,
+      allDisbursements,
+      factoryName,
+      supervisorName,
+    };
+  });
+
+  const filteredWorkerReports = workerReports.filter(item => {
+    if (workerFactoryId !== 'all' && item.worker.factory_id !== workerFactoryId) return false;
+    if (workerSupervisorId !== 'all' && item.worker.supervisor_id !== workerSupervisorId) return false;
+    if (workerSearchQuery) {
+      const q = workerSearchQuery.toLowerCase();
+      const matchName = item.worker.worker_name.toLowerCase().includes(q);
+      const matchPhone = item.worker.worker_phone && item.worker.worker_phone.includes(q);
+      if (!matchName && !matchPhone) return false;
+    }
+    return true;
+  }).sort((a, b) => {
+    if (workerFromDate || workerToDate) {
+      if (b.periodAdvance !== a.periodAdvance) return b.periodAdvance - a.periodAdvance;
+    }
+    return Number(b.worker.running_advance) - Number(a.worker.running_advance);
+  });
+
+  const totalWorkerPeriodAdvance = filteredWorkerReports.reduce((sum, item) => sum + item.periodAdvance, 0);
+  const workersWithPeriodAdvance = filteredWorkerReports.filter(item => item.periodAdvance > 0).length;
+  const totalWorkerPeriodTxCount = filteredWorkerReports.reduce((sum, item) => sum + item.periodCount, 0);
+
+  const exportWorkerAdvancesToCSV = () => {
+    const headers = [
+      'Worker Name',
+      'Phone',
+      'Factory',
+      'Supervisor',
+      'Advances in Period (Count)',
+      'Advance in Selected Period (INR)',
+      'Total Running Advance (INR)',
+      'Period From',
+      'Period To',
+    ];
+    const rows = filteredWorkerReports.map(item => [
+      item.worker.worker_name,
+      item.worker.worker_phone || 'N/A',
+      item.factoryName,
+      item.supervisorName,
+      item.periodCount,
+      item.periodAdvance,
+      item.worker.running_advance,
+      workerFromDate || 'All Time',
+      workerToDate || 'All Time',
+    ]);
+
+    const csvContent = [headers, ...rows]
+      .map(e => e.map(val => `"${String(val).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `fundflow_worker_advances_${workerFromDate || 'all'}_to_${workerToDate || 'all'}.csv`);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
@@ -536,9 +689,14 @@ export function AdminDashboard({
 
         {/* Worker Advances Leaderboard */}
         <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
-          <div className="flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
-            <Activity className="h-5 w-5 text-slate-600" />
-            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-900">Workers Outstanding Advance</h2>
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+            <div className="flex items-center gap-2">
+              <Activity className="h-5 w-5 text-slate-600" />
+              <h2 className="text-sm font-bold uppercase tracking-wider text-slate-900">Workers Outstanding Advance</h2>
+            </div>
+            <a href="#worker-advances-section" className="text-xs text-indigo-600 hover:text-indigo-800 font-semibold">
+              Filter by Date &darr;
+            </a>
           </div>
           {workers.length === 0 ? (
             <div className="text-center py-6 text-sm text-slate-500">No workers configured yet</div>
@@ -558,6 +716,358 @@ export function AdminDashboard({
         </div>
       </div>
 
+      {/* Worker Advances Statement & Date Range Filter */}
+      <div id="worker-advances-section" className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden space-y-0">
+        {/* Header */}
+        <div className="px-5 py-4 border-b border-slate-200 bg-slate-50 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex items-center gap-2.5">
+            <div className="h-9 w-9 rounded-lg bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-700 shrink-0">
+              <CalendarDays className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-slate-900 tracking-tight flex items-center gap-2">
+                <span>Worker Advances Statement</span>
+                {(workerFromDate || workerToDate) && (
+                  <span className="text-[10px] bg-indigo-100 text-indigo-800 font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
+                    Date Filter Active
+                  </span>
+                )}
+              </h2>
+              <p className="text-xs text-slate-500">
+                Audit cash advances disbursed to every worker across any timeframe
+              </p>
+            </div>
+          </div>
+
+          <button
+            onClick={exportWorkerAdvancesToCSV}
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 transition-colors min-h-[38px] self-start md:self-auto"
+          >
+            <Download className="h-4 w-4 text-slate-500" />
+            <span>Export Statement to CSV</span>
+          </button>
+        </div>
+
+        {/* Filter Controls Bar */}
+        <div className="p-5 border-b border-slate-100 bg-white space-y-4">
+          {/* Date Range Inputs and Quick Presets */}
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                <Calendar className="h-4 w-4 text-slate-400" />
+                Timeframe:
+              </span>
+              <div className="flex items-center gap-2">
+                <input
+                  type="date"
+                  value={workerFromDate}
+                  onChange={(e) => setWorkerFromDate(e.target.value)}
+                  className="rounded border border-slate-300 px-2.5 py-1.5 text-xs text-slate-900 bg-white min-h-[38px] focus:ring-slate-500 focus:border-slate-500 shadow-sm"
+                  title="From Date"
+                />
+                <span className="text-xs text-slate-400 font-medium">to</span>
+                <input
+                  type="date"
+                  value={workerToDate}
+                  onChange={(e) => setWorkerToDate(e.target.value)}
+                  className="rounded border border-slate-300 px-2.5 py-1.5 text-xs text-slate-900 bg-white min-h-[38px] focus:ring-slate-500 focus:border-slate-500 shadow-sm"
+                  title="To Date"
+                />
+              </div>
+            </div>
+
+            {/* Quick Presets Pills */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setWorkerDatePreset('all')}
+                className={`px-3 py-1.5 rounded text-xs font-semibold border transition-colors ${
+                  !workerFromDate && !workerToDate
+                    ? 'bg-slate-900 text-white border-slate-900'
+                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                All Time
+              </button>
+              <button
+                type="button"
+                onClick={() => setWorkerDatePreset('today')}
+                className="px-3 py-1.5 rounded text-xs font-semibold bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 transition-colors"
+              >
+                Today
+              </button>
+              <button
+                type="button"
+                onClick={() => setWorkerDatePreset('this_week')}
+                className="px-3 py-1.5 rounded text-xs font-semibold bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 transition-colors"
+              >
+                This Week
+              </button>
+              <button
+                type="button"
+                onClick={() => setWorkerDatePreset('this_month')}
+                className="px-3 py-1.5 rounded text-xs font-semibold bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 transition-colors"
+              >
+                This Month
+              </button>
+              <button
+                type="button"
+                onClick={() => setWorkerDatePreset('last_month')}
+                className="px-3 py-1.5 rounded text-xs font-semibold bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 transition-colors"
+              >
+                Last Month
+              </button>
+            </div>
+          </div>
+
+          {/* Secondary Filters: Factory, Supervisor, Search Worker */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 pt-1">
+            {/* Factory Filter */}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                Filter by Factory
+              </label>
+              <select
+                value={workerFactoryId}
+                onChange={(e) => setWorkerFactoryId(e.target.value)}
+                className="block w-full rounded border border-slate-300 text-xs py-2 px-2.5 focus:border-slate-500 focus:outline-none focus:ring-slate-500 min-h-[38px] text-slate-900 bg-white"
+              >
+                <option value="all">All Factories</option>
+                {factories.map(f => (
+                  <option key={f.id} value={f.id}>{f.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Supervisor Filter */}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                Filter by Supervisor
+              </label>
+              <select
+                value={workerSupervisorId}
+                onChange={(e) => setWorkerSupervisorId(e.target.value)}
+                className="block w-full rounded border border-slate-300 text-xs py-2 px-2.5 focus:border-slate-500 focus:outline-none focus:ring-slate-500 min-h-[38px] text-slate-900 bg-white"
+              >
+                <option value="all">All Supervisors</option>
+                {supervisors.map(s => (
+                  <option key={s.id} value={s.id}>{s.name} ({s.factories?.name || 'Unassigned'})</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Worker Name Search */}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                Search Worker
+              </label>
+              <div className="relative">
+                <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400 pointer-events-none" />
+                <input
+                  type="text"
+                  value={workerSearchQuery}
+                  onChange={(e) => setWorkerSearchQuery(e.target.value)}
+                  placeholder="Worker name or phone..."
+                  className="block w-full rounded border border-slate-300 pl-9 pr-3 py-2 text-xs focus:border-slate-500 focus:outline-none focus:ring-slate-500 min-h-[38px] text-slate-900 bg-white"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Metric Summary Banner */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+            <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-3">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                {workerFromDate || workerToDate ? 'Period Advances Total' : 'All-Time Total Disbursed'}
+              </span>
+              <span className="text-lg font-black text-slate-900">
+                {formatINR(totalWorkerPeriodAdvance)}
+              </span>
+              <span className="text-[10px] text-slate-400 block mt-0.5">
+                Across {workersWithPeriodAdvance} workers with advances
+              </span>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-3">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                Advances in Period
+              </span>
+              <span className="text-lg font-black text-indigo-700">
+                {totalWorkerPeriodTxCount}
+              </span>
+              <span className="text-[10px] text-slate-400 block mt-0.5">
+                Disbursements recorded in timeframe
+              </span>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-3">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                Total Outstanding Balance
+              </span>
+              <span className="text-lg font-black text-red-600">
+                {formatINR(filteredWorkerReports.reduce((sum, item) => sum + Number(item.worker.running_advance), 0))}
+              </span>
+              <span className="text-[10px] text-slate-400 block mt-0.5">
+                Cumulative across {filteredWorkerReports.length} listed workers
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Worker Table */}
+        {filteredWorkerReports.length === 0 ? (
+          <div className="p-8 text-center text-sm text-slate-500">
+            No workers match the selected timeframe and filter criteria.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+              <thead className="bg-slate-50 text-slate-700 font-semibold text-xs uppercase tracking-wider">
+                <tr>
+                  <th className="px-5 py-3">Worker</th>
+                  <th className="px-5 py-3">Factory / Supervisor</th>
+                  <th className="px-5 py-3 text-right">
+                    {workerFromDate || workerToDate ? 'Advance in Period' : 'Advance Disbursed'}
+                  </th>
+                  <th className="px-5 py-3 text-center">Advances Count</th>
+                  <th className="px-5 py-3 text-right">All-Time Outstanding</th>
+                  <th className="px-5 py-3 text-center">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 bg-white">
+                {filteredWorkerReports.map((item) => {
+                  const isExpanded = expandedWorkerId === item.worker.worker_id;
+
+                  return (
+                    <React.Fragment key={item.worker.worker_id}>
+                      <tr className={`hover:bg-slate-50/80 transition-colors ${item.periodAdvance > 0 && (workerFromDate || workerToDate) ? 'bg-indigo-50/20' : ''}`}>
+                        <td className="px-5 py-3.5">
+                          <div className="flex items-center gap-3">
+                            <div className="h-9 w-9 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
+                              {item.worker.worker_photo_url ? (
+                                <img src={item.worker.worker_photo_url} alt={item.worker.worker_name} className="h-full w-full object-cover" />
+                              ) : (
+                                <User className="h-4 w-4 text-slate-400" />
+                              )}
+                            </div>
+                            <div>
+                              <div className="font-bold text-slate-900">{item.worker.worker_name}</div>
+                              <div className="text-xs text-slate-500">{item.worker.worker_phone || 'No phone'}</div>
+                            </div>
+                          </div>
+                        </td>
+
+                        <td className="px-5 py-3.5">
+                          <div>
+                            <div className="font-semibold text-slate-800 text-xs">{item.factoryName}</div>
+                            <div className="text-[11px] text-slate-500">{item.supervisorName}</div>
+                          </div>
+                        </td>
+
+                        <td className="px-5 py-3.5 text-right font-bold">
+                          {item.periodAdvance > 0 ? (
+                            <span className="text-red-600 bg-red-50 border border-red-200/60 px-2 py-0.5 rounded text-xs font-black">
+                              {formatINR(item.periodAdvance)}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 text-xs font-normal">₹0</span>
+                          )}
+                        </td>
+
+                        <td className="px-5 py-3.5 text-center">
+                          {item.periodCount > 0 ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                              {item.periodCount} payment{item.periodCount > 1 ? 's' : ''}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 text-xs">-</span>
+                          )}
+                        </td>
+
+                        <td className="px-5 py-3.5 text-right font-black text-slate-900 text-xs">
+                          {formatINR(item.worker.running_advance)}
+                        </td>
+
+                        <td className="px-5 py-3.5 text-center">
+                          <button
+                            type="button"
+                            onClick={() => setExpandedWorkerId(isExpanded ? null : item.worker.worker_id)}
+                            className="inline-flex items-center gap-1 rounded border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100 transition-colors"
+                          >
+                            <span>{isExpanded ? 'Hide' : 'Details'}</span>
+                            {isExpanded ? (
+                              <ChevronUp className="h-3.5 w-3.5" />
+                            ) : (
+                              <ChevronDown className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                        </td>
+                      </tr>
+
+                      {/* Expanded Itemized Disbursement List */}
+                      {isExpanded && (
+                        <tr>
+                          <td colSpan={6} className="bg-slate-50/70 p-4 border-t border-b border-slate-200">
+                            <div className="space-y-3">
+                              <div className="flex justify-between items-center">
+                                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                                  <Clock className="h-3.5 w-3.5 text-slate-500" />
+                                  <span>
+                                    Disbursements to {item.worker.worker_name}
+                                    {(workerFromDate || workerToDate) ? ` (${workerFromDate || 'Start'} to ${workerToDate || 'Today'})` : ' (All-Time)'}
+                                  </span>
+                                </h4>
+                                <span className="text-xs font-bold text-slate-600">
+                                  Total in period: <strong className="text-red-600">{formatINR(item.periodAdvance)}</strong> ({item.periodDisbursements.length} payments)
+                                </span>
+                              </div>
+
+                              {item.periodDisbursements.length === 0 ? (
+                                <p className="text-xs text-slate-500 py-3 text-center bg-white rounded border border-slate-200">
+                                  No disbursements recorded for this worker within the selected timeframe.
+                                </p>
+                              ) : (
+                                <div className="divide-y divide-slate-100 rounded-md border border-slate-200 bg-white overflow-hidden shadow-sm">
+                                  {item.periodDisbursements.map((tx) => (
+                                    <div key={tx.id} className="p-3 text-xs flex justify-between items-center hover:bg-slate-50">
+                                      <div>
+                                        <div className="font-extrabold text-slate-900 text-sm">
+                                          {formatINR(tx.amount)}
+                                        </div>
+                                        <div className="text-[10px] text-slate-500 mt-0.5">
+                                          {new Date(tx.created_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+                                        </div>
+                                        {tx.note && (
+                                          <div className="text-[11px] text-slate-600 italic mt-1 bg-slate-50 border border-slate-100 rounded px-1.5 py-0.5 w-fit">
+                                            "{tx.note}"
+                                          </div>
+                                        )}
+                                      </div>
+                                      <div className="text-right">
+                                        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                          {tx.status.toUpperCase()}
+                                        </span>
+                                        <span className="text-[10px] text-slate-500 block mt-1">
+                                          Disbursed by {tx.from?.name || 'Supervisor'}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       {/* Transaction Feed Section with Filters */}
       <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">
         {/* Header and filters */}
@@ -567,7 +1077,7 @@ export function AdminDashboard({
             <h2 className="text-sm font-bold uppercase tracking-wider text-slate-900">Ledger Transactions Log</h2>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             {/* Factory Filter */}
             <div>
               <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">Factory</label>
@@ -626,6 +1136,28 @@ export function AdminDashboard({
                 <option value="expenses">Expenses</option>
                 <option value="transfers">Transfers</option>
               </select>
+            </div>
+
+            {/* From Date Filter */}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">From Date</label>
+              <input
+                type="date"
+                value={ledgerFromDate}
+                onChange={(e) => setLedgerFromDate(e.target.value)}
+                className="mt-1 block w-full rounded border-slate-300 text-xs py-1.5 focus:border-slate-500 focus:outline-none focus:ring-slate-500 min-h-[38px] text-slate-900 bg-white"
+              />
+            </div>
+
+            {/* To Date Filter */}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">To Date</label>
+              <input
+                type="date"
+                value={ledgerToDate}
+                onChange={(e) => setLedgerToDate(e.target.value)}
+                className="mt-1 block w-full rounded border-slate-300 text-xs py-1.5 focus:border-slate-500 focus:outline-none focus:ring-slate-500 min-h-[38px] text-slate-900 bg-white"
+              />
             </div>
           </div>
         </div>
