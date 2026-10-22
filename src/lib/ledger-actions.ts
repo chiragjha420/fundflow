@@ -8,6 +8,20 @@ function isAppOnline(): boolean {
   return typeof navigator !== 'undefined' && navigator.onLine;
 }
 
+// Fast helper to get current user ID without remote 950ms HTTP auth roundtrip
+async function getFastCurrentUserId(): Promise<string | undefined> {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.user?.id) return session.user.id;
+  } catch {}
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    return user?.id;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function disburseToWorkerAction(
   workerId: string,
   supervisorId: string,
@@ -22,10 +36,10 @@ export async function disburseToWorkerAction(
   };
 
   if (isAppOnline()) {
-    const { data: { user } } = await supabase.auth.getUser();
+    const userId = await getFastCurrentUserId();
     const { data, error } = await supabase.rpc('disburse_to_worker', {
       ...payload,
-      p_created_by: user?.id,
+      p_created_by: userId,
     });
     if (error) {
       // If it's a network error, queue it
@@ -56,10 +70,10 @@ export async function transferToSupervisorAction(
   };
 
   if (isAppOnline()) {
-    const { data: { user } } = await supabase.auth.getUser();
+    const userId = await getFastCurrentUserId();
     const { data, error } = await supabase.rpc('transfer_to_supervisor', {
       ...payload,
-      p_created_by: user?.id,
+      p_created_by: userId,
     });
     if (error) {
       if (error.message.includes('fetch') || error.message.includes('network')) {
@@ -93,10 +107,10 @@ export async function logExpenseAction(
   };
 
   if (isAppOnline()) {
-    const { data: { user } } = await supabase.auth.getUser();
+    const userId = await getFastCurrentUserId();
     const { data, error } = await supabase.rpc('log_expense', {
       ...payload,
-      p_created_by: user?.id,
+      p_created_by: userId,
     });
     if (error) {
       if (error.message.includes('fetch') || error.message.includes('network')) {
@@ -116,13 +130,13 @@ export async function confirmTransactionAction(txId: string) {
   const payload = { id: txId };
 
   if (isAppOnline()) {
-    const { data: { user } } = await supabase.auth.getUser();
+    const userId = await getFastCurrentUserId();
     const { error } = await supabase
       .from('cash_transactions')
       .update({
         status: 'confirmed',
         confirmed_at: new Date().toISOString(),
-        confirmed_by: user?.id,
+        confirmed_by: userId,
       })
       .eq('id', txId);
 
@@ -144,14 +158,14 @@ export async function disputeTransactionAction(txId: string, note: string) {
   const payload = { id: txId, note };
 
   if (isAppOnline()) {
-    const { data: { user } } = await supabase.auth.getUser();
+    const userId = await getFastCurrentUserId();
     const { error } = await supabase
       .from('cash_transactions')
       .update({
         status: 'disputed',
         note,
         confirmed_at: new Date().toISOString(),
-        confirmed_by: user?.id,
+        confirmed_by: userId,
       })
       .eq('id', txId);
 

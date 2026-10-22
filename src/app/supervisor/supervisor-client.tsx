@@ -56,7 +56,16 @@ interface PendingTx {
   from?: { name: string } | null;
 }
 
-export function SupervisorClientPage() {
+export interface SupervisorClientPageProps {
+  initialData?: {
+    supervisor?: Supervisor | null;
+    workers?: Worker[];
+    pendingTxs?: PendingTx[];
+    otherSupervisors?: Supervisor[];
+  };
+}
+
+export function SupervisorClientPage({ initialData }: SupervisorClientPageProps = {}) {
   const supabase = createBrowserClient();
   const queryClient = useQueryClient();
 
@@ -86,23 +95,40 @@ export function SupervisorClientPage() {
     }, 5000);
   };
 
+  // Helper to read localStorage synchronously
+  const getStoredJson = <T,>(key: string, fallback: T): T => {
+    if (typeof window === 'undefined') return fallback;
+    try {
+      const item = localStorage.getItem(key);
+      return item ? JSON.parse(item) : fallback;
+    } catch {
+      return fallback;
+    }
+  };
+
   // 1. Get Supervisor Info
   const { data: supervisor } = useQuery({
     queryKey: ['supervisor-info'],
     queryFn: async () => {
       try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) throw new Error('Not authenticated');
+        const { data: { session } } = await supabase.auth.getSession();
+        let userId = session?.user?.id;
+        if (!userId) {
+          const { data: { user } } = await supabase.auth.getUser();
+          userId = user?.id;
+        }
+        if (!userId) throw new Error('Not authenticated');
 
         const { data, error } = await supabase
           .from('supervisors')
           .select('id, name, factory_id, factories(name)')
-          .eq('user_id', user.id)
+          .eq('user_id', userId)
           .single();
 
         if (error) throw error;
         await setOfflineCache('supervisor-info', data);
-        return data;
+        try { localStorage.setItem('fundflow_cached_supervisor', JSON.stringify(data)); } catch {}
+        return data as unknown as Supervisor;
       } catch (e) {
         console.warn('Network query failed, trying local cache for supervisor info:', e);
         const cached = await getOfflineCache<any>('supervisor-info');
@@ -110,6 +136,7 @@ export function SupervisorClientPage() {
         throw e;
       }
     },
+    initialData: initialData?.supervisor || getStoredJson<Supervisor | null>('fundflow_cached_supervisor', null) || undefined,
     staleTime: 5 * 60 * 1000,
   });
 
@@ -130,11 +157,12 @@ export function SupervisorClientPage() {
       if (error) throw error;
       
       await setOfflineCache(`incoming-pending-${supervisorId}`, data);
+      try { localStorage.setItem(`fundflow_cached_pending_${supervisorId}`, JSON.stringify(data)); } catch {}
       return data as unknown as PendingTx[];
     },
-    placeholderData: () => {
-      return [] as any;
-    },
+    initialData: (initialData?.pendingTxs && initialData.pendingTxs.length > 0)
+      ? initialData.pendingTxs
+      : (supervisorId ? getStoredJson<PendingTx[]>(`fundflow_cached_pending_${supervisorId}`, []) : []),
     enabled: !!supervisorId,
   });
 
@@ -163,11 +191,12 @@ export function SupervisorClientPage() {
       if (error) throw error;
       
       await setOfflineCache(`workers-${factoryId}`, data);
+      try { localStorage.setItem(`fundflow_cached_workers_${factoryId}`, JSON.stringify(data)); } catch {}
       return data as Worker[];
     },
-    placeholderData: () => {
-      return [] as any;
-    },
+    initialData: (initialData?.workers && initialData.workers.length > 0)
+      ? initialData.workers
+      : (factoryId ? getStoredJson<Worker[]>(`fundflow_cached_workers_${factoryId}`, []) : []),
     enabled: !!factoryId,
   });
 
@@ -194,11 +223,12 @@ export function SupervisorClientPage() {
       if (error) throw error;
 
       await setOfflineCache('supervisors-list', data);
+      try { localStorage.setItem('fundflow_cached_other_sups', JSON.stringify(data)); } catch {}
       return data as unknown as Supervisor[];
     },
-    placeholderData: () => {
-      return [] as any;
-    },
+    initialData: (initialData?.otherSupervisors && initialData.otherSupervisors.length > 0)
+      ? initialData.otherSupervisors
+      : getStoredJson<Supervisor[]>('fundflow_cached_other_sups', []),
   });
 
   const [cachedSups, setCachedSups] = useState<Supervisor[]>([]);

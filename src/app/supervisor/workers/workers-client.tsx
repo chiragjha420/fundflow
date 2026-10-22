@@ -99,13 +99,28 @@ export function SupervisorWorkersClientPage() {
     }
   };
 
+  const getStoredJson = <T,>(key: string, fallback: T): T => {
+    if (typeof window === 'undefined') return fallback;
+    try {
+      const item = localStorage.getItem(key);
+      return item ? JSON.parse(item) : fallback;
+    } catch {
+      return fallback;
+    }
+  };
+
   // 1. Get Supervisor Info
   const { data: supervisor } = useQuery({
     queryKey: ['supervisor-info'],
     queryFn: async () => {
       const cached = await getOfflineCache<any>('supervisor-info');
-      return cached;
+      if (cached) return cached;
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user?.id) return null;
+      const { data } = await supabase.from('supervisors').select('id, name, factory_id').eq('user_id', session.user.id).single();
+      return data;
     },
+    initialData: getStoredJson<any>('fundflow_cached_supervisor', null) || undefined,
     staleTime: Infinity,
   });
 
@@ -125,11 +140,10 @@ export function SupervisorWorkersClientPage() {
       if (error) throw error;
       
       await setOfflineCache(`workers-${factoryId}`, data);
+      try { localStorage.setItem(`fundflow_cached_workers_${factoryId}`, JSON.stringify(data)); } catch {}
       return data as Worker[];
     },
-    placeholderData: () => {
-      return [] as any;
-    },
+    initialData: factoryId ? getStoredJson<Worker[]>(`fundflow_cached_workers_${factoryId}`, []) : [],
     enabled: !!factoryId,
   });
 

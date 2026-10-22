@@ -1,4 +1,6 @@
-const CACHE_NAME = 'fundflow-cache-v1';
+const CACHE_NAME = 'fundflow-cache-v2';
+const STATIC_CACHE_NAME = 'fundflow-static-v2';
+
 const ASSETS_TO_CACHE = [
   '/',
   '/login',
@@ -17,13 +19,13 @@ self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
 
-// Activate Event
+// Activate Event - clean up obsolete caches
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames.map((cache) => {
-          if (cache !== CACHE_NAME) {
+          if (cache !== CACHE_NAME && cache !== STATIC_CACHE_NAME) {
             return caches.delete(cache);
           }
         })
@@ -40,23 +42,43 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(event.request.url);
 
-  // Skip supabase database calls, next dev server internals, and local api calls to avoid dev-mode conflicts
+  // Skip supabase database calls, server actions, api calls, and dev server hot-reload
   if (
     url.hostname.includes('supabase') || 
-    url.pathname.startsWith('/_next') ||
-    url.pathname.startsWith('/api')
+    url.pathname.startsWith('/api') ||
+    url.pathname.startsWith('/_next/webpack-hmr')
   ) {
     return;
   }
 
-  // Intercept and handle cache
+  // Next.js static assets (_next/static/*) are version-hashed and immutable: Cache-First
+  if (url.pathname.startsWith('/_next/static/')) {
+    event.respondWith(
+      caches.match(event.request).then((cachedResponse) => {
+        if (cachedResponse) return cachedResponse;
+
+        return fetch(event.request).then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const responseToCache = networkResponse.clone();
+            caches.open(STATIC_CACHE_NAME).then((cache) => {
+              cache.put(event.request, responseToCache);
+            });
+          }
+          return networkResponse;
+        });
+      })
+    );
+    return;
+  }
+
+  // Standard static assets & pages: Stale-While-Revalidate
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
-      // Stale-while-revalidate strategy for cached static assets
       if (cachedResponse) {
+        // Refresh cache in background
         fetch(event.request)
           .then((networkResponse) => {
-            if (networkResponse.status === 200) {
+            if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
               caches.open(CACHE_NAME).then((cache) => {
                 cache.put(event.request, networkResponse);
               });
@@ -66,10 +88,9 @@ self.addEventListener('fetch', (event) => {
         return cachedResponse;
       }
 
-      // Network First strategy
+      // Network First strategy if not in cache
       return fetch(event.request)
         .then((networkResponse) => {
-          // Only cache successful basic requests
           if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
             const responseToCache = networkResponse.clone();
             caches.open(CACHE_NAME).then((cache) => {
@@ -79,14 +100,13 @@ self.addEventListener('fetch', (event) => {
           return networkResponse;
         })
         .catch(async () => {
-          // Offline fallback
+          // Offline navigation fallback
           if (event.request.mode === 'navigate') {
             const loginCache = await caches.match('/login');
             if (loginCache) return loginCache;
             const rootCache = await caches.match('/');
             if (rootCache) return rootCache;
           }
-          // Fallback to a plain text response if offline and no cache matches
           return new Response('Offline: Connection lost.', {
             status: 503,
             statusText: 'Service Unavailable',

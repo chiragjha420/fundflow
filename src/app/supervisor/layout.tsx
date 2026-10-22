@@ -17,24 +17,41 @@ export default function SupervisorLayout({
 }) {
   const supabase = createBrowserClient();
 
+  // Helper to read localStorage synchronously
+  const getStoredJson = <T,>(key: string, fallback: T): T => {
+    if (typeof window === 'undefined') return fallback;
+    try {
+      const item = localStorage.getItem(key);
+      return item ? JSON.parse(item) : fallback;
+    } catch {
+      return fallback;
+    }
+  };
+
   // 1. Fetch Supervisor details (with local IndexedDB cache fallback)
   const { data: supervisor, isLoading: isSupLoading, error: supError } = useQuery({
     queryKey: ['supervisor-info'],
     queryFn: async () => {
       try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) throw new Error('Not authenticated');
+        const { data: { session } } = await supabase.auth.getSession();
+        let userId = session?.user?.id;
+        if (!userId) {
+          const { data: { user } } = await supabase.auth.getUser();
+          userId = user?.id;
+        }
+        if (!userId) throw new Error('Not authenticated');
 
         const { data, error } = await supabase
           .from('supervisors')
           .select('id, name, factory_id, factories(name)')
-          .eq('user_id', user.id)
+          .eq('user_id', userId)
           .single();
 
         if (error) throw error;
         
         // Store in cache for offline
         await setOfflineCache('supervisor-info', data);
+        try { localStorage.setItem('fundflow_cached_supervisor', JSON.stringify(data)); } catch {}
         return data;
       } catch (e) {
         console.warn('Layout: Network query failed, trying local cache for supervisor info:', e);
@@ -43,17 +60,18 @@ export default function SupervisorLayout({
         throw e;
       }
     },
+    initialData: getStoredJson<any>('fundflow_cached_supervisor', null) || undefined,
     staleTime: 5 * 60 * 1000,
     retry: 1,
   });
 
   // Local state for cached offline supervisor info if React Query hasn't resolved it
-  const [cachedSup, setCachedSup] = React.useState<any>(null);
+  const [cachedSup, setCachedSup] = React.useState<any>(() => getStoredJson<any>('fundflow_cached_supervisor', null));
   const [currentUserEmail, setCurrentUserEmail] = React.useState<string | null>(null);
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (user) setCurrentUserEmail(user.email || null);
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user?.email) setCurrentUserEmail(session.user.email);
     });
   }, [supabase]);
 
@@ -76,12 +94,17 @@ export default function SupervisorLayout({
       if (error) throw error;
       
       await setOfflineCache(`balance-${activeSup.id}`, data);
+      try { localStorage.setItem(`fundflow_cached_balance_${activeSup.id}`, JSON.stringify(data)); } catch {}
       return data as number;
     },
+    initialData: activeSup?.id ? getStoredJson<number | undefined>(`fundflow_cached_balance_${activeSup.id}`, undefined) : undefined,
     enabled: !!activeSup?.id,
   });
 
-  const [cachedBalance, setCachedBalance] = React.useState<number | null>(null);
+  const [cachedBalance, setCachedBalance] = React.useState<number | null>(() => {
+    return activeSup?.id ? getStoredJson<number | null>(`fundflow_cached_balance_${activeSup.id}`, null) : null;
+  });
+
   useEffect(() => {
     if (activeSup?.id) {
       getOfflineCache<number>(`balance-${activeSup.id}`).then(data => {
@@ -90,7 +113,7 @@ export default function SupervisorLayout({
     }
   }, [activeSup?.id, balanceData]);
 
-  const balance = balanceData !== undefined ? balanceData : (cachedBalance || 0);
+  const balance = balanceData !== undefined ? balanceData : (cachedBalance ?? 0);
 
   return (
     <div className="min-h-full flex flex-col bg-slate-50">
