@@ -1,5 +1,6 @@
 import { createBrowserClient } from '@/lib/supabase/browser-client';
 import { addToSyncQueue } from '@/lib/offline-db';
+import { updateWorkerPhoneServer } from '@/app/actions/workers';
 
 const supabase = createBrowserClient();
 
@@ -273,6 +274,40 @@ export async function updateWorkerAction(
   } else {
     await queueAction('update_worker', payload);
     return { queued: true };
+  }
+}
+
+/**
+ * Convenient helper to update a worker's mobile number,
+ * using admin server action when online to bypass RLS restrictions,
+ * and offline sync queue when offline.
+ */
+export async function updateWorkerPhoneAction(
+  workerId: string,
+  phone: string,
+  currentName: string = 'Worker',
+  currentPhotoUrl: string | null = null
+) {
+  const cleanPhone = phone.trim().replace(/[^\d+]/g, '');
+  if (!cleanPhone || cleanPhone.length < 10) {
+    throw new Error('Please enter a valid 10-digit mobile number.');
+  }
+  const formattedPhone = cleanPhone.length === 10 ? `+91${cleanPhone}` : cleanPhone;
+
+  if (isAppOnline()) {
+    const res = await updateWorkerPhoneServer(workerId, formattedPhone);
+    if (!res.success) {
+      throw new Error(res.error || 'Failed to update phone number.');
+    }
+    return { success: true, formattedPhone };
+  } else {
+    await queueAction('update_worker', {
+      id: workerId,
+      name: currentName,
+      phone: formattedPhone,
+      photo_url: currentPhotoUrl,
+    });
+    return { queued: true, formattedPhone };
   }
 }
 

@@ -11,7 +11,9 @@ import {
   logExpenseAction, 
   confirmTransactionAction, 
   createWorkerAction,
-  disputeTransactionAction
+  disputeTransactionAction,
+  updateWorkerAction,
+  updateWorkerPhoneAction
 } from '@/lib/ledger-actions';
 import { 
   Check, 
@@ -26,7 +28,9 @@ import {
   AlertCircle,
   RefreshCw,
   HandCoins,
-  MessageSquare
+  MessageSquare,
+  Smartphone,
+  Phone
 } from 'lucide-react';
 import { sendWorkerDisbursementSms } from '@/lib/sms';
 import { createCashRequest } from '@/app/actions/cash-requests';
@@ -96,7 +100,20 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
   // Quick Amount Preset state for Disbursal
   const [disburseAmount, setDisburseAmount] = useState<string>('');
+  const [selectedWorkerId, setSelectedWorkerId] = useState<string>('');
   const [lastDisburseSms, setLastDisburseSms] = useState<{ workerName: string; smsUri: string } | null>(null);
+
+  // Missing Worker Phone Modal (Prompts supervisor when giving money to worker without phone)
+  const [showPhoneModal, setShowPhoneModal] = useState<boolean>(false);
+  const [phoneModalWorker, setPhoneModalWorker] = useState<Worker | null>(null);
+  const [phoneModalDisburseDetails, setPhoneModalDisburseDetails] = useState<{
+    workerId: string;
+    amount: number;
+    note: string;
+  } | null>(null);
+  const [phoneModalInput, setPhoneModalInput] = useState<string>('');
+  const [phoneModalError, setPhoneModalError] = useState<string>('');
+  const [phoneModalLoading, setPhoneModalLoading] = useState<boolean>(false);
 
   // Cash Replenishment Request states
   const [showCashRequestModal, setShowCashRequestModal] = useState<boolean>(false);
@@ -328,6 +345,102 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     }
   };
 
+  // Helper to execute disbursement and dispatch SMS
+  const executeDisbursement = async (
+    targetWorker: Worker,
+    amount: number,
+    note: string,
+    overridePhone?: string
+  ) => {
+    const res = await disburseToWorkerAction(targetWorker.worker_id, supervisorId!, amount, note);
+    if (res.queued) {
+      setActionMessage({ type: 'success', text: 'Offline: Disbursement queued. Worker balance will sync later.' });
+    } else {
+      setActionMessage({ type: 'success', text: `Disbursement of ${formatINR(amount)} logged successfully.` });
+      playAlertSound('cash_in');
+
+      // Free Automated Text Message to Worker (strictly confirms amount received)
+      const phoneToUse = overridePhone || targetWorker.worker_phone;
+      if (phoneToUse) {
+        sendWorkerDisbursementSms({
+          workerPhone: phoneToUse,
+          workerName: targetWorker.worker_name,
+          amount,
+          supervisorName: supervisor?.name,
+          factoryName: (supervisor?.factories as any)?.name,
+          note,
+        }).then(smsRes => {
+          if (smsRes.sentViaGateway) {
+            showToast('success', `Free automated SMS sent to ${targetWorker.worker_name} (${phoneToUse})!`);
+          } else if (smsRes.smsUri) {
+            setLastDisburseSms({
+              workerName: targetWorker.worker_name,
+              smsUri: smsRes.smsUri,
+            });
+          }
+        });
+      }
+    }
+    queryClient.invalidateQueries();
+  };
+
+  // Handler for Missing Phone Modal (Save phone & disburse, or skip)
+  const handlePhoneModalAction = async (skip: boolean) => {
+    if (!phoneModalWorker) return;
+    setPhoneModalLoading(true);
+    setPhoneModalError('');
+
+    try {
+      let savedPhone: string | undefined = undefined;
+
+      if (!skip) {
+        const clean = phoneModalInput.trim().replace(/[^\d+]/g, '');
+        if (clean.length < 10) {
+          setPhoneModalError('Please enter a valid 10-digit mobile number, or tap "Disburse Without Phone".');
+          setPhoneModalLoading(false);
+          return;
+        }
+
+        const updateRes = await updateWorkerPhoneAction(
+          phoneModalWorker.worker_id,
+          clean,
+          phoneModalWorker.worker_name,
+          phoneModalWorker.worker_photo_url
+        );
+        savedPhone = updateRes.formattedPhone;
+
+        // Optimistically update query data
+        queryClient.setQueryData(['workers', factoryId], (old: Worker[] | undefined) => {
+          if (!old) return old;
+          return old.map(w => w.worker_id === phoneModalWorker.worker_id ? { ...w, worker_phone: savedPhone! } : w);
+        });
+        showToast('success', `Mobile number saved for ${phoneModalWorker.worker_name}!`);
+      }
+
+      // If triggered during disbursement, complete the disbursement now
+      if (phoneModalDisburseDetails) {
+        await executeDisbursement(
+          phoneModalWorker,
+          phoneModalDisburseDetails.amount,
+          phoneModalDisburseDetails.note,
+          savedPhone
+        );
+        setDisburseAmount('');
+        setSelectedWorkerId('');
+        setPhoneModalDisburseDetails(null);
+      }
+
+      setShowPhoneModal(false);
+      setPhoneModalWorker(null);
+      setPhoneModalInput('');
+      queryClient.invalidateQueries();
+    } catch (e: any) {
+      setPhoneModalError(e.message || 'Failed to update phone number.');
+    } finally {
+      setPhoneModalLoading(false);
+    }
+  };
+
   // Quick Action Forms Submission
   const handleActionSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -339,7 +452,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
     try {
       if (activeTab === 'disburse') {
-        const workerId = formData.get('workerId') as string;
+        const workerId = selectedWorkerId || (formData.get('workerId') as string);
         const amount = parseFloat(formData.get('amount') as string);
         const note = (formData.get('note') as string)?.trim();
 
@@ -348,35 +461,28 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         }
 
         const targetWorker = activeWorkers.find(w => w.worker_id === workerId);
-        const res = await disburseToWorkerAction(workerId, supervisorId!, amount, note);
-        if (res.queued) {
-          setActionMessage({ type: 'success', text: 'Offline: Disbursement queued. Worker balance will sync later.' });
-        } else {
-          setActionMessage({ type: 'success', text: `Disbursement of ${formatINR(amount)} logged successfully.` });
-          playAlertSound('cash_in');
-
-          // Free Automated Text Message to Worker (strictly confirms amount received)
-          if (targetWorker?.worker_phone) {
-            sendWorkerDisbursementSms({
-              workerPhone: targetWorker.worker_phone,
-              workerName: targetWorker.worker_name,
-              amount,
-              supervisorName: supervisor?.name,
-              factoryName: (supervisor?.factories as any)?.name,
-              note,
-            }).then(smsRes => {
-              if (smsRes.sentViaGateway) {
-                showToast('success', `Free automated SMS confirmation sent to ${targetWorker.worker_name}!`);
-              } else if (smsRes.smsUri) {
-                setLastDisburseSms({
-                  workerName: targetWorker.worker_name,
-                  smsUri: smsRes.smsUri,
-                });
-              }
-            });
-          }
+        if (!targetWorker) {
+          throw new Error('Selected worker not found in active list.');
         }
+
+        // POPUP: If worker has no phone, prompt supervisor to add phone or skip
+        if (!targetWorker.worker_phone || targetWorker.worker_phone.trim() === '') {
+          setPhoneModalWorker(targetWorker);
+          setPhoneModalDisburseDetails({
+            workerId,
+            amount,
+            note,
+          });
+          setPhoneModalInput('');
+          setPhoneModalError('');
+          setShowPhoneModal(true);
+          setActionLoading(false);
+          return;
+        }
+
+        await executeDisbursement(targetWorker, amount, note);
         setDisburseAmount('');
+        setSelectedWorkerId('');
         form.reset();
       } else if (activeTab === 'transfer') {
         const toSupervisorId = formData.get('toSupervisorId') as string;
@@ -619,6 +725,114 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         </div>
       )}
 
+      {/* Missing Worker Phone Modal (Prompt when disbursing or adding phone) */}
+      {showPhoneModal && phoneModalWorker && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-sm w-full p-5 space-y-4 relative">
+            <button
+              type="button"
+              onClick={() => {
+                if (!phoneModalLoading) {
+                  setShowPhoneModal(false);
+                  setPhoneModalWorker(null);
+                  setPhoneModalDisburseDetails(null);
+                }
+              }}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <div className="flex items-start gap-3">
+              <div className="h-10 w-10 rounded-full bg-emerald-100 flex items-center justify-center shrink-0 text-emerald-600">
+                <Smartphone className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">
+                  {phoneModalDisburseDetails ? 'Worker Has No Phone Saved' : 'Add Mobile Number'}
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  <strong>{phoneModalWorker.worker_name}</strong> needs a mobile number to receive free automated SMS payment receipts.
+                </p>
+              </div>
+            </div>
+
+            {phoneModalDisburseDetails && (
+              <div className="p-3 bg-slate-50 rounded border border-slate-200 text-xs space-y-1">
+                <div className="flex justify-between text-slate-600">
+                  <span>Disbursing Amount:</span>
+                  <span className="font-black text-slate-950 text-sm">{formatINR(phoneModalDisburseDetails.amount)}</span>
+                </div>
+                <div className="flex justify-between text-slate-600">
+                  <span>Remark:</span>
+                  <span className="text-slate-800 font-medium">{phoneModalDisburseDetails.note}</span>
+                </div>
+              </div>
+            )}
+
+            <div>
+              <label htmlFor="modalPhoneInput" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                Mobile Number <span className="text-emerald-600 font-bold">(10 Digits)</span>
+              </label>
+              <div className="relative mt-1">
+                <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-500 text-sm font-semibold pointer-events-none">
+                  +91
+                </span>
+                <input
+                  id="modalPhoneInput"
+                  type="tel"
+                  autoFocus
+                  maxLength={14}
+                  value={phoneModalInput}
+                  onChange={(e) => setPhoneModalInput(e.target.value)}
+                  placeholder="e.g. 9876543210"
+                  disabled={phoneModalLoading}
+                  className="block w-full rounded border border-slate-300 pl-12 pr-3 py-2.5 text-slate-950 text-base font-medium min-h-[44px] bg-white focus:ring-2 focus:ring-slate-900 focus:border-slate-900"
+                />
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1.5">
+                ✓ Saved permanently to {phoneModalWorker.worker_name}'s profile for future text receipts.
+              </p>
+            </div>
+
+            {phoneModalError && (
+              <div className="p-2.5 bg-red-50 border border-red-200 rounded text-xs text-red-700 font-medium">
+                {phoneModalError}
+              </div>
+            )}
+
+            <div className="space-y-2 pt-2">
+              <button
+                type="button"
+                disabled={phoneModalLoading}
+                onClick={() => handlePhoneModalAction(false)}
+                className="w-full flex items-center justify-center gap-2 rounded bg-slate-900 hover:bg-slate-800 text-white font-semibold py-3 text-sm min-h-[46px] shadow transition-colors disabled:opacity-50"
+              >
+                {phoneModalLoading ? (
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                ) : (
+                  <>
+                    <Check className="h-4 w-4" />
+                    <span>{phoneModalDisburseDetails ? 'Save Phone & Send SMS' : 'Save Mobile Number'}</span>
+                  </>
+                )}
+              </button>
+
+              {phoneModalDisburseDetails && (
+                <button
+                  type="button"
+                  disabled={phoneModalLoading}
+                  onClick={() => handlePhoneModalAction(true)}
+                  className="w-full py-2.5 text-xs text-slate-600 hover:text-slate-900 font-semibold border border-slate-200 hover:bg-slate-50 rounded min-h-[42px] transition-colors"
+                >
+                  Disburse Without Phone (Skip SMS)
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Custom Confirmation Modal Overlay */}
       {confirmTx && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
@@ -809,23 +1023,69 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
             {activeTab === 'disburse' && (
               <>
                 <div>
-                  <label htmlFor="workerId" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                    Select Worker
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label htmlFor="workerId" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                      Select Worker
+                    </label>
+                    {selectedWorkerId && (
+                      <span className="text-[11px] text-slate-500 font-medium">
+                        {activeWorkers.find(w => w.worker_id === selectedWorkerId)?.worker_name}
+                      </span>
+                    )}
+                  </div>
                   <select
                     id="workerId"
                     name="workerId"
                     required
                     disabled={actionLoading}
-                    className="mt-1 block w-full rounded border-slate-300 px-3 py-2 text-slate-950 text-sm min-h-[44px] bg-white"
+                    value={selectedWorkerId}
+                    onChange={(e) => setSelectedWorkerId(e.target.value)}
+                    className="mt-1 block w-full rounded border-slate-300 px-3 py-2 text-slate-950 text-sm min-h-[44px] bg-white font-medium"
                   >
                     <option value="">Choose worker...</option>
                     {activeWorkers.map((w) => (
                       <option key={w.worker_id} value={w.worker_id}>
-                        {w.worker_name} ({formatINR(w.running_advance)} advance)
+                        {w.worker_name} ({formatINR(w.running_advance)} advance){!w.worker_phone ? ' — ⚠️ No Phone' : ''}
                       </option>
                     ))}
                   </select>
+
+                  {/* Selected Worker Phone Status Indicator */}
+                  {(() => {
+                    const target = activeWorkers.find(w => w.worker_id === selectedWorkerId);
+                    if (!target) return null;
+
+                    if (target.worker_phone) {
+                      return (
+                        <div className="mt-2 flex items-center gap-1.5 text-xs text-emerald-800 bg-emerald-50/80 border border-emerald-200/80 px-2.5 py-1.5 rounded">
+                          <Smartphone className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                          <span>SMS alerts active: <strong>{target.worker_phone}</strong></span>
+                        </div>
+                      );
+                    } else {
+                      return (
+                        <div className="mt-2 flex items-center justify-between text-xs text-amber-800 bg-amber-50 border border-amber-200 px-2.5 py-1.5 rounded">
+                          <div className="flex items-center gap-1.5">
+                            <AlertCircle className="h-3.5 w-3.5 text-amber-600 shrink-0" />
+                            <span>No phone saved (SMS receipt won't be sent)</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPhoneModalWorker(target);
+                              setPhoneModalDisburseDetails(null);
+                              setPhoneModalInput('');
+                              setPhoneModalError('');
+                              setShowPhoneModal(true);
+                            }}
+                            className="font-bold text-amber-900 underline hover:text-amber-950 ml-2"
+                          >
+                            + Add Phone
+                          </button>
+                        </div>
+                      );
+                    }
+                  })()}
                 </div>
                 <div>
                   <label htmlFor="amount" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
@@ -1107,15 +1367,20 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label htmlFor="phone" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                    Phone (Optional)
+                    Mobile Number (SMS Alert)
                   </label>
-                  <input
-                    id="phone"
-                    name="phone"
-                    type="tel"
-                    disabled={actionLoading}
-                    className="mt-1 block w-full rounded border border-slate-300 px-3 py-2 text-slate-950 text-sm min-h-[44px] bg-white"
-                  />
+                  <div className="relative mt-1">
+                    <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center text-slate-400 text-xs font-bold pointer-events-none">+91</span>
+                    <input
+                      id="phone"
+                      name="phone"
+                      type="tel"
+                      placeholder="10-digit mobile"
+                      maxLength={14}
+                      disabled={actionLoading}
+                      className="block w-full rounded border border-slate-300 pl-10 pr-2 py-2 text-slate-950 text-sm min-h-[44px] bg-white"
+                    />
+                  </div>
                 </div>
                 <div>
                   <label htmlFor="openingAdvance" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
@@ -1197,9 +1462,9 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         ) : (
           <ul className="divide-y divide-slate-100 bg-white">
             {filteredWorkers.map((w) => (
-              <li key={w.worker_id} className="p-4 flex items-center justify-between hover:bg-slate-50">
+              <li key={w.worker_id} className="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
                 <div className="flex items-center gap-3">
-                  <div className="relative h-12 w-12 rounded-full border border-slate-200 bg-slate-100 overflow-hidden flex items-center justify-center">
+                  <div className="relative h-12 w-12 rounded-full border border-slate-200 bg-slate-100 overflow-hidden flex items-center justify-center shrink-0">
                     {w.worker_photo_url ? (
                       <img src={w.worker_photo_url} alt={w.worker_name} className="object-cover h-full w-full" />
                     ) : (
@@ -1208,7 +1473,27 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                   </div>
                   <div>
                     <h4 className="text-sm font-bold text-slate-900">{w.worker_name}</h4>
-                    {w.worker_phone && <p className="text-xs text-slate-500">{w.worker_phone}</p>}
+                    {w.worker_phone ? (
+                      <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
+                        <Phone className="h-3 w-3 text-emerald-600 shrink-0" />
+                        <span>{w.worker_phone}</span>
+                      </p>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPhoneModalWorker(w);
+                          setPhoneModalDisburseDetails(null);
+                          setPhoneModalInput('');
+                          setPhoneModalError('');
+                          setShowPhoneModal(true);
+                        }}
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2 py-0.5 rounded mt-1 transition-colors"
+                      >
+                        <Phone className="h-3 w-3" />
+                        <span>+ Add Phone</span>
+                      </button>
+                    )}
                   </div>
                 </div>
                 <div className="text-right">
