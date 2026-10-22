@@ -13,7 +13,7 @@ import {
   EyeOff,
   MessageSquare
 } from 'lucide-react';
-import { askDatabaseAI, checkServerGeminiKeyConfigured, ChatMessage } from '@/app/actions/ai-chat';
+import { askDatabaseAI, checkServerAIKeysConfigured, ChatMessage } from '@/app/actions/ai-chat';
 
 interface AdminAIChatProps {
   className?: string;
@@ -25,24 +25,31 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
   const [loading, setLoading] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
-  // Gemini API Key
+  // API Keys
   const [hasServerKey, setHasServerKey] = useState<boolean>(false);
   const [customApiKey, setCustomApiKey] = useState<string>('');
+  const [customOpenRouterKey, setCustomOpenRouterKey] = useState<string>('');
   const [showKeyModal, setShowKeyModal] = useState<boolean>(false);
   const [showKeySecret, setShowKeySecret] = useState<boolean>(false);
+  const [showOpenRouterSecret, setShowOpenRouterSecret] = useState<boolean>(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Load custom API key from localStorage on mount & check server env key
+  // Load custom API keys from localStorage on mount & check server env keys
   useEffect(() => {
-    const savedKey = localStorage.getItem('fundflow_gemini_api_key');
-    if (savedKey) {
-      setCustomApiKey(savedKey);
+    const savedGeminiKey = localStorage.getItem('fundflow_gemini_api_key');
+    if (savedGeminiKey) {
+      setCustomApiKey(savedGeminiKey);
     }
 
-    checkServerGeminiKeyConfigured().then(res => {
+    const savedOpenRouterKey = localStorage.getItem('fundflow_openrouter_api_key');
+    if (savedOpenRouterKey) {
+      setCustomOpenRouterKey(savedOpenRouterKey);
+    }
+
+    checkServerAIKeysConfigured().then(res => {
       setHasServerKey(res.configured);
-      if (!res.configured && !savedKey) {
+      if (!res.configured && !savedGeminiKey && !savedOpenRouterKey) {
         setShowKeyModal(true);
       }
     });
@@ -83,12 +90,20 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
 
   const handleSaveApiKey = (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanKey = customApiKey.trim();
-    if (cleanKey) {
-      localStorage.setItem('fundflow_gemini_api_key', cleanKey);
+    const cleanGeminiKey = customApiKey.trim();
+    if (cleanGeminiKey) {
+      localStorage.setItem('fundflow_gemini_api_key', cleanGeminiKey);
     } else {
       localStorage.removeItem('fundflow_gemini_api_key');
     }
+
+    const cleanOpenRouterKey = customOpenRouterKey.trim();
+    if (cleanOpenRouterKey) {
+      localStorage.setItem('fundflow_openrouter_api_key', cleanOpenRouterKey);
+    } else {
+      localStorage.removeItem('fundflow_openrouter_api_key');
+    }
+
     setShowKeyModal(false);
   };
 
@@ -112,7 +127,7 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
     const textToSend = (queryText || inputValue).trim();
     if (!textToSend || loading) return;
 
-    if (!hasServerKey && !customApiKey.trim()) {
+    if (!hasServerKey && !customApiKey.trim() && !customOpenRouterKey.trim()) {
       setShowKeyModal(true);
       return;
     }
@@ -133,7 +148,8 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
         textToSend,
         messages,
         customApiKey || undefined,
-        'gemini-3.8-flash'
+        'gemini-3.8-flash',
+        customOpenRouterKey || undefined
       );
 
       if (response.success && response.answer) {
@@ -147,7 +163,7 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
         const errorMsg: ChatMessage = {
           role: 'model',
           content: response.error === 'MISSING_API_KEY'
-            ? 'Gemini API Key Required: Click the key icon above to enter your Google Gemini API key.'
+            ? 'API Key Required: Click the key icon above to enter your Google Gemini or OpenRouter API key.'
             : `Error: ${response.error || 'Failed to query database.'}`,
           timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
         };
@@ -278,7 +294,7 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
         id="admin-ai-chat-section"
         className={`bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden ${className}`}
       >
-        {/* Simple Header */}
+        {/* Simple Clean Header */}
         <div className="bg-slate-900 text-white px-5 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <MessageSquare className="h-4 w-4 text-slate-300" />
@@ -435,7 +451,7 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm animate-fadeIn">
           <div className="bg-white border border-slate-200 rounded-lg shadow-2xl p-5 max-w-md w-full space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-              <h3 className="text-sm font-bold text-slate-900">Gemini API Key</h3>
+              <h3 className="text-sm font-bold text-slate-900">AI Keys</h3>
               <button
                 type="button"
                 onClick={() => setShowKeyModal(false)}
@@ -445,10 +461,10 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
               </button>
             </div>
 
-            <form onSubmit={handleSaveApiKey} className="space-y-3">
+            <form onSubmit={handleSaveApiKey} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  API Key
+                  Gemini API Key
                 </label>
                 <div className="relative">
                   <input
@@ -466,6 +482,31 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
                     {showKeySecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  OpenRouter API Key (Nemotron Super VL Fallback)
+                </label>
+                <div className="relative">
+                  <input
+                    type={showOpenRouterSecret ? 'text' : 'password'}
+                    value={customOpenRouterKey}
+                    onChange={(e) => setCustomOpenRouterKey(e.target.value)}
+                    placeholder="sk-or-v1-..."
+                    className="w-full rounded border border-slate-300 pl-3 pr-10 py-2 text-xs font-mono text-slate-950 focus:border-slate-500 focus:outline-none min-h-[40px]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowOpenRouterSecret(!showOpenRouterSecret)}
+                    className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600"
+                  >
+                    {showOpenRouterSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Optional fallback: Used automatically if Gemini is unavailable or rate-limited.
+                </p>
               </div>
 
               <div className="flex gap-2 pt-2">

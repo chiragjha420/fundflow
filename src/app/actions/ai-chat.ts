@@ -23,16 +23,24 @@ export interface ChatResponse {
   };
 }
 
+export async function checkServerAIKeysConfigured(): Promise<{ hasGemini: boolean; hasOpenRouter: boolean; configured: boolean }> {
+  const hasGemini = !!process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 0;
+  const hasOpenRouter = !!process.env.OPENROUTER_API_KEY && process.env.OPENROUTER_API_KEY.trim().length > 0;
+  return { hasGemini, hasOpenRouter, configured: hasGemini || hasOpenRouter };
+}
+
 export async function checkServerGeminiKeyConfigured(): Promise<{ configured: boolean }> {
   const hasEnvKey = !!process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 0;
-  return { configured: hasEnvKey };
+  const hasOpenRouter = !!process.env.OPENROUTER_API_KEY && process.env.OPENROUTER_API_KEY.trim().length > 0;
+  return { configured: hasEnvKey || hasOpenRouter };
 }
 
 export async function askDatabaseAI(
   userQuery: string,
   history: ChatMessage[] = [],
   apiKeyOverride?: string,
-  modelRequested: string = 'gemini-3.8-flash'
+  modelRequested: string = 'gemini-3.8-flash',
+  openRouterKeyOverride?: string
 ): Promise<ChatResponse> {
   try {
     // 1. Security Check: Verify Admin Authentication
@@ -53,9 +61,11 @@ export async function askDatabaseAI(
       return { success: false, error: 'Access Denied: Only administrators have access to database intelligence.' };
     }
 
-    // 2. Resolve Gemini API Key (User Override from UI or .env.local)
-    const apiKey = apiKeyOverride?.trim() || process.env.GEMINI_API_KEY?.trim();
-    if (!apiKey) {
+    // 2. Resolve API Keys
+    const geminiApiKey = apiKeyOverride?.trim() || process.env.GEMINI_API_KEY?.trim();
+    const openRouterApiKey = openRouterKeyOverride?.trim() || process.env.OPENROUTER_API_KEY?.trim();
+
+    if (!geminiApiKey && !openRouterApiKey) {
       return {
         success: false,
         error: 'MISSING_API_KEY',
@@ -328,56 +338,80 @@ ${JSON.stringify(expenseList.slice(0, 25).map(e => ({
       parts: [{ text: userQuery }]
     });
 
-    for (const model of modelsToTry) {
-      try {
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              systemInstruction: {
-                parts: [{ text: systemPrompt }]
+    // Attempt Gemini first if key is available
+    if (geminiApiKey) {
+      for (const model of modelsToTry) {
+        try {
+          const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
               },
-              contents,
-              generationConfig: {
-                temperature: 0.2,
-                maxOutputTokens: 4096,
-              }
-            }),
-          }
-        );
+              body: JSON.stringify({
+                systemInstruction: {
+                  parts: [{ text: systemPrompt }]
+                },
+                contents,
+                generationConfig: {
+                  temperature: 0.2,
+                  maxOutputTokens: 4096,
+                }
+              }),
+            }
+          );
 
-        const data = await response.json();
+          const data = await response.json();
 
-        if (response.ok && data?.candidates?.[0]?.content?.parts?.[0]?.text) {
-          finalAnswer = data.candidates[0].content.parts[0].text;
-          actualModelUsed = model;
-          break;
-        } else {
-          const apiErrorMessage = data?.error?.message || `HTTP ${response.status}: ${response.statusText}`;
-          lastError = `[Model ${model}]: ${apiErrorMessage}`;
-          console.warn(`Gemini API call failed for model ${model}:`, apiErrorMessage);
-          // If error is 404 (model not found), loop will try next model
-          if (response.status === 404 || apiErrorMessage.toLowerCase().includes('not found')) {
-            continue;
-          } else {
-            // For auth or quota errors, break early to show the exact message
+          if (response.ok && data?.candidates?.[0]?.content?.parts?.[0]?.text) {
+            finalAnswer = data.candidates[0].content.parts[0].text;
+            actualModelUsed = model;
             break;
+          } else {
+            const apiErrorMessage = data?.error?.message || `HTTP ${response.status}: ${response.statusText}`;
+            lastError = `[Gemini ${model}]: ${apiErrorMessage}`;
+            console.warn(`Gemini API call failed for model ${model}:`, apiErrorMessage);
+            if (response.status === 404 || apiErrorMessage.toLowerCase().includes('not found')) {
+              continue;
+            } else {
+              break;
+            }
           }
+        } catch (err: any) {
+          lastError = err?.message || 'Network error calling Gemini API';
+          console.error(`Fetch exception for ${model}:`, err);
         }
-      } catch (err: any) {
-        lastError = err?.message || 'Network error calling Gemini API';
-        console.error(`Fetch exception for ${model}:`, err);
+      }
+    } else {
+      lastError = 'No Gemini API key provided.';
+    }
+
+    // Fallback: If Gemini is unavailable or failed, call OpenRouter Nemotron Super VL Free
+    if (!finalAnswer) {
+      console.warn('Gemini unavailable or error:', lastError, 'Attempting OpenRouter Nemotron Super VL Free fallback...');
+
+      const openRouterResult = await callOpenRouterFallback(
+        systemPrompt,
+        history,
+        userQuery,
+        openRouterApiKey
+      );
+
+      if (openRouterResult.success && openRouterResult.answer) {
+        finalAnswer = openRouterResult.answer;
+        actualModelUsed = openRouterResult.modelUsed || 'nvidia/nemotron-3.5-super-vl:free';
+      } else {
+        lastError = geminiApiKey 
+          ? `Gemini failed: ${lastError}. OpenRouter fallback: ${openRouterResult.error || 'Unknown error'}`
+          : (openRouterResult.error || 'OpenRouter fallback failed');
       }
     }
 
     if (!finalAnswer) {
       return {
         success: false,
-        error: lastError || 'Failed to generate response from Gemini API. Please verify your API key and quota in Google AI Studio.',
+        error: lastError || 'Failed to generate response. Please check your Gemini or OpenRouter API key.',
         modelUsed: actualModelUsed,
       };
     }
@@ -402,4 +436,80 @@ ${JSON.stringify(expenseList.slice(0, 25).map(e => ({
       error: error?.message || 'An unexpected error occurred while querying database AI.',
     };
   }
+}
+
+// Fallback Helper for OpenRouter Nemotron Models
+async function callOpenRouterFallback(
+  systemPrompt: string,
+  history: ChatMessage[],
+  userQuery: string,
+  openRouterApiKey?: string
+): Promise<{ success: boolean; answer?: string; error?: string; modelUsed?: string }> {
+  const key = openRouterApiKey?.trim() || process.env.OPENROUTER_API_KEY?.trim();
+  if (!key) {
+    return {
+      success: false,
+      error: 'No OpenRouter API key found. Add OPENROUTER_API_KEY in .env.local or UI to enable Nemotron fallback.'
+    };
+  }
+
+  const nemotronModels = [
+    'nvidia/nemotron-3.5-super-vl:free',
+    'nvidia/nemotron-3-super-120b-a12b:free',
+    'nvidia/nemotron-3.5-lightning:free',
+    'nvidia/nemotron-nano-9b-v2:free'
+  ];
+
+  const messages: any[] = [
+    { role: 'system', content: systemPrompt }
+  ];
+
+  for (const msg of history.slice(-6)) {
+    messages.push({
+      role: msg.role === 'model' ? 'assistant' : 'user',
+      content: msg.content
+    });
+  }
+
+  messages.push({ role: 'user', content: userQuery });
+
+  let lastErr = '';
+
+  for (const model of nemotronModels) {
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${key}`,
+          'HTTP-Referer': 'https://fundflow.local',
+          'X-Title': 'FundFlow Database Assistant',
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature: 0.2,
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data?.choices?.[0]?.message?.content) {
+        return {
+          success: true,
+          answer: data.choices[0].message.content,
+          modelUsed: model,
+        };
+      } else {
+        lastErr = data?.error?.message || `HTTP ${res.status}: ${res.statusText}`;
+        console.warn(`OpenRouter model ${model} failed:`, lastErr);
+      }
+    } catch (e: any) {
+      lastErr = e?.message || 'Network error connecting to OpenRouter';
+    }
+  }
+
+  return {
+    success: false,
+    error: lastErr || 'Failed to call OpenRouter Nemotron models.',
+  };
 }
