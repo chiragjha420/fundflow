@@ -301,10 +301,10 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       if (activeTab === 'disburse') {
         const workerId = formData.get('workerId') as string;
         const amount = parseFloat(formData.get('amount') as string);
-        const note = formData.get('note') as string;
+        const note = (formData.get('note') as string)?.trim();
 
-        if (!workerId || isNaN(amount) || amount <= 0) {
-          throw new Error('Please select a worker and specify positive amount.');
+        if (!workerId || isNaN(amount) || amount <= 0 || !note) {
+          throw new Error('Please select a worker, specify positive amount, and enter notes/remarks.');
         }
 
         const res = await disburseToWorkerAction(workerId, supervisorId!, amount, note);
@@ -317,10 +317,10 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       } else if (activeTab === 'transfer') {
         const toSupervisorId = formData.get('toSupervisorId') as string;
         const amount = parseFloat(formData.get('amount') as string);
-        const note = formData.get('note') as string;
+        const note = (formData.get('note') as string)?.trim();
 
-        if (!toSupervisorId || isNaN(amount) || amount <= 0) {
-          throw new Error('Please select a supervisor and specify positive amount.');
+        if (!toSupervisorId || isNaN(amount) || amount <= 0 || !note) {
+          throw new Error('Please select a supervisor, specify positive amount, and enter notes/remarks.');
         }
 
         const res = await transferToSupervisorAction(toSupervisorId, supervisorId!, amount, note);
@@ -333,10 +333,10 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       } else if (activeTab === 'expense') {
         const amount = parseFloat(formData.get('amount') as string);
         const category = formData.get('category') as string;
-        const note = formData.get('note') as string;
+        const note = (formData.get('note') as string)?.trim();
 
         if (isNaN(amount) || amount <= 0 || !category || !note) {
-          throw new Error('Amount, Category, and Notes are required.');
+          throw new Error('Amount, Category, and Notes/Remarks are required.');
         }
 
         // Handle Photo Upload (for now standard storage if online)
@@ -675,14 +675,15 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                 </div>
                 <div>
                   <label htmlFor="note" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                    Notes
+                    Notes / Remarks <span className="text-red-500">*</span>
                   </label>
                   <input
                     id="note"
                     name="note"
                     type="text"
+                    required
                     disabled={actionLoading}
-                    placeholder="Weekly advance pay"
+                    placeholder="e.g. Weekly advance pay"
                     className="mt-1 block w-full rounded border border-slate-300 px-3 py-2 text-slate-950 text-sm min-h-[44px]"
                   />
                 </div>
@@ -734,7 +735,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                 </div>
                 <div>
                   <label htmlFor="note" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                    Notes
+                    Notes / Remarks <span className="text-red-500">*</span>
                   </label>
                   <input
                     id="note"
@@ -742,7 +743,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                     type="text"
                     required
                     disabled={actionLoading}
-                    placeholder="Wages for temporary laborers"
+                    placeholder="e.g. Wages for temporary laborers"
                     className="mt-1 block w-full rounded border border-slate-300 px-3 py-2 text-slate-950 text-sm min-h-[44px]"
                   />
                 </div>
@@ -816,14 +817,15 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                 </div>
                 <div>
                   <label htmlFor="note" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                    Notes
+                    Notes / Remarks <span className="text-red-500">*</span>
                   </label>
                   <input
                     id="note"
                     name="note"
                     type="text"
+                    required
                     disabled={actionLoading}
-                    placeholder="Short cash transfer"
+                    placeholder="e.g. Short cash transfer"
                     className="mt-1 block w-full rounded border border-slate-300 px-3 py-2 text-slate-950 text-sm min-h-[44px]"
                   />
                 </div>

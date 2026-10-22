@@ -561,11 +561,12 @@ export function AdminDashboard({
 
             <div>
               <label htmlFor="note" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                Note / Description
+                Note / Remarks <span className="text-red-500">*</span>
               </label>
               <textarea
                 id="note"
                 name="note"
+                required
                 rows={2}
                 disabled={formLoading}
                 placeholder="e.g. Weekly advance allocation"

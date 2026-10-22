@@ -28,11 +28,16 @@ export async function disburseToWorkerAction(
   amount: number,
   note: string
 ) {
+  const cleanNote = note?.trim();
+  if (!cleanNote) {
+    throw new Error('Notes/remarks are required for disbursement.');
+  }
+
   const payload = {
     p_worker_id: workerId,
     p_supervisor_id: supervisorId,
     p_amount: amount,
-    p_note: note,
+    p_note: cleanNote,
   };
 
   if (isAppOnline()) {
@@ -62,11 +67,16 @@ export async function transferToSupervisorAction(
   amount: number,
   note: string
 ) {
+  const cleanNote = note?.trim();
+  if (!cleanNote) {
+    throw new Error('Notes/remarks are required for supervisor transfer.');
+  }
+
   const payload = {
     p_to_supervisor_id: toSupervisorId,
     p_from_supervisor_id: fromSupervisorId,
     p_amount: amount,
-    p_note: note,
+    p_note: cleanNote,
   };
 
   if (isAppOnline()) {
@@ -97,12 +107,17 @@ export async function logExpenseAction(
   note: string,
   photoUrl: string | null
 ) {
+  const cleanNote = note?.trim();
+  if (!cleanNote) {
+    throw new Error('Notes/remarks are required for expense entry.');
+  }
+
   const payload = {
     p_supervisor_id: supervisorId,
     p_factory_id: factoryId,
     p_amount: amount,
     p_category: category,
-    p_note: note,
+    p_note: cleanNote,
     p_photo_url: photoUrl,
   };
 

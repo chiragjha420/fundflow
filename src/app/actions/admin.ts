@@ -110,10 +110,10 @@ export async function toggleSupervisorActive(supervisorId: string, currentStatus
 export async function createOfficeDisbursement(state: any, formData: FormData) {
   const supervisorId = formData.get('supervisorId') as string;
   const amountStr = formData.get('amount') as string;
-  const note = formData.get('note') as string;
+  const note = (formData.get('note') as string)?.trim();
 
-  if (!supervisorId || !amountStr) {
-    return { error: 'Please select a supervisor and specify amount.' };
+  if (!supervisorId || !amountStr || !note) {
+    return { error: 'Please select a supervisor, specify amount, and provide notes/remarks.' };
   }
 
   const amount = parseFloat(amountStr);
@@ -133,7 +133,7 @@ export async function createOfficeDisbursement(state: any, formData: FormData) {
     to_supervisor_id: supervisorId,
     amount,
     status: 'pending',
-    note: note || null,
+    note: note,
     created_by: user.id,
   });
 
