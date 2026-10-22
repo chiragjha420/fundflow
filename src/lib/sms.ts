@@ -58,6 +58,7 @@ export async function sendWorkerDisbursementSms(payload: WorkerSmsPayload): Prom
     // 1. Check if Free Android SIM Gateway is configured
     const gatewayUrl = process.env.SMS_GATEWAY_URL?.trim();
     const gatewayApiKey = process.env.SMS_GATEWAY_API_KEY?.trim();
+    const gatewayDeviceId = process.env.SMS_GATEWAY_DEVICE_ID?.trim();
 
     if (gatewayUrl) {
       try {
@@ -65,16 +66,23 @@ export async function sendWorkerDisbursementSms(payload: WorkerSmsPayload): Prom
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            ...(gatewayApiKey ? { 'Authorization': `Bearer ${gatewayApiKey}`, 'x-api-key': gatewayApiKey } : {}),
+            ...(gatewayApiKey ? {
+              'Authorization': `Bearer ${gatewayApiKey}`,
+              'x-api-key': gatewayApiKey,
+            } : {}),
           },
           body: JSON.stringify({
+            // TextBee format
+            recipients: [formattedPhone],
+            message: messageText,
+            ...(gatewayDeviceId ? { deviceId: gatewayDeviceId } : {}),
+            // Generic gateway compatibility fields
             to: formattedPhone,
             phone: formattedPhone,
             recipient: formattedPhone,
-            message: messageText,
             text: messageText,
           }),
-          signal: AbortSignal.timeout(5000),
+          signal: AbortSignal.timeout(6000),
         });
 
         if (response.ok) {
@@ -83,6 +91,9 @@ export async function sendWorkerDisbursementSms(payload: WorkerSmsPayload): Prom
             messageText,
             sentViaGateway: true,
           };
+        } else {
+          const errBody = await response.text().catch(() => '');
+          console.warn('SMS Gateway responded with non-200 status:', response.status, errBody);
         }
       } catch (err: any) {
         console.warn('SMS Gateway network dispatch error:', err?.message);
