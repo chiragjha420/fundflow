@@ -1,8 +1,12 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { createOfficeDisbursement } from '@/app/actions/admin';
 import { AdminAIChat } from './admin-ai-chat';
+import { NotificationBanner } from '@/components/notification-banner';
+import { getCashRequests, updateCashRequestStatus, CashRequest } from '@/app/actions/cash-requests';
+import { playAlertSound } from '@/lib/notifications';
+import { HandCoins } from 'lucide-react';
 import { formatINR } from '@/lib/utils';
 import { 
   Building2, 
@@ -100,6 +104,40 @@ export function AdminDashboard({
 }: AdminDashboardProps) {
   const [formError, setFormError] = useState<string | null>(null);
   const [formSuccess, setFormSuccess] = useState(false);
+
+  // Cash Replenishment Requests from Supervisors
+  const [cashRequests, setCashRequests] = useState<CashRequest[]>([]);
+  const [disburseSupervisorId, setDisburseSupervisorId] = useState<string>('');
+  const [disburseAmount, setDisburseAmount] = useState<string>('');
+  const [disburseNote, setDisburseNote] = useState<string>('');
+  const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
+
+  // Load cash requests on mount & periodically
+  useEffect(() => {
+    getCashRequests().then(setCashRequests);
+    const interval = setInterval(() => {
+      getCashRequests().then(setCashRequests);
+    }, 15000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleApproveRequest = (req: CashRequest) => {
+    setDisburseSupervisorId(req.supervisor_id);
+    setDisburseAmount(String(req.amount));
+    setDisburseNote(req.note ? `Approved Request: ${req.note}` : 'Factory cash replenishment');
+    setActiveRequestId(req.id);
+
+    // Scroll smoothly to disbursement form
+    const formEl = document.getElementById('office-disbursement-form');
+    if (formEl) {
+      formEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  };
+
+  const handleDismissRequest = async (requestId: string) => {
+    await updateCashRequestStatus(requestId, 'dismissed');
+    getCashRequests().then(setCashRequests);
+  };
   const [formLoading, setFormLoading] = useState(false);
 
   // Ledger Filters State
@@ -135,6 +173,15 @@ export function AdminDashboard({
     } else {
       setFormSuccess(true);
       setFormLoading(false);
+      playAlertSound('cash_in');
+      if (activeRequestId) {
+        await updateCashRequestStatus(activeRequestId, 'approved');
+        setActiveRequestId(null);
+        getCashRequests().then(setCashRequests);
+      }
+      setDisburseSupervisorId('');
+      setDisburseAmount('');
+      setDisburseNote('');
       form.reset();
       // Auto fade success message
       setTimeout(() => setFormSuccess(false), 5000);
@@ -490,6 +537,9 @@ export function AdminDashboard({
 
   return (
     <div className="space-y-6">
+      {/* Real-time Notifications Banner */}
+      <NotificationBanner role="admin" />
+
       {/* Overview stats */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
@@ -511,7 +561,53 @@ export function AdminDashboard({
       {/* Grid: Disbursement Form & Cash positions */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         {/* Left Column: Office Disbursement Form */}
-        <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm lg:col-span-1">
+        <div id="office-disbursement-form" className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm lg:col-span-1 space-y-4">
+          {/* Pending Cash Replenishment Requests from Supervisors */}
+          {cashRequests.filter(r => r.status === 'pending').length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-amber-900">
+                  <HandCoins className="h-4 w-4 text-amber-600" />
+                  <span>Cash Requests ({cashRequests.filter(r => r.status === 'pending').length})</span>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {cashRequests.filter(r => r.status === 'pending').map(req => (
+                  <div key={req.id} className="bg-white border border-amber-200 rounded p-2.5 shadow-xs text-xs space-y-1.5">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <span className="font-bold text-slate-900">{req.supervisor_name}</span>
+                        <span className="text-[10px] text-slate-500 block">{req.factory_name}</span>
+                      </div>
+                      <span className="font-extrabold text-slate-950 text-sm">₹{Number(req.amount).toLocaleString('en-IN')}</span>
+                    </div>
+
+                    <p className="text-[11px] text-slate-600 italic bg-slate-50 rounded p-1 border border-slate-100">
+                      "{req.note}"
+                    </p>
+
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => handleApproveRequest(req)}
+                        className="flex-1 py-1 px-2 rounded bg-slate-900 text-white text-[11px] font-bold hover:bg-slate-800 transition-colors"
+                      >
+                        Approve & Fill Form
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDismissRequest(req.id)}
+                        className="py-1 px-2 rounded border border-slate-200 text-slate-500 text-[11px] font-medium hover:bg-slate-50"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
             <ArrowUpRight className="h-5 w-5 text-slate-600" />
             <h2 className="text-sm font-bold uppercase tracking-wider text-slate-900">Disburse Office Cash</h2>
@@ -526,6 +622,8 @@ export function AdminDashboard({
                 id="supervisorId"
                 name="supervisorId"
                 required
+                value={disburseSupervisorId}
+                onChange={(e) => setDisburseSupervisorId(e.target.value)}
                 disabled={formLoading}
                 className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-slate-950 shadow-sm focus:border-slate-500 focus:outline-none focus:ring-slate-500 text-sm min-h-[44px]"
               >
@@ -552,6 +650,8 @@ export function AdminDashboard({
                   type="number"
                   required
                   min="1"
+                  value={disburseAmount}
+                  onChange={(e) => setDisburseAmount(e.target.value)}
                   disabled={formLoading}
                   placeholder="0"
                   className="block w-full rounded-md border border-slate-300 pl-7 pr-3 py-2 text-slate-950 focus:border-slate-500 focus:outline-none focus:ring-slate-500 text-sm min-h-[44px]"
@@ -568,6 +668,8 @@ export function AdminDashboard({
                 name="note"
                 required
                 rows={2}
+                value={disburseNote}
+                onChange={(e) => setDisburseNote(e.target.value)}
                 disabled={formLoading}
                 placeholder="e.g. Weekly advance allocation"
                 className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-slate-950 shadow-sm focus:border-slate-500 focus:outline-none focus:ring-slate-500 text-sm"

@@ -24,8 +24,13 @@ import {
   Camera, 
   User, 
   AlertCircle,
-  RefreshCw
+  RefreshCw,
+  HandCoins
 } from 'lucide-react';
+import { sendWorkerDisbursementSms } from '@/lib/sms';
+import { createCashRequest } from '@/app/actions/cash-requests';
+import { playAlertSound } from '@/lib/notifications';
+import { NotificationBanner } from '@/components/notification-banner';
 
 interface Worker {
   worker_id: string;
@@ -87,6 +92,39 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const [actionMessage, setActionMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [confirmTx, setConfirmTx] = useState<{ id: string; amount: number; type: string } | null>(null);
   const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Quick Amount Preset state for Disbursal
+  const [disburseAmount, setDisburseAmount] = useState<string>('');
+
+  // Cash Replenishment Request states
+  const [showCashRequestModal, setShowCashRequestModal] = useState<boolean>(false);
+  const [requestAmount, setRequestAmount] = useState<string>('');
+  const [requestNote, setRequestNote] = useState<string>('');
+  const [requestLoading, setRequestLoading] = useState<boolean>(false);
+
+  const handleCashRequestSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const numAmount = parseFloat(requestAmount);
+    if (isNaN(numAmount) || numAmount <= 0 || !requestNote.trim()) return;
+
+    setRequestLoading(true);
+    try {
+      const res = await createCashRequest(supervisorId!, factoryId!, numAmount, requestNote);
+      if (res.success) {
+        showToast('success', `Cash request for ${formatINR(numAmount)} sent to Main Office!`);
+        playAlertSound('cash_in');
+        setShowCashRequestModal(false);
+        setRequestAmount('');
+        setRequestNote('');
+      } else {
+        showToast('error', res.error || 'Failed to submit request.');
+      }
+    } catch (e: any) {
+      showToast('error', e.message || 'Error submitting request.');
+    } finally {
+      setRequestLoading(false);
+    }
+  };
 
   const showToast = (type: 'success' | 'error', text: string) => {
     setToastMessage({ type, text });
@@ -307,12 +345,31 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           throw new Error('Please select a worker, specify positive amount, and enter notes/remarks.');
         }
 
+        const targetWorker = activeWorkers.find(w => w.worker_id === workerId);
         const res = await disburseToWorkerAction(workerId, supervisorId!, amount, note);
         if (res.queued) {
           setActionMessage({ type: 'success', text: 'Offline: Disbursement queued. Worker balance will sync later.' });
         } else {
-          setActionMessage({ type: 'success', text: 'Disbursement logged successfully.' });
+          setActionMessage({ type: 'success', text: `Disbursement of ${formatINR(amount)} logged successfully.` });
+          playAlertSound('cash_in');
+
+          // Free Automated Text Message to Worker (strictly confirms amount received)
+          if (targetWorker?.worker_phone) {
+            sendWorkerDisbursementSms({
+              workerPhone: targetWorker.worker_phone,
+              workerName: targetWorker.worker_name,
+              amount,
+              supervisorName: supervisor?.name,
+              factoryName: (supervisor?.factories as any)?.name,
+              note,
+            }).then(smsRes => {
+              if (smsRes.sentViaGateway) {
+                showToast('success', `Free automated SMS confirmation sent to ${targetWorker.worker_name}!`);
+              }
+            });
+          }
         }
+        setDisburseAmount('');
         form.reset();
       } else if (activeTab === 'transfer') {
         const toSupervisorId = formData.get('toSupervisorId') as string;
@@ -468,6 +525,93 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         </div>
       )}
 
+{/* Cash Replenishment Request Modal */}
+      {showCashRequestModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-lg border border-slate-200 shadow-xl max-w-sm w-full p-5 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+              <div className="flex items-center gap-2">
+                <HandCoins className="h-4 w-4 text-slate-700" />
+                <h3 className="text-sm font-bold text-slate-900">Request Cash from Office</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCashRequestModal(false)}
+                className="text-slate-400 hover:text-slate-600 text-sm"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleCashRequestSubmit} className="space-y-3">
+              <div>
+                <label htmlFor="reqAmount" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                  Amount Needed (INR) <span className="text-red-500">*</span>
+                </label>
+                <div className="relative mt-1">
+                  <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-500 text-sm">₹</span>
+                  <input
+                    id="reqAmount"
+                    type="number"
+                    required
+                    min="100"
+                    value={requestAmount}
+                    onChange={(e) => setRequestAmount(e.target.value)}
+                    placeholder="0"
+                    className="block w-full rounded border border-slate-300 pl-7 pr-3 py-2 text-slate-950 text-sm min-h-[44px]"
+                  />
+                </div>
+                {/* Quick preset chips for request */}
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {[10000, 25000, 50000, 100000].map(val => (
+                    <button
+                      key={val}
+                      type="button"
+                      onClick={() => setRequestAmount(String(val))}
+                      className="px-2 py-1 text-xs font-semibold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200"
+                    >
+                      ₹{(val / 1000)}k
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="reqNote" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                  Reason / Notes <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  id="reqNote"
+                  required
+                  rows={2}
+                  value={requestNote}
+                  onChange={(e) => setRequestNote(e.target.value)}
+                  placeholder="e.g. Need cash for weekly worker advances & raw materials"
+                  className="mt-1 block w-full rounded border border-slate-300 p-2 text-xs text-slate-950 focus:border-slate-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowCashRequestModal(false)}
+                  className="flex-1 rounded border border-slate-300 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 min-h-[40px]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={requestLoading || !requestAmount || !requestNote.trim()}
+                  className="flex-1 rounded bg-slate-900 py-2 text-xs font-bold text-white hover:bg-slate-800 disabled:opacity-50 min-h-[40px] flex items-center justify-center gap-1"
+                >
+                  {requestLoading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <span>Send Request</span>}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Custom Confirmation Modal Overlay */}
       {confirmTx && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
@@ -505,6 +649,29 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           </div>
         </div>
       )}
+
+      {/* Real-time Notifications Banner */}
+      <NotificationBanner role="supervisor" />
+
+      {/* Cash Replenishment Request Button */}
+      <div className="bg-gradient-to-r from-slate-900 to-slate-800 rounded-lg p-3.5 text-white flex items-center justify-between shadow-sm">
+        <div className="flex items-center gap-2.5">
+          <div className="h-8 w-8 rounded-full bg-slate-800 flex items-center justify-center text-emerald-400 shrink-0">
+            <HandCoins className="h-4 w-4" />
+          </div>
+          <div>
+            <p className="text-xs font-bold text-white">Need Factory Cash?</p>
+            <p className="text-[11px] text-slate-300">Request cash replenishment from Main Office</p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowCashRequestModal(true)}
+          className="px-3 py-1.5 rounded bg-white text-slate-950 text-xs font-bold hover:bg-slate-100 transition-colors shrink-0 shadow-sm min-h-[36px]"
+        >
+          Request Cash
+        </button>
+      </div>
 
       {/* 1. Pending Confirmations Alert */}
       {activePending.length > 0 && (
@@ -667,10 +834,34 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                       type="number"
                       required
                       min="1"
+                      value={disburseAmount}
+                      onChange={(e) => setDisburseAmount(e.target.value)}
                       disabled={actionLoading}
                       placeholder="0"
                       className="block w-full rounded border border-slate-300 pl-7 pr-3 py-2 text-slate-950 text-sm min-h-[44px]"
                     />
+                  </div>
+                  {/* Quick Preset Amount Chips */}
+                  <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                    {[500, 1000, 2000, 5000].map((val) => (
+                      <button
+                        key={val}
+                        type="button"
+                        onClick={() => setDisburseAmount(prev => String((Number(prev) || 0) + val))}
+                        className="px-2.5 py-1 text-xs font-semibold rounded bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 transition-colors"
+                      >
+                        +₹{val.toLocaleString('en-IN')}
+                      </button>
+                    ))}
+                    {disburseAmount && (
+                      <button
+                        type="button"
+                        onClick={() => setDisburseAmount('')}
+                        className="px-2 py-1 text-xs font-semibold text-slate-400 hover:text-slate-600 ml-auto"
+                      >
+                        Clear
+                      </button>
+                    )}
                   </div>
                 </div>
                 <div>
