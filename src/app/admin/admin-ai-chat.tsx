@@ -3,18 +3,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Bot, 
-  Sparkles, 
   Send, 
   Key, 
   RefreshCw, 
   Trash2, 
   Copy, 
   Check, 
-  ChevronDown, 
-  ChevronUp, 
   Eye, 
   EyeOff,
-  Database
+  MessageSquare
 } from 'lucide-react';
 import { askDatabaseAI, checkServerGeminiKeyConfigured, ChatMessage } from '@/app/actions/ai-chat';
 
@@ -26,20 +23,15 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [loading, setLoading] = useState(false);
-  const [isMinimized, setIsMinimized] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
-  // Gemini API Key & Model Configuration
+  // Gemini API Key
   const [hasServerKey, setHasServerKey] = useState<boolean>(false);
   const [customApiKey, setCustomApiKey] = useState<string>('');
   const [showKeyModal, setShowKeyModal] = useState<boolean>(false);
   const [showKeySecret, setShowKeySecret] = useState<boolean>(false);
-  const [selectedModel, setSelectedModel] = useState<string>('gemini-3.8-flash');
-  const [customModelInput, setCustomModelInput] = useState<string>('');
-  const [isCustomModel, setIsCustomModel] = useState<boolean>(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const chatContainerRef = useRef<HTMLDivElement>(null);
 
   // Load custom API key from localStorage on mount & check server env key
   useEffect(() => {
@@ -48,27 +40,13 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
       setCustomApiKey(savedKey);
     }
 
-    const savedModel = localStorage.getItem('fundflow_gemini_model');
-    if (savedModel && ['gemini-3.8-flash', 'gemini-3.8-pro', 'gemini-3.5-flash', 'gemini-3.5-pro'].includes(savedModel)) {
-      setSelectedModel(savedModel);
-    } else if (savedModel && savedModel !== 'gemini-2.5-flash' && savedModel !== 'gemini-2.0-flash' && savedModel !== 'gemini-1.5-flash') {
-      setIsCustomModel(true);
-      setCustomModelInput(savedModel);
-      setSelectedModel(savedModel);
-    } else {
-      setSelectedModel('gemini-3.8-flash');
-      localStorage.setItem('fundflow_gemini_model', 'gemini-3.8-flash');
-    }
-
     checkServerGeminiKeyConfigured().then(res => {
       setHasServerKey(res.configured);
-      // If no server key and no saved custom key, auto open setup modal
       if (!res.configured && !savedKey) {
         setShowKeyModal(true);
       }
     });
 
-    // Default welcome message
     const savedHistory = localStorage.getItem('fundflow_ai_chat_history');
     if (savedHistory) {
       try {
@@ -85,7 +63,7 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
     setMessages([
       {
         role: 'model',
-        content: `👋 Hello Admin! I am **FundFlow AI**, your natural language database assistant powered by the latest **${selectedModel}** thinking model.\n\nI have complete, real-time access to your live factory database. You can ask me anything, such as:\n* *"Who has the highest advance right now?"*\n* *"Who hasn't been logging their spending recently?"*\n* *"Are there any discrepancies or flagged transactions?"*\n* *"What is the cash balance breakdown for all factories?"*`,
+        content: 'Ask any question about workers, advances, supervisor spending, balances, or logging discrepancies.',
         timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
       }
     ]);
@@ -100,10 +78,8 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
 
   // Auto-scroll to bottom of messages
   useEffect(() => {
-    if (!isMinimized) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [messages, loading, isMinimized]);
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, loading]);
 
   const handleSaveApiKey = (e: React.FormEvent) => {
     e.preventDefault();
@@ -116,29 +92,10 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
     setShowKeyModal(false);
   };
 
-  const handleModelChange = (model: string) => {
-    if (model === 'custom') {
-      setIsCustomModel(true);
-    } else {
-      setIsCustomModel(false);
-      setSelectedModel(model);
-      localStorage.setItem('fundflow_gemini_model', model);
-    }
-  };
-
-  const handleSaveCustomModel = () => {
-    const clean = customModelInput.trim();
-    if (clean) {
-      setSelectedModel(clean);
-      localStorage.setItem('fundflow_gemini_model', clean);
-      setIsCustomModel(false);
-    }
-  };
-
   const handleClearHistory = () => {
     const welcome: ChatMessage = {
       role: 'model',
-      content: `Chat history cleared. I'm ready for your next query on the live database!`,
+      content: 'Ask any question about workers, advances, supervisor spending, balances, or logging discrepancies.',
       timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
     };
     setMessages([welcome]);
@@ -155,7 +112,6 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
     const textToSend = (queryText || inputValue).trim();
     if (!textToSend || loading) return;
 
-    // Check if key is available
     if (!hasServerKey && !customApiKey.trim()) {
       setShowKeyModal(true);
       return;
@@ -177,7 +133,7 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
         textToSend,
         messages,
         customApiKey || undefined,
-        selectedModel
+        'gemini-3.8-flash'
       );
 
       if (response.success && response.answer) {
@@ -191,8 +147,8 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
         const errorMsg: ChatMessage = {
           role: 'model',
           content: response.error === 'MISSING_API_KEY'
-            ? '⚠️ **Gemini API Key Required**: Please click the key icon in the header to enter your Google Gemini API key.'
-            : `⚠️ **AI Query Error**: ${response.error || 'Failed to analyze database.'}`,
+            ? 'Gemini API Key Required: Click the key icon above to enter your Google Gemini API key.'
+            : `Error: ${response.error || 'Failed to query database.'}`,
           timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
         };
         setMessages([...newHistory, errorMsg]);
@@ -205,7 +161,7 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
         ...newHistory,
         {
           role: 'model',
-          content: `⚠️ **Unexpected Error**: ${err?.message || 'Failed to communicate with AI server.'}`,
+          content: `Error: ${err?.message || 'Failed to communicate with AI server.'}`,
           timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
         }
       ]);
@@ -215,13 +171,13 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
   };
 
   const quickQuestions = [
-    'Who has the most advance right now?',
+    'Who has the most advance?',
     "Who hasn't been logging their spending?",
     'Are there any discrepancies or flagged transactions?',
     'Current cash on hand across all factories',
   ];
 
-  // Helper to render basic markdown nicely (bold, lists, tables, headers)
+  // Helper to render markdown (bold, lists, tables, headers)
   const renderFormattedMarkdown = (content: string) => {
     const lines = content.split('\n');
     const elements: React.ReactNode[] = [];
@@ -233,7 +189,6 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
         line.split('|').map(cell => cell.trim()).filter((_, idx, arr) => idx > 0 && idx < arr.length - 1)
       );
 
-      // Skip separator row (e.g. |---|---|)
       const headerRow = rows[0] || [];
       const bodyRows = rows.slice(1).filter(r => !r.every(cell => cell.match(/^[-:]+$/)));
 
@@ -264,7 +219,6 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
     };
 
     lines.forEach((line, idx) => {
-      // Check for table line
       if (line.trim().startsWith('|') && line.trim().endsWith('|')) {
         tableBuffer.push(line.trim());
         return;
@@ -273,13 +227,11 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
         tableBuffer = [];
       }
 
-      // Headers (### or ##)
       if (line.startsWith('### ')) {
         elements.push(<h4 key={idx} className="font-bold text-slate-900 text-sm mt-3 mb-1">{line.replace('### ', '')}</h4>);
       } else if (line.startsWith('## ')) {
-        elements.push(<h3 key={idx} className="font-extrabold text-slate-900 text-base mt-4 mb-1.5 border-b border-slate-100 pb-1">{line.replace('## ', '')}</h3>);
+        elements.push(<h3 key={idx} className="font-extrabold text-slate-900 text-base mt-3 mb-1.5 border-b border-slate-100 pb-1">{line.replace('## ', '')}</h3>);
       } else if (line.startsWith('* ') || line.startsWith('- ')) {
-        // Bullet list item
         const text = line.substring(2);
         elements.push(
           <li key={idx} className="ml-4 list-disc text-xs leading-relaxed text-slate-800 my-0.5">
@@ -287,7 +239,6 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
           </li>
         );
       } else if (line.match(/^\d+\.\s/)) {
-        // Numbered list
         const text = line.replace(/^\d+\.\s/, '');
         elements.push(
           <li key={idx} className="ml-4 list-decimal text-xs leading-relaxed text-slate-800 my-0.5">
@@ -295,7 +246,7 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
           </li>
         );
       } else if (line.trim() === '') {
-        elements.push(<div key={idx} className="h-2" />);
+        elements.push(<div key={idx} className="h-1.5" />);
       } else {
         elements.push(
           <p key={idx} className="text-xs leading-relaxed text-slate-800 my-1">
@@ -316,330 +267,188 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
     return text
       .replace(/\*\*(.*?)\*\*/g, '<strong class="font-extrabold text-slate-950">$1</strong>')
       .replace(/\*(.*?)\*/g, '<em class="italic">$1</em>')
-      .replace(/`([^`]+)`/g, '<code class="bg-slate-100 text-indigo-700 px-1 py-0.5 rounded text-[11px] font-mono">$1</code>')
+      .replace(/`([^`]+)`/g, '<code class="bg-slate-100 text-slate-800 px-1 py-0.5 rounded text-[11px] font-mono">$1</code>')
       .replace(/(₹[\d,]+)/g, '<strong class="font-black text-slate-900">$1</strong>');
   };
 
   return (
     <>
-      {/* Floating launcher trigger pill in bottom right */}
-      <button
-        onClick={() => {
-          setIsMinimized(false);
-          chatContainerRef.current?.scrollIntoView({ behavior: 'smooth' });
-        }}
-        className="fixed bottom-5 right-5 z-40 flex items-center gap-2 rounded-full bg-slate-900 text-white px-4 py-2.5 shadow-2xl hover:bg-slate-800 transition-all duration-200 border border-slate-700 hover:scale-105 min-h-[44px]"
-        title="Open Database AI Assistant"
-      >
-        <Sparkles className="h-4 w-4 text-emerald-400 animate-pulse" />
-        <span className="text-xs font-bold tracking-tight">Ask Database AI</span>
-      </button>
-
       {/* Main Chat Section Container */}
       <div 
-        ref={chatContainerRef}
         id="admin-ai-chat-section"
-        className={`bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden transition-all duration-200 ${className}`}
+        className={`bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden ${className}`}
       >
-        {/* Header Bar */}
-        <div className="bg-slate-900 text-white px-5 py-3.5 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <div className="h-8 w-8 rounded-lg bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
-              <Sparkles className="h-4 w-4" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm font-bold tracking-tight text-white flex items-center gap-1.5">
-                  FundFlow AI Intelligence
-                </h3>
-                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 text-emerald-300 px-2 py-0.5 text-[10px] font-semibold border border-emerald-500/30">
-                  <Database className="h-2.5 w-2.5" />
-                  Live DB
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-400">
-                Ask any natural language question about advances, spending, balances, & discrepancies
-              </p>
-            </div>
+        {/* Simple Header */}
+        <div className="bg-slate-900 text-white px-5 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <MessageSquare className="h-4 w-4 text-slate-300" />
+            <h3 className="text-sm font-bold text-white">Database Questions</h3>
           </div>
 
-          <div className="flex items-center gap-2">
-            {/* Model Selector */}
-            <div className="relative">
-              <select
-                value={isCustomModel ? 'custom' : selectedModel}
-                onChange={(e) => handleModelChange(e.target.value)}
-                className="bg-slate-800 border border-slate-700 text-emerald-300 text-xs rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-emerald-400 min-h-[34px] font-mono cursor-pointer font-semibold"
-                title="Select Gemini Model"
-              >
-                <option value="gemini-3.8-flash">⚡ gemini-3.8-flash (Latest Thinking)</option>
-                <option value="gemini-3.8-pro">🧠 gemini-3.8-pro (Deep Reasoning)</option>
-                <option value="gemini-3.5-flash">🚀 gemini-3.5-flash</option>
-                <option value="custom">⚙️ Custom Model...</option>
-              </select>
-            </div>
-
-            {/* API Key Config Button */}
+          <div className="flex items-center gap-1">
+            {/* Key Setup Button */}
             <button
               onClick={() => setShowKeyModal(true)}
-              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-semibold border min-h-[34px] transition-colors ${
-                hasServerKey || customApiKey
-                  ? 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
-                  : 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30 animate-pulse'
-              }`}
-              title="Configure Gemini API Key"
+              className="p-1.5 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              title="API Key Settings"
             >
-              <Key className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">
-                {hasServerKey ? 'Env Key' : customApiKey ? 'Key Active' : 'Set API Key'}
-              </span>
+              <Key className="h-4 w-4" />
             </button>
 
             {/* Clear History Button */}
             <button
               onClick={handleClearHistory}
-              className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-              title="Clear Chat History"
+              className="p-1.5 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              title="Clear Chat"
             >
               <Trash2 className="h-4 w-4" />
-            </button>
-
-            {/* Minimize / Expand Toggle */}
-            <button
-              onClick={() => setIsMinimized(!isMinimized)}
-              className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-              title={isMinimized ? 'Expand Chat' : 'Minimize Chat'}
-            >
-              {isMinimized ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
             </button>
           </div>
         </div>
 
-        {/* Custom Model Input Modal / Bar */}
-        {isCustomModel && (
-          <div className="bg-slate-800 px-5 py-2.5 border-b border-slate-700 flex items-center justify-between gap-3 text-xs">
-            <div className="flex items-center gap-2 flex-1">
-              <span className="text-slate-300 font-semibold">Custom Model ID:</span>
-              <input
-                type="text"
-                value={customModelInput}
-                onChange={(e) => setCustomModelInput(e.target.value)}
-                placeholder="e.g. gemini-3.5-flash or experimental endpoint"
-                className="bg-slate-900 border border-slate-700 rounded px-2.5 py-1 text-white text-xs flex-1 max-w-sm font-mono"
-              />
+        {/* Quick Prompts On Top */}
+        <div className="bg-slate-50 border-b border-slate-200 px-4 py-2.5 overflow-x-auto">
+          <div className="flex items-center gap-2">
+            {quickQuestions.map((q, idx) => (
               <button
+                key={idx}
                 type="button"
-                onClick={handleSaveCustomModel}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 rounded font-bold"
+                disabled={loading}
+                onClick={() => handleSend(q)}
+                className="whitespace-nowrap px-3 py-1.5 rounded-full bg-white border border-slate-200 text-slate-700 text-xs font-medium hover:bg-slate-100 hover:text-slate-900 hover:border-slate-300 transition-colors disabled:opacity-50 shrink-0 shadow-sm"
               >
-                Apply
+                {q}
               </button>
-            </div>
-            <button
-              type="button"
-              onClick={() => { setIsCustomModel(false); setSelectedModel('gemini-3.8-flash'); }}
-              className="text-slate-400 hover:text-white"
-            >
-              Cancel
-            </button>
+            ))}
           </div>
-        )}
+        </div>
 
-        {!isMinimized && (
-          <>
-            {/* Quick Prompt Chips */}
-            <div className="bg-slate-50 border-b border-slate-100 px-5 py-2.5 overflow-x-auto">
-              <div className="flex items-center gap-2 text-xs">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 shrink-0">
-                  Quick Prompts:
-                </span>
-                {quickQuestions.map((q, idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    disabled={loading}
-                    onClick={() => handleSend(q)}
-                    className="whitespace-nowrap px-2.5 py-1 rounded-full bg-white border border-slate-200 text-slate-700 text-[11px] font-medium hover:bg-slate-100 hover:border-slate-300 hover:text-slate-900 transition-colors disabled:opacity-50 shrink-0"
-                  >
-                    {q}
-                  </button>
-                ))}
-              </div>
-            </div>
+        {/* Chat Messages Body */}
+        <div className="p-4 max-h-[420px] min-h-[140px] overflow-y-auto space-y-3 bg-slate-50/50">
+          {messages.map((msg, index) => {
+            const isUser = msg.role === 'user';
 
-            {/* Chat Messages Body */}
-            <div className="p-5 max-h-[460px] overflow-y-auto space-y-4 bg-slate-50/40">
-              {messages.map((msg, index) => {
-                const isUser = msg.role === 'user';
-
-                return (
-                  <div
-                    key={index}
-                    className={`flex items-start gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}
-                  >
-                    {/* Avatar */}
-                    <div className={`h-8 w-8 rounded-full flex items-center justify-center shrink-0 border ${
-                      isUser
-                        ? 'bg-slate-900 text-white border-slate-800'
-                        : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                    }`}>
-                      {isUser ? (
-                        <span className="text-xs font-bold">You</span>
-                      ) : (
-                        <Bot className="h-4 w-4" />
-                      )}
-                    </div>
-
-                    {/* Bubble */}
-                    <div className={`relative max-w-[85%] rounded-2xl px-4 py-3 shadow-sm ${
-                      isUser
-                        ? 'bg-slate-900 text-white rounded-tr-none'
-                        : 'bg-white border border-slate-200 text-slate-900 rounded-tl-none'
-                    }`}>
-                      {/* Header in AI response */}
-                      {!isUser && (
-                        <div className="flex items-center justify-between gap-3 border-b border-slate-100 pb-1.5 mb-2">
-                          <span className="text-[10px] font-bold text-slate-400 flex items-center gap-1 font-mono">
-                            <Sparkles className="h-2.5 w-2.5 text-emerald-500" />
-                            {selectedModel}
-                          </span>
-                          <button
-                            onClick={() => handleCopy(msg.content, index)}
-                            className="text-slate-400 hover:text-slate-600 transition-colors"
-                            title="Copy response"
-                          >
-                            {copiedIndex === index ? (
-                              <Check className="h-3.5 w-3.5 text-emerald-600" />
-                            ) : (
-                              <Copy className="h-3.5 w-3.5" />
-                            )}
-                          </button>
-                        </div>
-                      )}
-
-                      {/* Content */}
-                      <div className="prose prose-xs max-w-none">
-                        {isUser ? (
-                          <p className="text-xs leading-relaxed whitespace-pre-wrap font-medium">{msg.content}</p>
-                        ) : (
-                          renderFormattedMarkdown(msg.content)
-                        )}
-                      </div>
-
-                      {/* Timestamp */}
-                      {msg.timestamp && (
-                        <div className={`text-[9px] mt-1.5 text-right ${
-                          isUser ? 'text-slate-400' : 'text-slate-400'
-                        }`}>
-                          {msg.timestamp}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-
-              {/* Thinking / Loading indicator */}
-              {loading && (
-                <div className="flex items-start gap-3">
-                  <div className="h-8 w-8 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center justify-center shrink-0">
-                    <Bot className="h-4 w-4 animate-spin" />
-                  </div>
-                  <div className="bg-white border border-slate-200 rounded-2xl rounded-tl-none px-4 py-3 shadow-sm text-xs text-slate-600 space-y-2">
-                    <div className="flex items-center gap-2">
-                      <RefreshCw className="h-3.5 w-3.5 animate-spin text-emerald-600" />
-                      <span className="font-semibold text-slate-800">
-                        Querying live database snapshot with {selectedModel}...
-                      </span>
-                    </div>
-                    <div className="flex gap-1 pt-1">
-                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-bounce" style={{ animationDelay: '300ms' }} />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div ref={messagesEndRef} />
-            </div>
-
-            {/* Input Bar */}
-            <div className="p-4 bg-white border-t border-slate-200">
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  handleSend();
-                }}
-                className="flex items-center gap-2"
+            return (
+              <div
+                key={index}
+                className={`flex items-start gap-2.5 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}
               >
-                <div className="relative flex-1">
-                  <input
-                    type="text"
-                    value={inputValue}
-                    onChange={(e) => setInputValue(e.target.value)}
-                    placeholder="Ask about workers, advances, spending, balances, discrepancies..."
-                    disabled={loading}
-                    className="w-full rounded-lg border border-slate-300 pl-4 pr-10 py-2.5 text-xs text-slate-950 focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500 min-h-[44px] shadow-sm bg-white"
-                  />
-                  {inputValue && (
-                    <button
-                      type="button"
-                      onClick={() => setInputValue('')}
-                      className="absolute right-3 top-3 text-slate-400 hover:text-slate-600"
-                    >
-                      ×
-                    </button>
-                  )}
+                {/* Avatar */}
+                <div className={`h-7 w-7 rounded-full flex items-center justify-center shrink-0 text-xs font-bold border ${
+                  isUser
+                    ? 'bg-slate-900 text-white border-slate-800'
+                    : 'bg-white text-slate-700 border-slate-200'
+                }`}>
+                  {isUser ? 'You' : <Bot className="h-3.5 w-3.5" />}
                 </div>
 
-                <button
-                  type="submit"
-                  disabled={loading || !inputValue.trim()}
-                  className="flex items-center justify-center rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-semibold text-white shadow hover:bg-slate-800 disabled:opacity-50 min-h-[44px] min-w-[44px] transition-colors"
-                  title="Send Question"
-                >
-                  <Send className="h-4 w-4" />
-                </button>
-              </form>
-
-              <div className="flex justify-between items-center text-[10px] text-slate-400 mt-2 px-1">
-                <span>
-                  Active Model: <strong className="text-slate-600 font-mono">{selectedModel}</strong>
-                </span>
-                <span>
-                  {hasServerKey ? (
-                    <span className="text-emerald-600 font-semibold">● Server API Key Active</span>
-                  ) : customApiKey ? (
-                    <span className="text-indigo-600 font-semibold">● Custom API Key Active</span>
-                  ) : (
-                    <span className="text-amber-600 font-semibold">⚠️ No API Key Configured</span>
+                {/* Bubble */}
+                <div className={`relative max-w-[85%] rounded-lg px-4 py-2.5 shadow-sm ${
+                  isUser
+                    ? 'bg-slate-900 text-white rounded-tr-none'
+                    : 'bg-white border border-slate-200 text-slate-900 rounded-tl-none'
+                }`}>
+                  {/* Copy button on response */}
+                  {!isUser && (
+                    <div className="flex justify-end mb-1">
+                      <button
+                        onClick={() => handleCopy(msg.content, index)}
+                        className="text-slate-400 hover:text-slate-600 transition-colors p-0.5"
+                        title="Copy"
+                      >
+                        {copiedIndex === index ? (
+                          <Check className="h-3.5 w-3.5 text-emerald-600" />
+                        ) : (
+                          <Copy className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                    </div>
                   )}
-                </span>
+
+                  {/* Content */}
+                  <div className="prose prose-xs max-w-none">
+                    {isUser ? (
+                      <p className="text-xs leading-relaxed whitespace-pre-wrap font-medium">{msg.content}</p>
+                    ) : (
+                      renderFormattedMarkdown(msg.content)
+                    )}
+                  </div>
+
+                  {/* Timestamp */}
+                  {msg.timestamp && (
+                    <div className="text-[9px] mt-1 text-right text-slate-400">
+                      {msg.timestamp}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Thinking / Loading indicator */}
+          {loading && (
+            <div className="flex items-start gap-2.5">
+              <div className="h-7 w-7 rounded-full bg-white text-slate-700 border border-slate-200 flex items-center justify-center shrink-0">
+                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+              </div>
+              <div className="bg-white border border-slate-200 rounded-lg rounded-tl-none px-4 py-2.5 shadow-sm text-xs text-slate-600 flex items-center gap-2">
+                <span className="font-medium">Checking database...</span>
               </div>
             </div>
-          </>
-        )}
+          )}
+
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Input Section */}
+        <div className="p-3 bg-white border-t border-slate-200">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleSend();
+            }}
+            className="flex items-center gap-2"
+          >
+            <input
+              type="text"
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              placeholder="Ask anything about workers, spending, balances, or transactions..."
+              disabled={loading}
+              className="flex-1 rounded border border-slate-300 px-3.5 py-2 text-xs text-slate-950 focus:border-slate-500 focus:outline-none min-h-[42px] bg-white shadow-sm"
+            />
+
+            <button
+              type="submit"
+              disabled={loading || !inputValue.trim()}
+              className="flex items-center justify-center rounded bg-slate-900 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-slate-800 disabled:opacity-50 min-h-[42px] min-w-[42px] transition-colors"
+              title="Send"
+            >
+              <Send className="h-4 w-4" />
+            </button>
+          </form>
+        </div>
       </div>
 
       {/* API Key Modal */}
       {showKeyModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-white border border-slate-200 rounded-xl shadow-2xl p-6 max-w-md w-full space-y-4">
-            <div className="flex items-center gap-2.5 border-b border-slate-100 pb-3">
-              <div className="h-8 w-8 rounded-lg bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-700">
-                <Key className="h-4 w-4" />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-slate-900">Gemini API Key Setup</h3>
-                <p className="text-xs text-slate-500">Configure your Google AI Studio API key</p>
-              </div>
+          <div className="bg-white border border-slate-200 rounded-lg shadow-2xl p-5 max-w-md w-full space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+              <h3 className="text-sm font-bold text-slate-900">Gemini API Key</h3>
+              <button
+                type="button"
+                onClick={() => setShowKeyModal(false)}
+                className="text-slate-400 hover:text-slate-600 text-sm"
+              >
+                ✕
+              </button>
             </div>
 
-            <form onSubmit={handleSaveApiKey} className="space-y-4">
+            <form onSubmit={handleSaveApiKey} className="space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                  Google Gemini API Key
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  API Key
                 </label>
                 <div className="relative">
                   <input
@@ -647,7 +456,7 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
                     value={customApiKey}
                     onChange={(e) => setCustomApiKey(e.target.value)}
                     placeholder="AIzaSy..."
-                    className="w-full rounded border border-slate-300 pl-3 pr-10 py-2 text-xs font-mono text-slate-950 focus:border-slate-500 focus:outline-none min-h-[42px]"
+                    className="w-full rounded border border-slate-300 pl-3 pr-10 py-2 text-xs font-mono text-slate-950 focus:border-slate-500 focus:outline-none min-h-[40px]"
                   />
                   <button
                     type="button"
@@ -657,39 +466,21 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
                     {showKeySecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
-                <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
-                  You can get a free API key at{' '}
-                  <a 
-                    href="https://aistudio.google.com/app/apikey" 
-                    target="_blank" 
-                    rel="noreferrer" 
-                    className="text-indigo-600 underline font-semibold"
-                  >
-                    Google AI Studio
-                  </a>.
-                  Your key is saved locally in your browser session and sent directly to Google Gemini.
-                </p>
               </div>
-
-              {hasServerKey && (
-                <div className="rounded bg-emerald-50 p-2.5 border border-emerald-200 text-xs text-emerald-800">
-                  ✓ A default <code>GEMINI_API_KEY</code> is already configured on the server. You can leave this blank to use the server key or enter one to override.
-                </div>
-              )}
 
               <div className="flex gap-2 pt-2">
                 <button
                   type="button"
                   onClick={() => setShowKeyModal(false)}
-                  className="flex-1 rounded-md border border-slate-300 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 min-h-[42px]"
+                  className="flex-1 rounded border border-slate-300 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 min-h-[40px]"
                 >
-                  Close
+                  Cancel
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 rounded-md bg-slate-900 py-2.5 text-xs font-bold text-white hover:bg-slate-800 min-h-[42px]"
+                  className="flex-1 rounded bg-slate-900 py-2 text-xs font-bold text-white hover:bg-slate-800 min-h-[40px]"
                 >
-                  Save Key
+                  Save
                 </button>
               </div>
             </form>
