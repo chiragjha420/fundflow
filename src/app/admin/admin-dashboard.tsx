@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { createOfficeDisbursement } from '@/app/actions/admin';
+import { AdminAIChat } from './admin-ai-chat';
 import { formatINR } from '@/lib/utils';
 import { 
   Building2, 
@@ -503,6 +504,9 @@ export function AdminDashboard({
           <span>Export Feed to CSV</span>
         </button>
       </div>
+
+      {/* AI Database Intelligence Assistant */}
+      <AdminAIChat />
 
       {/* Grid: Disbursement Form & Cash positions */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
