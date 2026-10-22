@@ -39,7 +39,7 @@ export async function askDatabaseAI(
   userQuery: string,
   history: ChatMessage[] = [],
   apiKeyOverride?: string,
-  modelRequested: string = 'gemini-3.8-flash',
+  modelRequested: string = 'gemini-3.6-flash',
   openRouterKeyOverride?: string
 ): Promise<ChatResponse> {
   try {
@@ -305,13 +305,14 @@ ${JSON.stringify(expenseList.slice(0, 25).map(e => ({
 - Use GitHub markdown: bold key metrics, bulleted lists, and clean tables where comparison is helpful.
 - If no discrepancies or records exist for a specific filter, clearly state that everything is clean and balanced.`;
 
-    // 5. Call the Google Gemini API with the Requested Model (Latest Gemini 3.8 / 3.5 Generation)
+    // 5. Call the Google Gemini API with the Requested Model (Latest Fast Gemini 3.6 / 3.5 Generation)
     const candidateModels = [
       modelRequested,
-      'gemini-3.8-flash',
-      'gemini-3.8-pro',
+      'gemini-3.6-flash',
       'gemini-3.5-flash',
-      'gemini-3.5-pro'
+      'gemini-3.5-flash-lite',
+      'gemini-3-flash-preview',
+      'gemini-3.8-flash'
     ];
 
     // Remove duplicates while preserving order
@@ -359,6 +360,7 @@ ${JSON.stringify(expenseList.slice(0, 25).map(e => ({
                   maxOutputTokens: 4096,
                 }
               }),
+              signal: AbortSignal.timeout(6000),
             }
           );
 
@@ -372,15 +374,15 @@ ${JSON.stringify(expenseList.slice(0, 25).map(e => ({
             const apiErrorMessage = data?.error?.message || `HTTP ${response.status}: ${response.statusText}`;
             lastError = `[Gemini ${model}]: ${apiErrorMessage}`;
             console.warn(`Gemini API call failed for model ${model}:`, apiErrorMessage);
-            if (response.status === 404 || apiErrorMessage.toLowerCase().includes('not found')) {
-              continue;
-            } else {
-              break;
-            }
+            // On any model error (404, 503, etc.), continue to next candidate
+            continue;
           }
         } catch (err: any) {
-          lastError = err?.message || 'Network error calling Gemini API';
-          console.error(`Fetch exception for ${model}:`, err);
+          lastError = err?.name === 'TimeoutError' || err?.name === 'AbortError'
+            ? `Gemini ${model} timed out after 6s`
+            : (err?.message || 'Network error calling Gemini API');
+          console.warn(`Gemini API exception for ${model}:`, lastError);
+          continue;
         }
       }
     } else {
@@ -490,6 +492,7 @@ async function callOpenRouterFallback(
           messages,
           temperature: 0.2,
         }),
+        signal: AbortSignal.timeout(7000),
       });
 
       const data = await res.json();

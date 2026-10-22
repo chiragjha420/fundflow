@@ -144,13 +144,20 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
     setLoading(true);
 
     try {
-      const response = await askDatabaseAI(
-        textToSend,
-        messages,
-        customApiKey || undefined,
-        'gemini-3.8-flash',
-        customOpenRouterKey || undefined
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Request timed out. Please try again.')), 25000)
       );
+
+      const response = await Promise.race([
+        askDatabaseAI(
+          textToSend,
+          messages,
+          customApiKey || undefined,
+          'gemini-3.6-flash',
+          customOpenRouterKey || undefined
+        ),
+        timeoutPromise
+      ]);
 
       if (response.success && response.answer) {
         const aiMsg: ChatMessage = {
