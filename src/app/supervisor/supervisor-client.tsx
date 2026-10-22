@@ -25,7 +25,8 @@ import {
   User, 
   AlertCircle,
   RefreshCw,
-  HandCoins
+  HandCoins,
+  MessageSquare
 } from 'lucide-react';
 import { sendWorkerDisbursementSms } from '@/lib/sms';
 import { createCashRequest } from '@/app/actions/cash-requests';
@@ -95,6 +96,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
   // Quick Amount Preset state for Disbursal
   const [disburseAmount, setDisburseAmount] = useState<string>('');
+  const [lastDisburseSms, setLastDisburseSms] = useState<{ workerName: string; smsUri: string } | null>(null);
 
   // Cash Replenishment Request states
   const [showCashRequestModal, setShowCashRequestModal] = useState<boolean>(false);
@@ -365,6 +367,11 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
             }).then(smsRes => {
               if (smsRes.sentViaGateway) {
                 showToast('success', `Free automated SMS confirmation sent to ${targetWorker.worker_name}!`);
+              } else if (smsRes.smsUri) {
+                setLastDisburseSms({
+                  workerName: targetWorker.worker_name,
+                  smsUri: smsRes.smsUri,
+                });
               }
             });
           }
@@ -760,7 +767,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         {/* Tabs */}
         <div className="flex border-b border-slate-200 bg-slate-50 text-xs font-bold uppercase tracking-wider text-slate-600">
           <button
-            onClick={() => { setActiveTab('disburse'); setActionMessage(null); }}
+            onClick={() => { setActiveTab('disburse'); setActionMessage(null); setLastDisburseSms(null); }}
             className={`flex-1 py-3 text-center border-b-2 min-h-[44px] flex items-center justify-center gap-1.5 ${
               activeTab === 'disburse'
                 ? 'border-slate-900 text-slate-900 bg-white'
@@ -1028,6 +1035,25 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                 actionMessage.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-800'
               }`}>
                 {actionMessage.text}
+              </div>
+            )}
+
+            {/* Free SMS 1-Tap Mobile Dispatch Pill */}
+            {lastDisburseSms && activeTab === 'disburse' && (
+              <div className="rounded-lg p-3 bg-emerald-50 border border-emerald-300 flex items-center justify-between gap-2 shadow-xs animate-fadeIn">
+                <div className="flex items-center gap-2">
+                  <MessageSquare className="h-4 w-4 text-emerald-600 shrink-0" />
+                  <div>
+                    <p className="text-xs font-bold text-emerald-950">Send Worker SMS Confirmation</p>
+                    <p className="text-[11px] text-emerald-700">Pre-filled text receipt for {lastDisburseSms.workerName}</p>
+                  </div>
+                </div>
+                <a
+                  href={lastDisburseSms.smsUri}
+                  className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shrink-0 shadow-sm transition-colors flex items-center gap-1"
+                >
+                  <span>Dispatch SMS</span>
+                </a>
               </div>
             )}
 
