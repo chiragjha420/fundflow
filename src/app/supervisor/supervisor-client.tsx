@@ -621,11 +621,17 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           quality: 0.75,
         });
         setPhotoFile(compressed);
-        setPhotoPreview(URL.createObjectURL(compressed));
+        setPhotoPreview((prev) => {
+          if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+          return URL.createObjectURL(compressed);
+        });
       } catch (err) {
         console.warn('Image compression error, using original:', err);
         setPhotoFile(originalFile);
-        setPhotoPreview(URL.createObjectURL(originalFile));
+        setPhotoPreview((prev) => {
+          if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+          return URL.createObjectURL(originalFile);
+        });
       }
     }
   };
@@ -1228,7 +1234,6 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                       <input
                         type="file"
                         accept="image/*"
-                        capture="environment"
                         onChange={handlePhotoChange}
                         className="hidden"
                       />
@@ -1421,7 +1426,6 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                     <input
                       type="file"
                       accept="image/*"
-                      capture="user"
                       onChange={handlePhotoChange}
                       disabled={actionLoading}
                       className="hidden"
