@@ -30,13 +30,15 @@ import {
   HandCoins,
   MessageSquare,
   Smartphone,
-  Phone
+  Phone,
+  Upload
 } from 'lucide-react';
 import { sendWorkerDisbursementSms } from '@/lib/sms';
 import { createCashRequest } from '@/app/actions/cash-requests';
 import { playAlertSound } from '@/lib/notifications';
 import { NotificationBanner } from '@/components/notification-banner';
 import { compressImage } from '@/lib/image-compressor';
+import { CameraCaptureModal } from '@/components/camera-capture-modal';
 
 interface Worker {
   worker_id: string;
@@ -92,6 +94,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const [showAddWorker, setShowAddWorker] = useState(false);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [showCameraModal, setShowCameraModal] = useState<boolean>(false);
 
   // Form loading states
   const [actionLoading, setActionLoading] = useState(false);
@@ -571,25 +574,48 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
       // Image upload
       let photoUrl: string | null = null;
-      if (photoFile && navigator.onLine) {
-        const fileExt = photoFile.name.split('.').pop();
-        const fileName = `${Date.now()}.${fileExt}`;
-        const { data, error } = await supabase.storage
-          .from('worker-photos')
-          .upload(`workers/${fileName}`, photoFile);
+      if (photoFile) {
+        if (navigator.onLine) {
+          try {
+            const fileExt = photoFile.name.split('.').pop() || 'jpg';
+            const fileName = `${Date.now()}.${fileExt}`;
+            const { data, error } = await supabase.storage
+              .from('worker-photos')
+              .upload(`workers/${fileName}`, photoFile, { upsert: true });
 
-        if (!error && data) {
-          const { data: { publicUrl } } = supabase.storage
-            .from('worker-photos')
-            .getPublicUrl(data.path);
-          photoUrl = publicUrl;
+            if (!error && data) {
+              const { data: { publicUrl } } = supabase.storage
+                .from('worker-photos')
+                .getPublicUrl(data.path);
+              photoUrl = publicUrl;
+            } else if (error) {
+              console.warn('Supabase storage upload error, falling back to base64:', error);
+              const reader = new FileReader();
+              photoUrl = await new Promise((resolve) => {
+                reader.onloadend = () => resolve(reader.result as string);
+                reader.readAsDataURL(photoFile);
+              });
+            }
+          } catch (storageErr) {
+            console.warn('Storage upload exception, falling back to base64:', storageErr);
+            try {
+              const reader = new FileReader();
+              photoUrl = await new Promise((resolve) => {
+                reader.onloadend = () => resolve(reader.result as string);
+                reader.readAsDataURL(photoFile);
+              });
+            } catch {}
+          }
+        } else {
+          // Offline fallback
+          try {
+            const reader = new FileReader();
+            photoUrl = await new Promise((resolve) => {
+              reader.onloadend = () => resolve(reader.result as string);
+              reader.readAsDataURL(photoFile);
+            });
+          } catch {}
         }
-      } else if (photoFile && !navigator.onLine) {
-        const reader = new FileReader();
-        photoUrl = await new Promise((resolve) => {
-          reader.onloadend = () => resolve(reader.result as string);
-          reader.readAsDataURL(photoFile);
-        });
       }
 
       const res = await createWorkerAction(factoryId!, supervisorId!, name, phone, photoUrl, openingAdvance);
@@ -1416,26 +1442,56 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
                   Worker Photo (Optional)
                 </label>
-                <div className="mt-1 flex items-center gap-4">
-                  <label className="flex items-center justify-center border border-dashed border-slate-300 rounded-md p-3 bg-white hover:bg-slate-50 cursor-pointer min-h-[44px] flex-1">
-                    <Camera className="h-4 w-4 text-slate-400 mr-2" />
-                    <span className="text-xs text-slate-600 font-semibold">Take Photo / Upload</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handlePhotoChange}
-                      disabled={actionLoading}
-                      className="hidden"
-                    />
-                  </label>
+                <div className="flex items-center gap-3">
                   {photoPreview && (
-                    <div className="relative h-12 w-12 border border-slate-200 rounded overflow-hidden">
+                    <div className="relative h-14 w-14 rounded-full border-2 border-emerald-500 overflow-hidden shrink-0 shadow-sm bg-slate-100">
                       <img src={photoPreview} alt="Worker preview" className="object-cover h-full w-full" />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (photoPreview.startsWith('blob:')) URL.revokeObjectURL(photoPreview);
+                          setPhotoFile(null);
+                          setPhotoPreview(null);
+                        }}
+                        className="absolute top-0 right-0 bg-slate-900/80 text-white rounded-full p-1 hover:bg-red-600 transition-colors"
+                        title="Remove photo"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
                     </div>
                   )}
+
+                  <div className="flex-1 flex items-center gap-2">
+                    {/* 1-Tap In-App Camera Viewfinder */}
+                    <button
+                      type="button"
+                      onClick={() => setShowCameraModal(true)}
+                      disabled={actionLoading}
+                      className="flex-1 flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-800 text-xs font-semibold py-2.5 px-3 min-h-[44px] shadow-sm transition-all"
+                    >
+                      <Camera className="h-4 w-4 text-emerald-600" />
+                      <span>{photoPreview ? 'Retake Photo' : 'Take Photo'}</span>
+                    </button>
+
+                    {/* Secondary Gallery Upload */}
+                    <label
+                      className="flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-slate-300 bg-white hover:bg-slate-50 text-slate-600 text-xs font-medium py-2.5 px-3 min-h-[44px] cursor-pointer shadow-sm transition-all"
+                      title="Upload from gallery"
+                    >
+                      <Upload className="h-3.5 w-3.5 text-slate-400" />
+                      <span>Gallery</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handlePhotoChange}
+                        disabled={actionLoading}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
                 </div>
               </div>
 
@@ -1522,6 +1578,21 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           </ul>
         )}
       </div>
+
+      {/* 1-Tap In-App Camera Viewfinder */}
+      <CameraCaptureModal
+        isOpen={showCameraModal}
+        onClose={() => setShowCameraModal(false)}
+        onCapture={(file, previewUrl) => {
+          setPhotoFile(file);
+          setPhotoPreview((prev) => {
+            if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+            return previewUrl;
+          });
+        }}
+        title="Take Worker Photo"
+        defaultFacingMode="environment"
+      />
     </div>
   );
 }
