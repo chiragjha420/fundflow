@@ -92,7 +92,6 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const [showAddWorker, setShowAddWorker] = useState(false);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
-  const [compressingPhoto, setCompressingPhoto] = useState(false);
 
   // Form loading states
   const [actionLoading, setActionLoading] = useState(false);
@@ -615,7 +614,6 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const handlePhotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const originalFile = e.target.files[0];
-      setCompressingPhoto(true);
       try {
         const compressed = await compressImage(originalFile, {
           maxWidth: 480,
@@ -628,8 +626,6 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         console.warn('Image compression error, using original:', err);
         setPhotoFile(originalFile);
         setPhotoPreview(URL.createObjectURL(originalFile));
-      } finally {
-        setCompressingPhoto(false);
       }
     }
   };
@@ -1421,28 +1417,19 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                 <div className="mt-1 flex items-center gap-4">
                   <label className="flex items-center justify-center border border-dashed border-slate-300 rounded-md p-3 bg-white hover:bg-slate-50 cursor-pointer min-h-[44px] flex-1">
                     <Camera className="h-4 w-4 text-slate-400 mr-2" />
-                    <span className="text-xs text-slate-600 font-semibold">
-                      {compressingPhoto ? 'Compressing Photo...' : 'Take Photo / Upload'}
-                    </span>
+                    <span className="text-xs text-slate-600 font-semibold">Take Photo / Upload</span>
                     <input
                       type="file"
                       accept="image/*"
                       capture="user"
                       onChange={handlePhotoChange}
-                      disabled={compressingPhoto || actionLoading}
+                      disabled={actionLoading}
                       className="hidden"
                     />
                   </label>
                   {photoPreview && (
-                    <div className="flex items-center gap-2">
-                      <div className="relative h-12 w-12 border border-slate-200 rounded overflow-hidden">
-                        <img src={photoPreview} alt="Worker preview" className="object-cover h-full w-full" />
-                      </div>
-                      {photoFile && (
-                        <span className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded font-bold">
-                          {(photoFile.size / 1024).toFixed(0)} KB (Compressed)
-                        </span>
-                      )}
+                    <div className="relative h-12 w-12 border border-slate-200 rounded overflow-hidden">
+                      <img src={photoPreview} alt="Worker preview" className="object-cover h-full w-full" />
                     </div>
                   )}
                 </div>
