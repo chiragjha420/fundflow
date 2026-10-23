@@ -68,7 +68,7 @@ export async function askDatabaseAI(
     if (!geminiApiKey && !openRouterApiKey) {
       return {
         success: false,
-        error: 'MISSING_API_KEY',
+        error: 'AI service is not configured on the server. Please ensure GEMINI_API_KEY is present in environment variables.',
       };
     }
 
