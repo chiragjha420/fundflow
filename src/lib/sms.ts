@@ -25,10 +25,54 @@ export interface WorkerSmsPayload {
   note?: string;
 }
 
+/**
+ * Dispatches an SMS via TextBee / Android SIM Gateway REST endpoint.
+ */
+async function postToGateway(
+  url: string,
+  apiKey: string,
+  deviceId: string | undefined,
+  phone: string,
+  message: string
+): Promise<{ ok: boolean; status?: number; error?: string }> {
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'x-api-key': apiKey,
+      },
+      body: JSON.stringify({
+        // TextBee standard payload
+        recipients: [phone],
+        message,
+        ...(deviceId ? { deviceId } : {}),
+        // Generic gateway compatibility fields
+        to: phone,
+        phone,
+        recipient: phone,
+        text: message,
+      }),
+      signal: AbortSignal.timeout(6000),
+    });
+
+    if (res.ok) {
+      return { ok: true, status: res.status };
+    }
+
+    const errText = await res.text().catch(() => '');
+    return { ok: false, status: res.status, error: errText };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Network error' };
+  }
+}
+
 export async function sendWorkerDisbursementSms(payload: WorkerSmsPayload): Promise<{
   success: boolean;
   messageText: string;
   sentViaGateway?: boolean;
+  usedFallback?: boolean;
   smsUri?: string;
   error?: string;
 }> {
@@ -55,48 +99,60 @@ export async function sendWorkerDisbursementSms(payload: WorkerSmsPayload): Prom
     const senderIdentifier = payload.factoryName || payload.supervisorName || 'JBB FundFlow';
     const messageText = `Received ₹${payload.amount.toLocaleString('en-IN')} on ${today} from ${senderIdentifier}.`;
 
-    // 1. Check if Free Android SIM Gateway is configured
+    // 1. Check if Free Android SIM Gateway is configured (Primary & Fallback)
     const gatewayUrl = process.env.SMS_GATEWAY_URL?.trim();
-    const gatewayApiKey = process.env.SMS_GATEWAY_API_KEY?.trim();
-    const gatewayDeviceId = process.env.SMS_GATEWAY_DEVICE_ID?.trim();
+    const primaryApiKey = process.env.SMS_GATEWAY_API_KEY?.trim();
+    const primaryDeviceId = process.env.SMS_GATEWAY_DEVICE_ID?.trim();
 
-    if (gatewayUrl) {
-      try {
-        const response = await fetch(gatewayUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(gatewayApiKey ? {
-              'Authorization': `Bearer ${gatewayApiKey}`,
-              'x-api-key': gatewayApiKey,
-            } : {}),
-          },
-          body: JSON.stringify({
-            // TextBee format
-            recipients: [formattedPhone],
-            message: messageText,
-            ...(gatewayDeviceId ? { deviceId: gatewayDeviceId } : {}),
-            // Generic gateway compatibility fields
-            to: formattedPhone,
-            phone: formattedPhone,
-            recipient: formattedPhone,
-            text: messageText,
-          }),
-          signal: AbortSignal.timeout(6000),
-        });
+    const fallbackApiKey = process.env.SMS_GATEWAY_FALLBACK_API_KEY?.trim();
+    const fallbackDeviceId = process.env.SMS_GATEWAY_FALLBACK_DEVICE_ID?.trim();
 
-        if (response.ok) {
+    if (gatewayUrl && primaryApiKey) {
+      // Attempt 1: Primary Gateway Key
+      const primaryRes = await postToGateway(
+        gatewayUrl,
+        primaryApiKey,
+        primaryDeviceId,
+        formattedPhone,
+        messageText
+      );
+
+      if (primaryRes.ok) {
+        return {
+          success: true,
+          messageText,
+          sentViaGateway: true,
+        };
+      }
+
+      console.warn(
+        `Primary SMS Gateway failed (Status: ${primaryRes.status || 'Unknown'}, Details: ${primaryRes.error}).`
+      );
+
+      // Attempt 2: Fallback Gateway Key (Used if Primary reaches 300 SMS/mo limit, 429 quota, or error)
+      if (fallbackApiKey) {
+        console.info('Attempting dispatch with Fallback SMS Gateway API key...');
+        const fallbackRes = await postToGateway(
+          gatewayUrl,
+          fallbackApiKey,
+          fallbackDeviceId,
+          formattedPhone,
+          messageText
+        );
+
+        if (fallbackRes.ok) {
+          console.info('Successfully dispatched SMS via Fallback Gateway key.');
           return {
             success: true,
             messageText,
             sentViaGateway: true,
+            usedFallback: true,
           };
-        } else {
-          const errBody = await response.text().catch(() => '');
-          console.warn('SMS Gateway responded with non-200 status:', response.status, errBody);
         }
-      } catch (err: any) {
-        console.warn('SMS Gateway network dispatch error:', err?.message);
+
+        console.warn(
+          `Fallback SMS Gateway also failed (Status: ${fallbackRes.status || 'Unknown'}, Details: ${fallbackRes.error}).`
+        );
       }
     }
 

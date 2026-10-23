@@ -1052,7 +1052,7 @@ export function AdminDashboard({
                           <div className="flex items-center gap-3">
                             <div className="h-9 w-9 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
                               {item.worker.worker_photo_url ? (
-                                <img src={item.worker.worker_photo_url} alt={item.worker.worker_name} className="h-full w-full object-cover" />
+                                <img src={item.worker.worker_photo_url} alt={item.worker.worker_name} loading="lazy" decoding="async" className="h-full w-full object-cover" />
                               ) : (
                                 <User className="h-4 w-4 text-slate-400" />
                               )}

@@ -6,6 +6,7 @@ import { createBrowserClient } from '@/lib/supabase/browser-client';
 import { getOfflineCache, setOfflineCache } from '@/lib/offline-db';
 import { formatINR } from '@/lib/utils';
 import { updateWorkerAction } from '@/lib/ledger-actions';
+import { compressImage } from '@/lib/image-compressor';
 import { 
   Search, 
   Camera, 
@@ -56,6 +57,7 @@ export function SupervisorWorkersClientPage() {
   const [editPhone, setEditPhone] = useState('');
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [compressingPhoto, setCompressingPhoto] = useState(false);
 
   const [actionLoading, setActionLoading] = useState(false);
   const [actionMessage, setActionMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -254,11 +256,25 @@ export function SupervisorWorkersClientPage() {
     setActionMessage(null);
   };
 
-  const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePhotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      setPhotoFile(file);
-      setPhotoPreview(URL.createObjectURL(file));
+      const originalFile = e.target.files[0];
+      setCompressingPhoto(true);
+      try {
+        const compressed = await compressImage(originalFile, {
+          maxWidth: 480,
+          maxHeight: 480,
+          quality: 0.75,
+        });
+        setPhotoFile(compressed);
+        setPhotoPreview(URL.createObjectURL(compressed));
+      } catch (err) {
+        console.warn('Image compression error, using original:', err);
+        setPhotoFile(originalFile);
+        setPhotoPreview(URL.createObjectURL(originalFile));
+      } finally {
+        setCompressingPhoto(false);
+      }
     }
   };
 
@@ -421,18 +437,28 @@ export function SupervisorWorkersClientPage() {
                 <div className="mt-1 flex items-center gap-4">
                   <label className="flex items-center justify-center border border-dashed border-slate-300 rounded-md p-3 bg-slate-50 hover:bg-slate-100 cursor-pointer min-h-[44px] flex-1">
                     <Camera className="h-4 w-4 text-slate-400 mr-2" />
-                    <span className="text-xs text-slate-600 font-semibold">Change Photo</span>
+                    <span className="text-xs text-slate-600 font-semibold">
+                      {compressingPhoto ? 'Compressing Photo...' : 'Change Photo'}
+                    </span>
                     <input
                       type="file"
                       accept="image/*"
                       capture="user"
                       onChange={handlePhotoChange}
+                      disabled={compressingPhoto || actionLoading}
                       className="hidden"
                     />
                   </label>
                   {photoPreview && (
-                    <div className="relative h-12 w-12 border border-slate-200 rounded overflow-hidden">
-                      <img src={photoPreview} alt="Worker preview" className="object-cover h-full w-full" />
+                    <div className="flex items-center gap-2">
+                      <div className="relative h-12 w-12 border border-slate-200 rounded overflow-hidden">
+                        <img src={photoPreview} alt="Worker preview" className="object-cover h-full w-full" />
+                      </div>
+                      {photoFile && (
+                        <span className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded font-bold">
+                          {(photoFile.size / 1024).toFixed(0)} KB (Compressed)
+                        </span>
+                      )}
                     </div>
                   )}
                 </div>
@@ -648,7 +674,7 @@ export function SupervisorWorkersClientPage() {
                     <div className="flex items-center gap-3">
                       <div className="relative h-12 w-12 rounded-full border border-slate-200 bg-slate-100 overflow-hidden flex items-center justify-center shrink-0">
                         {w.worker_photo_url ? (
-                          <img src={w.worker_photo_url} alt={w.worker_name} className="object-cover h-full w-full" />
+                          <img src={w.worker_photo_url} alt={w.worker_name} loading="lazy" decoding="async" className="object-cover h-full w-full" />
                         ) : (
                           <User className="h-6 w-6 text-slate-400" />
                         )}
