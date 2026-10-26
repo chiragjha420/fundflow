@@ -40,6 +40,7 @@ import { playAlertSound } from '@/lib/notifications';
 import { NotificationBanner } from '@/components/notification-banner';
 import { compressImage } from '@/lib/image-compressor';
 import { CameraCaptureModal } from '@/components/camera-capture-modal';
+import { uploadHandoverPhotoAction, uploadWorkerPhotoAction, uploadExpensePhotoAction } from '@/app/actions/upload-actions';
 
 interface Worker {
   worker_id: string;
@@ -313,6 +314,25 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const activeOtherSups = (otherSupervisors !== undefined ? otherSupervisors : cachedSups)
     .filter(s => s.id !== supervisorId);
 
+  // 5. Fetch Recent Disbursements by this supervisor (for live feedback & handover proof viewing)
+  const { data: recentDisbursements } = useQuery({
+    queryKey: ['recent-disbursements', supervisorId],
+    queryFn: async () => {
+      if (!supervisorId) return [];
+      const { data, error } = await supabase
+        .from('cash_transactions')
+        .select('id, amount, note, created_at, to_worker_id, to_work:to_worker_id(name)')
+        .eq('from_supervisor_id', supervisorId)
+        .eq('type', 'supervisor_to_worker')
+        .order('created_at', { ascending: false })
+        .limit(5);
+
+      if (error) return [];
+      return data || [];
+    },
+    enabled: !!supervisorId,
+  });
+
   // Handle Receipt Confirmation
   const handleConfirmClick = (txId: string, amount: number, type: string) => {
     setConfirmTx({ id: txId, amount, type });
@@ -421,16 +441,14 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
     if (file && navigator.onLine) {
       try {
-        const fileName = `handover-${supervisorId}-${Date.now()}.jpg`;
-        const { data, error } = await supabase.storage
-          .from('receipt-photos')
-          .upload(`handovers/${fileName}`, file, { upsert: true });
+        const formData = new FormData();
+        formData.append('file', file);
+        const uploadRes = await uploadHandoverPhotoAction(formData);
 
-        if (!error && data) {
-          const { data: { publicUrl } } = supabase.storage
-            .from('receipt-photos')
-            .getPublicUrl(data.path);
-          finalNote = `${note} [handover_photo:${publicUrl}]`;
+        if (uploadRes.success && uploadRes.publicUrl) {
+          finalNote = `${note} [handover_photo:${uploadRes.publicUrl}]`;
+        } else {
+          console.warn('Handover photo server upload warning:', uploadRes.error);
         }
       } catch (err) {
         console.warn('Handover photo upload exception:', err);
@@ -575,20 +593,28 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           throw new Error('Amount, Category, and Notes/Remarks are required.');
         }
 
-        // Handle Photo Upload (for now standard storage if online)
+        // Handle Photo Upload (server action bypasses storage RLS)
         let photoUrl: string | null = null;
         if (photoFile && navigator.onLine) {
-          const fileExt = photoFile.name.split('.').pop();
-          const fileName = `${supervisorId}-${Date.now()}.${fileExt}`;
-          const { data, error } = await supabase.storage
-            .from('worker-photos') // Using existing bucket
-            .upload(`receipts/${fileName}`, photoFile);
-          
-          if (!error && data) {
-            const { data: { publicUrl } } = supabase.storage
-              .from('worker-photos')
-              .getPublicUrl(data.path);
-            photoUrl = publicUrl;
+          try {
+            const uploadData = new FormData();
+            uploadData.append('file', photoFile);
+            const uploadRes = await uploadExpensePhotoAction(uploadData);
+            if (uploadRes.success && uploadRes.publicUrl) {
+              photoUrl = uploadRes.publicUrl;
+            } else {
+              const reader = new FileReader();
+              photoUrl = await new Promise((resolve) => {
+                reader.onloadend = () => resolve(reader.result as string);
+                reader.readAsDataURL(photoFile);
+              });
+            }
+          } catch {
+            const reader = new FileReader();
+            photoUrl = await new Promise((resolve) => {
+              reader.onloadend = () => resolve(reader.result as string);
+              reader.readAsDataURL(photoFile);
+            });
           }
         } else if (photoFile && !navigator.onLine) {
           // If offline, converting file to base64 for storage queue
@@ -634,24 +660,18 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
       if (!name) throw new Error('Worker Name is required.');
 
-      // Image upload
+      // Image upload via Server Action (bypasses storage RLS)
       let photoUrl: string | null = null;
       if (photoFile) {
         if (navigator.onLine) {
           try {
-            const fileExt = photoFile.name.split('.').pop() || 'jpg';
-            const fileName = `${Date.now()}.${fileExt}`;
-            const { data, error } = await supabase.storage
-              .from('worker-photos')
-              .upload(`workers/${fileName}`, photoFile, { upsert: true });
-
-            if (!error && data) {
-              const { data: { publicUrl } } = supabase.storage
-                .from('worker-photos')
-                .getPublicUrl(data.path);
-              photoUrl = publicUrl;
-            } else if (error) {
-              console.warn('Supabase storage upload error, falling back to base64:', error);
+            const uploadData = new FormData();
+            uploadData.append('file', photoFile);
+            const uploadRes = await uploadWorkerPhotoAction(uploadData);
+            if (uploadRes.success && uploadRes.publicUrl) {
+              photoUrl = uploadRes.publicUrl;
+            } else {
+              console.warn('Worker photo upload failed, falling back to base64:', uploadRes.error);
               const reader = new FileReader();
               photoUrl = await new Promise((resolve) => {
                 reader.onloadend = () => resolve(reader.result as string);
@@ -660,13 +680,11 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
             }
           } catch (storageErr) {
             console.warn('Storage upload exception, falling back to base64:', storageErr);
-            try {
-              const reader = new FileReader();
-              photoUrl = await new Promise((resolve) => {
-                reader.onloadend = () => resolve(reader.result as string);
-                reader.readAsDataURL(photoFile);
-              });
-            } catch {}
+            const reader = new FileReader();
+            photoUrl = await new Promise((resolve) => {
+              reader.onloadend = () => resolve(reader.result as string);
+              reader.readAsDataURL(photoFile);
+            });
           }
         } else {
           // Offline fallback
@@ -1449,6 +1467,68 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
             </button>
           </form>
         </div>
+      </div>
+
+      {/* Recent Cash Disbursements & Handover Proofs */}
+      <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <HandCoins className="h-4 w-4 text-slate-700" />
+            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900">Recent Disbursements & Proofs</h2>
+          </div>
+          <span className="text-[11px] font-semibold text-slate-500">Last 5 entries</span>
+        </div>
+        {!recentDisbursements || recentDisbursements.length === 0 ? (
+          <div className="p-4 text-center text-xs text-slate-400">
+            No recent disbursements logged yet.
+          </div>
+        ) : (
+          <ul className="divide-y divide-slate-100">
+            {recentDisbursements.map((tx: any) => {
+              const { note: cleanNote, photoUrl } = parseHandoverNote(tx.note);
+              const workerName = tx.to_work?.name || 'Worker';
+              const timeStr = new Date(tx.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              const dateStr = new Date(tx.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' });
+
+              return (
+                <li key={tx.id} className="p-3.5 flex items-center justify-between hover:bg-slate-50/60 transition-colors">
+                  <div className="flex items-center gap-3">
+                    <div className="h-10 w-10 rounded-full bg-emerald-50 border border-emerald-200 flex items-center justify-center shrink-0">
+                      <IndianRupee className="h-5 w-5 text-emerald-700" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-bold text-slate-900">{workerName}</span>
+                        <span className="text-xs font-extrabold text-emerald-700">{formatINR(tx.amount)}</span>
+                      </div>
+                      <p className="text-xs text-slate-500 line-clamp-1">
+                        {cleanNote || 'Cash Advance'}
+                      </p>
+                      <span className="text-[11px] text-slate-400">{dateStr} at {timeStr}</span>
+                    </div>
+                  </div>
+
+                  <div className="shrink-0 ml-3">
+                    {photoUrl ? (
+                      <button
+                        type="button"
+                        onClick={() => setViewingPhotoUrl(photoUrl)}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 text-xs font-bold transition-all shadow-2xs hover:shadow-xs"
+                      >
+                        <Camera className="h-3.5 w-3.5 text-emerald-600" />
+                        <span>View Proof</span>
+                      </button>
+                    ) : (
+                      <span className="text-[11px] font-semibold text-slate-400 bg-slate-100 px-2 py-1 rounded">
+                        No Photo
+                      </span>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </div>
 
       {/* 3. Workers List Panel */}

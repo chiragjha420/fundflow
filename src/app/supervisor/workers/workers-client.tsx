@@ -6,6 +6,7 @@ import { createBrowserClient } from '@/lib/supabase/browser-client';
 import { getOfflineCache, setOfflineCache } from '@/lib/offline-db';
 import { formatINR, parseHandoverNote } from '@/lib/utils';
 import { updateWorkerAction } from '@/lib/ledger-actions';
+import { uploadWorkerPhotoAction } from '@/app/actions/upload-actions';
 import { compressImage } from '@/lib/image-compressor';
 import { CameraCaptureModal } from '@/components/camera-capture-modal';
 import { 
@@ -295,23 +296,17 @@ export function SupervisorWorkersClientPage() {
     try {
       let finalPhotoUrl = editingWorker.worker_photo_url;
 
-      // Handle Image Upload if new image was picked
+      // Handle Image Upload via Server Action (bypassing storage RLS)
       if (photoFile) {
         if (navigator.onLine) {
           try {
-            const fileExt = photoFile.name.split('.').pop() || 'jpg';
-            const fileName = `${editingWorker.worker_id}-${Date.now()}.${fileExt}`;
-            const { data, error } = await supabase.storage
-              .from('worker-photos')
-              .upload(`workers/${fileName}`, photoFile, { upsert: true });
-
-            if (!error && data) {
-              const { data: { publicUrl } } = supabase.storage
-                .from('worker-photos')
-                .getPublicUrl(data.path);
-              finalPhotoUrl = publicUrl;
-            } else if (error) {
-              console.warn('Storage upload error, falling back to base64:', error);
+            const uploadData = new FormData();
+            uploadData.append('file', photoFile);
+            const uploadRes = await uploadWorkerPhotoAction(uploadData);
+            if (uploadRes.success && uploadRes.publicUrl) {
+              finalPhotoUrl = uploadRes.publicUrl;
+            } else {
+              console.warn('Worker photo upload failed, falling back to base64:', uploadRes.error);
               const reader = new FileReader();
               finalPhotoUrl = await new Promise((resolve) => {
                 reader.onloadend = () => resolve(reader.result as string);

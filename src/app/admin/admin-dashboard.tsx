@@ -1367,8 +1367,27 @@ export function AdminDashboard({
                           )}
                         </div>
                       </td>
-                      <td className="px-6 py-4 text-slate-500 text-xs italic max-w-xs truncate">
-                        {entry.note || '-'}
+                      <td className="px-6 py-4 text-slate-500 text-xs">
+                        {(() => {
+                          const parsed = parseHandoverNote(entry.note);
+                          return (
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {parsed.note && <span className="italic">{parsed.note}</span>}
+                              {parsed.photoUrl && (
+                                <button
+                                  type="button"
+                                  onClick={() => setAdminViewingPhotoUrl(parsed.photoUrl)}
+                                  className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded cursor-pointer transition-colors shadow-xs"
+                                  title="View Cash Handover Proof"
+                                >
+                                  <Camera className="h-3 w-3" />
+                                  <span>Handover Photo</span>
+                                </button>
+                              )}
+                              {!parsed.note && !parsed.photoUrl && <span className="text-slate-400">-</span>}
+                            </div>
+                          );
+                        })()}
                       </td>
                     </tr>
                   );

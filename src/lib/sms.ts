@@ -65,6 +65,9 @@ async function postToGateway(
   }
 }
 
+// Default endpoint for TextBee Android SIM Gateway
+const DEFAULT_GATEWAY_URL = 'https://api.textbee.dev/api/v1/gateway/send-sms';
+
 export async function sendWorkerDisbursementSms(payload: WorkerSmsPayload): Promise<{
   success: boolean;
   messageText: string;
@@ -106,7 +109,7 @@ export async function sendWorkerDisbursementSms(payload: WorkerSmsPayload): Prom
     const messageText = `Received ₹${payload.amount.toLocaleString('en-IN')} on ${today} from ${senderIdentifier}.`;
 
     // 1. Check if Free Android SIM Gateway is configured (Primary & Fallback)
-    const gatewayUrl = process.env.SMS_GATEWAY_URL?.trim();
+    const gatewayUrl = process.env.SMS_GATEWAY_URL?.trim() || DEFAULT_GATEWAY_URL;
     const primaryApiKey = process.env.SMS_GATEWAY_API_KEY?.trim();
     const primaryDeviceId = process.env.SMS_GATEWAY_DEVICE_ID?.trim();
 
