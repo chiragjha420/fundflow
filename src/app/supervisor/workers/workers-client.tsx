@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createBrowserClient } from '@/lib/supabase/browser-client';
 import { getOfflineCache, setOfflineCache } from '@/lib/offline-db';
-import { formatINR } from '@/lib/utils';
+import { formatINR, parseHandoverNote } from '@/lib/utils';
 import { updateWorkerAction } from '@/lib/ledger-actions';
 import { compressImage } from '@/lib/image-compressor';
 import { CameraCaptureModal } from '@/components/camera-capture-modal';
@@ -60,6 +60,7 @@ export function SupervisorWorkersClientPage() {
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [showCameraModal, setShowCameraModal] = useState<boolean>(false);
+  const [viewingPhotoUrl, setViewingPhotoUrl] = useState<string | null>(null);
 
   const [actionLoading, setActionLoading] = useState(false);
   const [actionMessage, setActionMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -787,6 +788,7 @@ export function SupervisorWorkersClientPage() {
                         workerId={w.worker_id} 
                         fromDate={fromDate}
                         toDate={toDate}
+                        onPhotoClick={setViewingPhotoUrl}
                       />
                     </div>
                   )}
@@ -840,6 +842,40 @@ export function SupervisorWorkersClientPage() {
         title="Take Worker Photo"
         defaultFacingMode="environment"
       />
+
+      {/* Full-Screen Photo Viewer Modal */}
+      {viewingPhotoUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-sm w-full overflow-hidden flex flex-col shadow-2xl">
+            <div className="p-3 flex items-center justify-between border-b border-slate-800">
+              <span className="text-xs font-bold text-slate-100 uppercase tracking-wider">Proof of Handover</span>
+              <button
+                type="button"
+                onClick={() => setViewingPhotoUrl(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-full hover:bg-slate-800 min-h-[36px] min-w-[36px] flex items-center justify-center"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="aspect-square w-full bg-black flex items-center justify-center overflow-hidden">
+              <img
+                src={viewingPhotoUrl}
+                alt="Cash Handover Proof"
+                className="w-full h-full object-contain"
+              />
+            </div>
+            <div className="p-3 bg-slate-900 border-t border-slate-800 text-center">
+              <button
+                type="button"
+                onClick={() => setViewingPhotoUrl(null)}
+                className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold rounded-lg"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -848,11 +884,13 @@ export function SupervisorWorkersClientPage() {
 function WorkerInlineHistory({ 
   workerId, 
   fromDate, 
-  toDate 
+  toDate,
+  onPhotoClick,
 }: { 
   workerId: string; 
   fromDate?: string; 
   toDate?: string; 
+  onPhotoClick?: (url: string) => void;
 }) {
   const supabase = createBrowserClient();
   
@@ -928,32 +966,50 @@ function WorkerInlineHistory({
         )}
       </div>
       <div className="divide-y divide-slate-100 border border-slate-200/80 rounded bg-white overflow-hidden max-h-[220px] overflow-y-auto">
-        {filteredPayments.map((pmt) => (
-          <div key={pmt.id} className="p-2.5 text-xs flex justify-between items-start gap-3 hover:bg-slate-50">
-            <div>
-              <span className="font-extrabold text-slate-900 block">{formatINR(pmt.amount)}</span>
-              <span className="text-[9px] text-slate-400">
-                {new Date(pmt.created_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
-              </span>
-              {pmt.note && (
-                <span className="text-[9px] text-slate-500 italic block mt-0.5 bg-slate-50/50 border border-slate-100 rounded px-1.5 py-0.5 w-max max-w-full truncate">
-                  "{pmt.note}"
+        {filteredPayments.map((pmt) => {
+          const parsed = parseHandoverNote(pmt.note);
+          return (
+            <div key={pmt.id} className="p-2.5 text-xs flex justify-between items-start gap-3 hover:bg-slate-50">
+              <div>
+                <span className="font-extrabold text-slate-900 block">{formatINR(pmt.amount)}</span>
+                <span className="text-[9px] text-slate-400">
+                  {new Date(pmt.created_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
                 </span>
-              )}
+                {(parsed.note || parsed.photoUrl) && (
+                  <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                    {parsed.note && (
+                      <span className="text-[9px] text-slate-500 italic bg-slate-50/50 border border-slate-100 rounded px-1.5 py-0.5 w-max max-w-full truncate">
+                        "{parsed.note}"
+                      </span>
+                    )}
+                    {parsed.photoUrl && (
+                      <button
+                        type="button"
+                        onClick={() => onPhotoClick?.(parsed.photoUrl!)}
+                        className="inline-flex items-center gap-1 text-[9px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-1.5 py-0.5 rounded cursor-pointer transition-colors"
+                        title="View Cash Handover Proof"
+                      >
+                        <Camera className="h-2.5 w-2.5" />
+                        <span>Handover Photo</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div>
+                <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[8px] font-semibold border ${
+                  pmt.status === 'confirmed'
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : pmt.status === 'disputed'
+                    ? 'bg-red-50 text-red-700 border-red-200'
+                    : 'bg-amber-50 text-amber-700 border-amber-200'
+                }`}>
+                  {pmt.status}
+                </span>
+              </div>
             </div>
-            <div>
-              <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[8px] font-semibold border ${
-                pmt.status === 'confirmed'
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                  : pmt.status === 'disputed'
-                  ? 'bg-red-50 text-red-700 border-red-200'
-                  : 'bg-amber-50 text-amber-700 border-amber-200'
-              }`}>
-                {pmt.status}
-              </span>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

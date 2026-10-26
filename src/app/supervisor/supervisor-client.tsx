@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createBrowserClient } from '@/lib/supabase/browser-client';
 import { getOfflineCache, setOfflineCache } from '@/lib/offline-db';
-import { formatINR } from '@/lib/utils';
+import { formatINR, parseHandoverNote } from '@/lib/utils';
 import { 
   disburseToWorkerAction, 
   transferToSupervisorAction, 
@@ -31,7 +31,8 @@ import {
   MessageSquare,
   Smartphone,
   Phone,
-  Upload
+  Upload,
+  Eye
 } from 'lucide-react';
 import { sendWorkerDisbursementSms } from '@/lib/sms';
 import { createCashRequest } from '@/app/actions/cash-requests';
@@ -95,6 +96,16 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [showCameraModal, setShowCameraModal] = useState<boolean>(false);
+
+  // Cash Handover Photo Prompt States
+  const [showHandoverModal, setShowHandoverModal] = useState<boolean>(false);
+  const [pendingDisburse, setPendingDisburse] = useState<{
+    targetWorker: Worker;
+    amount: number;
+    note: string;
+    overridePhone?: string;
+  } | null>(null);
+  const [viewingPhotoUrl, setViewingPhotoUrl] = useState<string | null>(null);
 
   // Form loading states
   const [actionLoading, setActionLoading] = useState(false);
@@ -356,6 +367,9 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     note: string,
     overridePhone?: string
   ) => {
+    // Clear any previous leftover manual SMS dispatch pill
+    setLastDisburseSms(null);
+
     const res = await disburseToWorkerAction(targetWorker.worker_id, supervisorId!, amount, note);
     if (res.queued) {
       setActionMessage({ type: 'success', text: 'Offline: Disbursement queued. Worker balance will sync later.' });
@@ -366,26 +380,68 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       // Free Automated Text Message to Worker (strictly confirms amount received)
       const phoneToUse = overridePhone || targetWorker.worker_phone;
       if (phoneToUse) {
-        sendWorkerDisbursementSms({
-          workerPhone: phoneToUse,
-          workerName: targetWorker.worker_name,
-          amount,
-          supervisorName: supervisor?.name,
-          factoryName: (supervisor?.factories as any)?.name,
-          note,
-        }).then(smsRes => {
+        try {
+          const cleanNoteOnly = parseHandoverNote(note).note;
+          const smsRes = await sendWorkerDisbursementSms({
+            workerPhone: phoneToUse,
+            workerName: targetWorker.worker_name,
+            amount,
+            supervisorName: supervisor?.name,
+            factoryName: (supervisor?.factories as any)?.name,
+            note: cleanNoteOnly,
+          });
+
           if (smsRes.sentViaGateway) {
+            // TextBee sent it automatically! Clear dispatch pill and show confirmation toast
+            setLastDisburseSms(null);
             showToast('success', `Free automated SMS sent to ${targetWorker.worker_name} (${phoneToUse})!`);
           } else if (smsRes.smsUri) {
+            // Only if gateway failed or offline, show the fallback manual dispatch pill
             setLastDisburseSms({
               workerName: targetWorker.worker_name,
               smsUri: smsRes.smsUri,
             });
           }
-        });
+        } catch (smsErr) {
+          console.warn('SMS dispatch error:', smsErr);
+        }
       }
     }
     queryClient.invalidateQueries();
+  };
+
+  // Handler for Cash Handover Photo Capture or Skip
+  const handleHandoverCapture = async (file: File | null) => {
+    if (!pendingDisburse) return;
+    const { targetWorker, amount, note, overridePhone } = pendingDisburse;
+    setShowHandoverModal(false);
+    setActionLoading(true);
+
+    let finalNote = note;
+
+    if (file && navigator.onLine) {
+      try {
+        const fileName = `handover-${supervisorId}-${Date.now()}.jpg`;
+        const { data, error } = await supabase.storage
+          .from('receipt-photos')
+          .upload(`handovers/${fileName}`, file, { upsert: true });
+
+        if (!error && data) {
+          const { data: { publicUrl } } = supabase.storage
+            .from('receipt-photos')
+            .getPublicUrl(data.path);
+          finalNote = `${note} [handover_photo:${publicUrl}]`;
+        }
+      } catch (err) {
+        console.warn('Handover photo upload exception:', err);
+      }
+    }
+
+    setPendingDisburse(null);
+    setDisburseAmount('');
+    setSelectedWorkerId('');
+    await executeDisbursement(targetWorker, amount, finalNote, overridePhone);
+    setActionLoading(false);
   };
 
   // Handler for Missing Phone Modal (Save phone & disburse, or skip)
@@ -421,14 +477,15 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         showToast('success', `Mobile number saved for ${phoneModalWorker.worker_name}!`);
       }
 
-      // If triggered during disbursement, complete the disbursement now
+      // If triggered during disbursement, prompt for handover photo now
       if (phoneModalDisburseDetails) {
-        await executeDisbursement(
-          phoneModalWorker,
-          phoneModalDisburseDetails.amount,
-          phoneModalDisburseDetails.note,
-          savedPhone
-        );
+        setPendingDisburse({
+          targetWorker: phoneModalWorker,
+          amount: phoneModalDisburseDetails.amount,
+          note: phoneModalDisburseDetails.note,
+          overridePhone: savedPhone,
+        });
+        setShowHandoverModal(true);
         setDisburseAmount('');
         setSelectedWorkerId('');
         setPhoneModalDisburseDetails(null);
@@ -484,9 +541,14 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           return;
         }
 
-        await executeDisbursement(targetWorker, amount, note);
-        setDisburseAmount('');
-        setSelectedWorkerId('');
+        // Prompt supervisor for Cash Handover Photo proof
+        setPendingDisburse({
+          targetWorker,
+          amount,
+          note,
+        });
+        setShowHandoverModal(true);
+        setActionLoading(false);
         form.reset();
       } else if (activeTab === 'transfer') {
         const toSupervisorId = formData.get('toSupervisorId') as string;
@@ -623,6 +685,20 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         setActionMessage({ type: 'success', text: 'Offline: Worker created locally. Will sync with server.' });
       } else {
         setActionMessage({ type: 'success', text: 'Worker profile created successfully.' });
+        if (openingAdvance > 0 && phone) {
+          sendWorkerDisbursementSms({
+            workerPhone: phone,
+            workerName: name,
+            amount: openingAdvance,
+            supervisorName: supervisor?.name,
+            factoryName: (supervisor?.factories as any)?.name,
+            note: 'Opening advance',
+          }).then((smsRes) => {
+            if (smsRes.sentViaGateway) {
+              showToast('success', `Free SMS alert sent to ${name} (${phone})!`);
+            }
+          }).catch(() => {});
+        }
       }
 
       form.reset();
@@ -1593,6 +1669,55 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         title="Take Worker Photo"
         defaultFacingMode="environment"
       />
+
+      {/* 1-Tap Cash Handover Photo Viewfinder */}
+      <CameraCaptureModal
+        isOpen={showHandoverModal}
+        onClose={() => {
+          setShowHandoverModal(false);
+          setPendingDisburse(null);
+        }}
+        onCapture={(file) => handleHandoverCapture(file)}
+        onSkip={() => handleHandoverCapture(null)}
+        skipLabel="Skip Photo"
+        title="Cash Handover Photo"
+        subtitle={pendingDisburse ? `Handing ${formatINR(pendingDisburse.amount)} to ${pendingDisburse.targetWorker.worker_name}` : undefined}
+        defaultFacingMode="environment"
+      />
+
+      {/* Full-Screen Photo Viewer Modal */}
+      {viewingPhotoUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-sm w-full overflow-hidden flex flex-col shadow-2xl">
+            <div className="p-3 flex items-center justify-between border-b border-slate-800">
+              <span className="text-xs font-bold text-slate-100 uppercase tracking-wider">Proof of Handover</span>
+              <button
+                type="button"
+                onClick={() => setViewingPhotoUrl(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-full hover:bg-slate-800 min-h-[36px] min-w-[36px] flex items-center justify-center"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="aspect-square w-full bg-black flex items-center justify-center overflow-hidden">
+              <img
+                src={viewingPhotoUrl}
+                alt="Cash Handover Proof"
+                className="w-full h-full object-contain"
+              />
+            </div>
+            <div className="p-3 bg-slate-900 border-t border-slate-800 text-center">
+              <button
+                type="button"
+                onClick={() => setViewingPhotoUrl(null)}
+                className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold rounded-lg"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

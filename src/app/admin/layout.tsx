@@ -2,7 +2,8 @@ import React from 'react';
 import Link from 'next/link';
 import { logout } from '@/app/actions/auth';
 import { OfflineStatusBar } from '@/components/offline-status-bar';
-import { LogOut, LayoutDashboard, Users } from 'lucide-react';
+import { LogOut } from 'lucide-react';
+import { AdminNav } from './admin-nav';
 
 export default function AdminLayout({
   children,
@@ -21,22 +22,7 @@ export default function AdminLayout({
                   JBB <span className="text-emerald-600 font-bold">FundFlow</span>
                 </span>
               </Link>
-              <nav className="hidden md:flex space-x-6 text-sm font-medium">
-                <Link
-                  href="/admin"
-                  className="text-slate-700 hover:text-slate-900 flex items-center gap-1.5 py-2 px-1 border-b-2 border-transparent hover:border-slate-300"
-                >
-                  <LayoutDashboard className="h-4 w-4" />
-                  <span>Dashboard</span>
-                </Link>
-                <Link
-                  href="/admin/supervisors"
-                  className="text-slate-700 hover:text-slate-900 flex items-center gap-1.5 py-2 px-1 border-b-2 border-transparent hover:border-slate-300"
-                >
-                  <Users className="h-4 w-4" />
-                  <span>Supervisors</span>
-                </Link>
-              </nav>
+              <AdminNav />
             </div>
             
             <div className="flex items-center gap-4">
@@ -54,24 +40,6 @@ export default function AdminLayout({
               </form>
             </div>
           </div>
-        </div>
-        
-        {/* Mobile Navigation Links */}
-        <div className="md:hidden flex border-t border-slate-100 bg-white">
-          <Link
-            href="/admin"
-            className="flex-1 py-3 text-center text-xs font-medium text-slate-600 hover:bg-slate-50 flex flex-col items-center gap-1"
-          >
-            <LayoutDashboard className="h-4 w-4 mx-auto" />
-            <span>Dashboard</span>
-          </Link>
-          <Link
-            href="/admin/supervisors"
-            className="flex-1 py-3 text-center text-xs font-medium text-slate-600 hover:bg-slate-50 flex flex-col items-center gap-1"
-          >
-            <Users className="h-4 w-4 mx-auto" />
-            <span>Supervisors</span>
-          </Link>
         </div>
       </header>
 

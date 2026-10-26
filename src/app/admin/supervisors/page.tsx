@@ -11,15 +11,16 @@ export const revalidate = 0; // Disable static caching for real-time admin view
 export default async function SupervisorsAdminPage() {
   const supabase = createServerClient();
 
-  const { data: factories } = await supabase
-    .from('factories')
-    .select('*')
-    .order('name');
-
-  const { data: supervisors } = await supabase
-    .from('supervisors')
-    .select('*, factories(name)')
-    .order('name');
+  const [{ data: factories }, { data: supervisors }] = await Promise.all([
+    supabase
+      .from('factories')
+      .select('*')
+      .order('name'),
+    supabase
+      .from('supervisors')
+      .select('*, factories(name)')
+      .order('name'),
+  ]);
 
   return (
     <div className="space-y-8">

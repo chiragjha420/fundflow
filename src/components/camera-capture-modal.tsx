@@ -7,7 +7,10 @@ interface CameraCaptureModalProps {
   isOpen: boolean;
   onClose: () => void;
   onCapture: (file: File, previewUrl: string) => void;
+  onSkip?: () => void;
+  skipLabel?: string;
   title?: string;
+  subtitle?: string;
   defaultFacingMode?: 'user' | 'environment';
 }
 
@@ -24,7 +27,10 @@ export function CameraCaptureModal({
   isOpen,
   onClose,
   onCapture,
+  onSkip,
+  skipLabel = 'Skip Photo',
   title = 'Take Worker Photo',
+  subtitle,
   defaultFacingMode = 'environment',
 }: CameraCaptureModalProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -185,7 +191,12 @@ export function CameraCaptureModal({
         <div className="p-3.5 flex items-center justify-between border-b border-slate-800">
           <div className="flex items-center gap-2">
             <Camera className="h-4 w-4 text-emerald-400" />
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-100">{title}</h3>
+            <div>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-100">{title}</h3>
+              {subtitle && (
+                <p className="text-[11px] text-emerald-400 font-medium truncate max-w-[240px]">{subtitle}</p>
+              )}
+            </div>
           </div>
           <button
             type="button"
@@ -259,18 +270,32 @@ export function CameraCaptureModal({
             </div>
           </button>
 
-          {/* Cancel */}
-          <button
-            type="button"
-            onClick={() => {
-              stopStream();
-              onClose();
-            }}
-            className="flex flex-col items-center gap-1 text-slate-400 hover:text-white p-2 min-h-[44px] min-w-[44px]"
-          >
-            <X className="h-5 w-5" />
-            <span className="text-[10px] font-semibold">Cancel</span>
-          </button>
+          {/* Cancel or Skip */}
+          {onSkip ? (
+            <button
+              type="button"
+              onClick={() => {
+                stopStream();
+                onSkip();
+              }}
+              className="flex flex-col items-center gap-1 text-amber-400 hover:text-amber-300 p-2 min-h-[44px] min-w-[44px]"
+              title="Skip taking photo"
+            >
+              <span className="text-[11px] font-bold uppercase tracking-wider">{skipLabel}</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                stopStream();
+                onClose();
+              }}
+              className="flex flex-col items-center gap-1 text-slate-400 hover:text-white p-2 min-h-[44px] min-w-[44px]"
+            >
+              <X className="h-5 w-5" />
+              <span className="text-[10px] font-semibold">Cancel</span>
+            </button>
+          )}
         </div>
       </div>
     </div>

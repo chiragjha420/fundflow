@@ -16,3 +16,17 @@ export function formatINR(amount: number | string): string {
   });
   return formatter.format(num);
 }
+
+/**
+ * Parses transaction remarks/notes to extract any embedded handover photo proof URL.
+ */
+export function parseHandoverNote(rawNote: string | null | undefined): { note: string; photoUrl: string | null } {
+  if (!rawNote) return { note: '', photoUrl: null };
+  const match = rawNote.match(/\[handover_photo:(https?:\/\/[^\]]+)\]/);
+  if (match) {
+    const photoUrl = match[1];
+    const cleanNote = rawNote.replace(/\[handover_photo:https?:\/\/[^\]]+\]/, '').trim();
+    return { note: cleanNote, photoUrl };
+  }
+  return { note: rawNote, photoUrl: null };
+}

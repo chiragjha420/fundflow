@@ -36,25 +36,22 @@ async function postToGateway(
   message: string
 ): Promise<{ ok: boolean; status?: number; error?: string }> {
   try {
+    const payload: Record<string, any> = {
+      recipients: [phone],
+      message,
+    };
+    if (deviceId) {
+      payload.deviceId = deviceId;
+    }
+
     const res = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
         'x-api-key': apiKey,
       },
-      body: JSON.stringify({
-        // TextBee standard payload
-        recipients: [phone],
-        message,
-        ...(deviceId ? { deviceId } : {}),
-        // Generic gateway compatibility fields
-        to: phone,
-        phone,
-        recipient: phone,
-        text: message,
-      }),
-      signal: AbortSignal.timeout(6000),
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(8000),
     });
 
     if (res.ok) {
@@ -77,8 +74,8 @@ export async function sendWorkerDisbursementSms(payload: WorkerSmsPayload): Prom
   error?: string;
 }> {
   try {
-    const rawPhone = payload.workerPhone?.replace(/[^\d+]/g, '');
-    if (!rawPhone || rawPhone.length < 10) {
+    const cleanDigits = payload.workerPhone?.replace(/\D/g, '') || '';
+    if (cleanDigits.length < 10) {
       return {
         success: false,
         messageText: '',
@@ -86,8 +83,17 @@ export async function sendWorkerDisbursementSms(payload: WorkerSmsPayload): Prom
       };
     }
 
-    // Format Indian mobile number (+91 if 10 digits)
-    const formattedPhone = rawPhone.length === 10 ? `+91${rawPhone}` : rawPhone;
+    // Standardize to E.164 (+91XXXXXXXXXX)
+    let formattedPhone: string;
+    if (cleanDigits.length === 10) {
+      formattedPhone = `+91${cleanDigits}`;
+    } else if (cleanDigits.length === 12 && cleanDigits.startsWith('91')) {
+      formattedPhone = `+${cleanDigits}`;
+    } else if (payload.workerPhone?.startsWith('+')) {
+      formattedPhone = `+${cleanDigits}`;
+    } else {
+      formattedPhone = `+91${cleanDigits.slice(-10)}`;
+    }
 
     // Strict worker message: confirms amount received only (no advance balance, no private details)
     const today = new Date().toLocaleDateString('en-IN', {

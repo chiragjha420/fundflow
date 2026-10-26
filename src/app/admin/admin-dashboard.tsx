@@ -7,7 +7,7 @@ import { NotificationBanner } from '@/components/notification-banner';
 import { getCashRequests, updateCashRequestStatus, CashRequest } from '@/app/actions/cash-requests';
 import { playAlertSound } from '@/lib/notifications';
 import { HandCoins } from 'lucide-react';
-import { formatINR } from '@/lib/utils';
+import { formatINR, parseHandoverNote } from '@/lib/utils';
 import { 
   Building2, 
   ArrowUpRight, 
@@ -23,8 +23,10 @@ import {
   Search,
   ChevronDown,
   ChevronUp,
+  Camera,
   Clock,
-  User
+  User,
+  X
 } from 'lucide-react';
 
 interface Factory {
@@ -111,6 +113,7 @@ export function AdminDashboard({
   const [disburseAmount, setDisburseAmount] = useState<string>('');
   const [disburseNote, setDisburseNote] = useState<string>('');
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
+  const [adminViewingPhotoUrl, setAdminViewingPhotoUrl] = useState<string | null>(null);
 
   // Load cash requests on mount & periodically
   useEffect(() => {
@@ -1144,11 +1147,29 @@ export function AdminDashboard({
                                         <div className="text-[10px] text-slate-500 mt-0.5">
                                           {new Date(tx.created_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
                                         </div>
-                                        {tx.note && (
-                                          <div className="text-[11px] text-slate-600 italic mt-1 bg-slate-50 border border-slate-100 rounded px-1.5 py-0.5 w-fit">
-                                            "{tx.note}"
-                                          </div>
-                                        )}
+                                        {tx.note && (() => {
+                                          const parsed = parseHandoverNote(tx.note);
+                                          return (
+                                            <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                                              {parsed.note && (
+                                                <div className="text-[11px] text-slate-600 italic bg-slate-50 border border-slate-100 rounded px-1.5 py-0.5 w-fit">
+                                                  "{parsed.note}"
+                                                </div>
+                                              )}
+                                              {parsed.photoUrl && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => setAdminViewingPhotoUrl(parsed.photoUrl)}
+                                                  className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-1.5 py-0.5 rounded cursor-pointer transition-colors"
+                                                  title="View Cash Handover Proof"
+                                                >
+                                                  <Camera className="h-3 w-3" />
+                                                  <span>Handover Photo</span>
+                                                </button>
+                                              )}
+                                            </div>
+                                          );
+                                        })()}
                                       </div>
                                       <div className="text-right">
                                         <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
@@ -1357,6 +1378,40 @@ export function AdminDashboard({
           </div>
         )}
       </div>
+
+      {/* Full-Screen Handover Photo Viewer Modal */}
+      {adminViewingPhotoUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-sm w-full overflow-hidden flex flex-col shadow-2xl">
+            <div className="p-3 flex items-center justify-between border-b border-slate-800 text-white">
+              <span className="text-xs font-bold uppercase tracking-wider">Proof of Cash Handover</span>
+              <button
+                type="button"
+                onClick={() => setAdminViewingPhotoUrl(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-full hover:bg-slate-800 min-h-[36px] min-w-[36px] flex items-center justify-center"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="aspect-square w-full bg-black flex items-center justify-center overflow-hidden">
+              <img
+                src={adminViewingPhotoUrl}
+                alt="Cash Handover Proof"
+                className="w-full h-full object-contain"
+              />
+            </div>
+            <div className="p-3 bg-slate-900 border-t border-slate-800 text-center">
+              <button
+                type="button"
+                onClick={() => setAdminViewingPhotoUrl(null)}
+                className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold rounded-lg"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
