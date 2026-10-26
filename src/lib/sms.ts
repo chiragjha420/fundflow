@@ -65,8 +65,10 @@ async function postToGateway(
   }
 }
 
-// Default endpoint for TextBee Android SIM Gateway
+// Default fallback configuration for TextBee Android SIM Gateway
 const DEFAULT_GATEWAY_URL = 'https://api.textbee.dev/api/v1/gateway/send-sms';
+const DEFAULT_API_KEY = 'txb_teLnOINlJfnF7vHldUfA8eYMQ7VeWNNl';
+const DEFAULT_DEVICE_ID = '6ada27f7a4996b8ebf2e8de0';
 
 export async function sendWorkerDisbursementSms(payload: WorkerSmsPayload): Promise<{
   success: boolean;
@@ -110,8 +112,8 @@ export async function sendWorkerDisbursementSms(payload: WorkerSmsPayload): Prom
 
     // 1. Check if Free Android SIM Gateway is configured (Primary & Fallback)
     const gatewayUrl = process.env.SMS_GATEWAY_URL?.trim() || DEFAULT_GATEWAY_URL;
-    const primaryApiKey = process.env.SMS_GATEWAY_API_KEY?.trim();
-    const primaryDeviceId = process.env.SMS_GATEWAY_DEVICE_ID?.trim();
+    const primaryApiKey = process.env.SMS_GATEWAY_API_KEY?.trim() || DEFAULT_API_KEY;
+    const primaryDeviceId = process.env.SMS_GATEWAY_DEVICE_ID?.trim() || DEFAULT_DEVICE_ID;
 
     const fallbackApiKey = process.env.SMS_GATEWAY_FALLBACK_API_KEY?.trim();
     const fallbackDeviceId = process.env.SMS_GATEWAY_FALLBACK_DEVICE_ID?.trim();
