@@ -174,7 +174,6 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         } catch {}
 
         showToast('success', `Cash request for ${formatINR(numAmount)} sent to Main Office!`);
-        playAlertSound('cash_in');
         setShowCashRequestModal(false);
         setRequestAmount('');
         setRequestNote('');

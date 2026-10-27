@@ -10,6 +10,7 @@ export function PWARegistrar() {
       navigator.serviceWorker
         .register('/sw.js', { scope: '/' })
         .then((reg) => {
+          reg.update().catch(() => {});
           console.log('[FundFlow] Service Worker registered for notifications:', reg.scope);
           if (reg.waiting) {
             reg.waiting.postMessage({ type: 'SKIP_WAITING' });

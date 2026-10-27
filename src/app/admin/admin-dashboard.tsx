@@ -302,7 +302,6 @@ export function AdminDashboard({
 
       setFormSuccess(true);
       setFormLoading(false);
-      playAlertSound('cash_in');
       if (activeRequestId) {
         await updateCashRequestStatus(activeRequestId, 'approved');
         setActiveRequestId(null);
