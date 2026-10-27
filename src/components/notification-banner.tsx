@@ -8,7 +8,8 @@ interface NotificationBannerProps {
   className?: string;
 }
 
-export function NotificationBanner() {
+export function NotificationBanner(props?: NotificationBannerProps) {
+  void props;
   useEffect(() => {
     if (typeof window !== 'undefined' && 'Notification' in window) {
       if (getNotificationPermission() === 'default') {
