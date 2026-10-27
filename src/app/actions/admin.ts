@@ -3,6 +3,7 @@
 import { createAdminClient } from '@/lib/supabase/admin-client';
 import { createServerClient } from '@/lib/supabase/server-client';
 import { revalidatePath } from 'next/cache';
+import { broadcastNotificationAction } from '@/lib/realtime-broadcaster';
 
 export async function createFactory(state: any, formData: FormData) {
   const name = formData.get('name') as string;
@@ -140,6 +141,14 @@ export async function createOfficeDisbursement(state: any, formData: FormData) {
   if (error) {
     return { error: error.message };
   }
+
+  // Broadcast real-time notification to supervisor's phone
+  broadcastNotificationAction({
+    type: 'office_disbursement',
+    to_supervisor_id: supervisorId,
+    amount,
+    note: note,
+  }).catch((err) => console.warn('Broadcast notification failed:', err));
 
   revalidatePath('/admin');
   return { success: true };

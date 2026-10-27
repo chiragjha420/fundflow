@@ -53,7 +53,7 @@ export function playAlertSound(type: 'cash_in' | 'alert' | 'success' = 'cash_in'
       osc.start(now);
       osc.stop(now + 0.4);
     }
-  } catch (e) {
+  } catch {
     // Ignore audio autoplay restrictions
   }
 }
@@ -95,7 +95,9 @@ export async function sendFundFlowNotification(
 
   // 1. Play in-app audio chime
   if (options.soundType) {
-    playAlertSound(options.soundType);
+    try {
+      playAlertSound(options.soundType);
+    } catch {}
   }
 
   // 2. Mobile vibration pattern (200ms pulse, 100ms pause, 200ms pulse)
@@ -108,29 +110,62 @@ export async function sendFundFlowNotification(
   // 3. Native OS notification if permission granted
   if ('Notification' in window && Notification.permission === 'granted') {
     try {
-      // Use Service Worker registration if available (works on mobile background & lockscreen)
+      // Method A: Check for active Service Worker registration (critical for Android Chrome)
       if ('serviceWorker' in navigator) {
-        const registration = await navigator.serviceWorker.ready;
+        let registration: ServiceWorkerRegistration | null | undefined = null;
+        try {
+          registration = await Promise.race([
+            navigator.serviceWorker.getRegistration(),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 600))
+          ]);
+        } catch {}
+
         if (registration && registration.showNotification) {
           await registration.showNotification(title, {
             body: options.body,
             icon: '/icon.png',
             badge: '/icon.png',
-            tag: options.tag || 'fundflow-alert',
+            tag: options.tag || `fundflow-${Date.now()}`,
             data: { url: options.url || '/' },
+            vibrate: [200, 100, 200],
+          } as any);
+          return;
+        }
+
+        // Try posting message to active controller
+        if (navigator.serviceWorker.controller) {
+          navigator.serviceWorker.controller.postMessage({
+            type: 'SHOW_NOTIFICATION',
+            title,
+            options: {
+              body: options.body,
+              icon: '/icon.png',
+              badge: '/icon.png',
+              tag: options.tag || `fundflow-${Date.now()}`,
+              data: { url: options.url || '/' },
+              vibrate: [200, 100, 200],
+            }
           });
           return;
         }
       }
 
-      // Fallback for standard desktop Notification API
-      new Notification(title, {
-        body: options.body,
-        icon: '/icon.png',
-        tag: options.tag || 'fundflow-alert',
-      });
+      // Method B: Standard desktop browser Notification constructor fallback
+      try {
+        const notif = new Notification(title, {
+          body: options.body,
+          icon: '/icon.png',
+          tag: options.tag || `fundflow-${Date.now()}`,
+        });
+        notif.onclick = () => {
+          window.focus();
+          if (options.url) window.location.href = options.url;
+        };
+      } catch (desktopErr) {
+        console.warn('[FundFlow] Standard notification constructor failed:', desktopErr);
+      }
     } catch (e) {
-      console.warn('Could not display system notification:', e);
+      console.warn('[FundFlow] Could not display system notification:', e);
     }
   }
 }

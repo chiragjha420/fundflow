@@ -37,7 +37,7 @@ import {
 } from 'lucide-react';
 import { sendWorkerDisbursementSms } from '@/lib/sms';
 import { createCashRequest } from '@/app/actions/cash-requests';
-import { playAlertSound } from '@/lib/notifications';
+import { playAlertSound, sendFundFlowNotification } from '@/lib/notifications';
 import { NotificationBanner } from '@/components/notification-banner';
 import { compressImage } from '@/lib/image-compressor';
 import { CameraCaptureModal } from '@/components/camera-capture-modal';
@@ -257,6 +257,58 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       });
     }
   }, [supervisorId, pendingTxs]);
+
+  // Real-Time Broadcast Notification Listener (triggers phone vibration, chime & OS banner)
+  useEffect(() => {
+    if (!supervisorId) return;
+
+    const channel = supabase.channel('fundflow-notifications');
+
+    channel
+      .on('broadcast', { event: 'fundflow_alert' }, (msg: any) => {
+        const payload = msg?.payload;
+        if (!payload) return;
+
+        // 1. Office Disbursed Cash to this Supervisor!
+        if (payload.type === 'office_disbursement' && payload.to_supervisor_id === supervisorId) {
+          sendFundFlowNotification('💵 Office Cash Received!', {
+            body: `Main Office sent ${formatINR(payload.amount)}. Tap to confirm receipt on your dashboard.`,
+            soundType: 'cash_in',
+            url: '/supervisor',
+          });
+          showToast('success', `💵 Main Office sent ${formatINR(payload.amount)}!`);
+          queryClient.invalidateQueries({ queryKey: ['incoming-pending', supervisorId] });
+          queryClient.invalidateQueries({ queryKey: ['supervisor-balance', supervisorId] });
+        }
+
+        // 2. Peer Supervisor Transferred Cash to this Supervisor!
+        if (payload.type === 'supervisor_transfer' && payload.to_supervisor_id === supervisorId) {
+          sendFundFlowNotification('💸 Cash Transfer Received!', {
+            body: `${payload.from_supervisor_name || 'A supervisor'} transferred ${formatINR(payload.amount)}. Tap to confirm.`,
+            soundType: 'cash_in',
+            url: '/supervisor',
+          });
+          showToast('success', `💸 Transfer of ${formatINR(payload.amount)} received!`);
+          queryClient.invalidateQueries({ queryKey: ['incoming-pending', supervisorId] });
+          queryClient.invalidateQueries({ queryKey: ['supervisor-balance', supervisorId] });
+        }
+
+        // 3. Peer Supervisor Confirmed a Transfer sent by this Supervisor!
+        if (payload.type === 'receipt_confirmed' && payload.from_supervisor_id === supervisorId) {
+          sendFundFlowNotification('✅ Transfer Confirmed!', {
+            body: `${payload.to_supervisor_name || 'Supervisor'} confirmed receipt of ${formatINR(payload.amount)}.`,
+            soundType: 'success',
+            url: '/supervisor',
+          });
+          queryClient.invalidateQueries({ queryKey: ['supervisor-balance', supervisorId] });
+        }
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [supervisorId, supabase, queryClient]);
 
   const activePending = pendingTxs !== undefined ? pendingTxs : cachedPending;
 

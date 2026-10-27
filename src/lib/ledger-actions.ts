@@ -1,6 +1,7 @@
 import { createBrowserClient } from '@/lib/supabase/browser-client';
 import { addToSyncQueue } from '@/lib/offline-db';
 import { updateWorkerPhoneServer, updateWorkerServer, createWorkerServer } from '@/app/actions/workers';
+import { broadcastNotificationAction } from '@/lib/realtime-broadcaster';
 
 const supabase = createBrowserClient();
 
@@ -52,6 +53,7 @@ export async function disburseToWorkerAction(
       }
       throw new Error(error.message);
     }
+
     return { success: true, id: data };
   } else {
     await queueAction('disburse_to_worker', payload);
@@ -90,6 +92,17 @@ export async function transferToSupervisorAction(
       }
       throw new Error(error.message);
     }
+
+    // Broadcast instant alert to recipient supervisor's phone
+    broadcastNotificationAction({
+      type: 'supervisor_transfer',
+      from_supervisor_id: fromSupervisorId,
+      from_supervisor_name: 'A Supervisor',
+      to_supervisor_id: toSupervisorId,
+      amount,
+      note: cleanNote,
+    }).catch(() => {});
+
     return { success: true, id: data };
   } else {
     await queueAction('transfer_to_supervisor', payload);
@@ -132,6 +145,7 @@ export async function logExpenseAction(
       }
       throw new Error(error.message);
     }
+
     return { success: true, id: data };
   } else {
     await queueAction('log_expense', payload);

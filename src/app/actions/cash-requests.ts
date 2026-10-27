@@ -1,8 +1,8 @@
 'use server';
 
 import { createAdminClient } from '@/lib/supabase/admin-client';
-import { createServerClient } from '@/lib/supabase/server-client';
 import { revalidatePath } from 'next/cache';
+import { broadcastNotificationAction } from '@/lib/realtime-broadcaster';
 
 export interface CashRequest {
   id: string;
@@ -70,6 +70,16 @@ export async function createCashRequest(
       console.error('Error creating cash request:', error);
       return { success: false, error: error.message };
     }
+
+    // Broadcast real-time alert to Admin Panel
+    broadcastNotificationAction({
+      type: 'cash_request',
+      supervisor_id: supervisorId,
+      supervisor_name: supervisorName,
+      factory_name: factoryName,
+      amount,
+      note: cleanNote,
+    }).catch(err => console.warn('Broadcast cash request alert failed:', err));
 
     revalidatePath('/admin');
     revalidatePath('/supervisor');

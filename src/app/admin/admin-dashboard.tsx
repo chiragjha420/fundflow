@@ -6,7 +6,8 @@ import { createOfficeDisbursement } from '@/app/actions/admin';
 import { AdminAIChat } from './admin-ai-chat';
 import { NotificationBanner } from '@/components/notification-banner';
 import { getCashRequests, updateCashRequestStatus, CashRequest } from '@/app/actions/cash-requests';
-import { playAlertSound } from '@/lib/notifications';
+import { playAlertSound, sendFundFlowNotification } from '@/lib/notifications';
+import { createBrowserClient } from '@/lib/supabase/browser-client';
 import { HandCoins, Coins } from 'lucide-react';
 import { formatINR, parseHandoverNote } from '@/lib/utils';
 import { 
@@ -116,14 +117,59 @@ export function AdminDashboard({
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [adminViewingPhotoUrl, setAdminViewingPhotoUrl] = useState<string | null>(null);
 
-  // Load cash requests on mount & periodically
+  const supabase = createBrowserClient();
+
+  // Load cash requests on mount, poll fallback & subscribe to real-time broadcast alerts
   useEffect(() => {
     getCashRequests().then(setCashRequests);
+
+    // 1. Periodic poll fallback
     const interval = setInterval(() => {
       getCashRequests().then(setCashRequests);
     }, 15000);
-    return () => clearInterval(interval);
-  }, []);
+
+    // 2. Real-time Supabase Broadcast Channel Listener
+    const channel = supabase.channel('fundflow-notifications');
+    channel
+      .on('broadcast', { event: 'fundflow_alert' }, (msg: any) => {
+        const payload = msg?.payload;
+        if (!payload) return;
+
+        // A. Supervisor submitted a Cash Request
+        if (payload.type === 'cash_request') {
+          sendFundFlowNotification(`🔔 New Cash Request: ${formatINR(payload.amount)}`, {
+            body: `${payload.supervisor_name} (${payload.factory_name}) requested ${formatINR(payload.amount)}: "${payload.note}"`,
+            soundType: 'alert',
+            url: '/admin#cash-requests-section',
+          });
+          getCashRequests().then(setCashRequests);
+        }
+
+        // B. Supervisor confirmed an office disbursement
+        if (payload.type === 'receipt_confirmed' && payload.from_type === 'office') {
+          sendFundFlowNotification('✅ Cash Receipt Confirmed', {
+            body: `${payload.to_supervisor_name} confirmed receipt of ${formatINR(payload.amount)}.`,
+            soundType: 'success',
+            url: '/admin',
+          });
+        }
+
+        // C. Supervisor disputed a transaction
+        if (payload.type === 'receipt_disputed') {
+          sendFundFlowNotification('⚠️ Transaction Disputed', {
+            body: `${payload.to_supervisor_name} flagged an issue on a transaction: "${payload.note || 'Dispute raised'}"`,
+            soundType: 'alert',
+            url: '/admin',
+          });
+        }
+      })
+      .subscribe();
+
+    return () => {
+      clearInterval(interval);
+      supabase.removeChannel(channel);
+    };
+  }, [supabase]);
 
   const handleApproveRequest = (req: CashRequest) => {
     setDisburseSupervisorId(req.supervisor_id);
