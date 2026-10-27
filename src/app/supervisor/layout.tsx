@@ -70,8 +70,8 @@ export default function SupervisorLayout({
   const [currentUserEmail, setCurrentUserEmail] = React.useState<string | null>(null);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user?.email) setCurrentUserEmail(session.user.email);
+    supabase.auth.getSession().then((res: any) => {
+      if (res?.data?.session?.user?.email) setCurrentUserEmail(res.data.session.user.email);
     });
   }, [supabase]);
 

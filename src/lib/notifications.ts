@@ -1,12 +1,46 @@
 // FundFlow Real Web App Notifications System (PC & Mobile)
 
+let sharedAudioCtx: AudioContext | null = null;
+
+function getAudioContext(): AudioContext | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return null;
+    if (!sharedAudioCtx) {
+      sharedAudioCtx = new AudioContextClass();
+    }
+    if (sharedAudioCtx.state === 'suspended') {
+      sharedAudioCtx.resume().catch(() => {});
+    }
+    return sharedAudioCtx;
+  } catch {
+    return null;
+  }
+}
+
+// Auto-unlock audio on first touch/click anywhere on document
+if (typeof window !== 'undefined') {
+  const unlockAudio = () => {
+    const ctx = getAudioContext();
+    if (ctx && ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+  };
+  window.addEventListener('click', unlockAudio, { passive: true });
+  window.addEventListener('touchstart', unlockAudio, { passive: true });
+  window.addEventListener('keydown', unlockAudio, { passive: true });
+}
+
 // Play subtle, clean audio chime using Web Audio API (no external MP3 file needed)
 export function playAlertSound(type: 'cash_in' | 'alert' | 'success' = 'cash_in') {
   if (typeof window === 'undefined') return;
   try {
-    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-    if (!AudioContextClass) return;
-    const ctx = new AudioContextClass();
+    const ctx = getAudioContext();
+    if (!ctx) return;
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
 
     if (type === 'cash_in') {
       // Pleasant dual-tone chime (coin / payment received)
@@ -23,7 +57,7 @@ export function playAlertSound(type: 'cash_in' | 'alert' | 'success' = 'cash_in'
       osc2.frequency.setValueAtTime(880, now + 0.15);
       osc2.frequency.exponentialRampToValueAtTime(1174.66, now + 0.35); // D6
 
-      gain.gain.setValueAtTime(0.2, now);
+      gain.gain.setValueAtTime(0.3, now);
       gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
 
       osc1.connect(gain);
@@ -44,7 +78,7 @@ export function playAlertSound(type: 'cash_in' | 'alert' | 'success' = 'cash_in'
       osc.frequency.setValueAtTime(440, now);
       osc.frequency.setValueAtTime(659.25, now + 0.12);
 
-      gain.gain.setValueAtTime(0.25, now);
+      gain.gain.setValueAtTime(0.3, now);
       gain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
 
       osc.connect(gain);

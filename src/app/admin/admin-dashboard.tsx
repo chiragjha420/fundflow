@@ -118,17 +118,57 @@ export function AdminDashboard({
   const [adminViewingPhotoUrl, setAdminViewingPhotoUrl] = useState<string | null>(null);
 
   const supabase = createBrowserClient();
+  const knownRequestIds = React.useRef<Set<string> | null>(null);
+  const [inAppAlert, setInAppAlert] = useState<{ title: string; body: string } | null>(null);
 
-  // Load cash requests on mount, poll fallback & subscribe to real-time broadcast alerts
+  // Load cash requests on mount, active 3s watcher & subscribe to real-time broadcast alerts
   useEffect(() => {
-    getCashRequests().then(setCashRequests);
+    // Helper to process alerts
+    const handleNewRequestAlert = (req: CashRequest) => {
+      playAlertSound('alert');
+      if ('vibrate' in navigator) {
+        try { navigator.vibrate([200, 100, 200]); } catch {}
+      }
+      sendFundFlowNotification(`🔔 New Cash Request: ${formatINR(req.amount)}`, {
+        body: `${req.supervisor_name} (${req.factory_name}) requested ${formatINR(req.amount)}: "${req.note}"`,
+        soundType: 'alert',
+        url: '/admin#cash-requests-section',
+      });
+      setInAppAlert({
+        title: `🔔 New Cash Request: ${formatINR(req.amount)}`,
+        body: `${req.supervisor_name} (${req.factory_name}) requested cash: "${req.note}"`,
+      });
+      setTimeout(() => setInAppAlert(null), 8000);
+    };
 
-    // 1. Periodic poll fallback
-    const interval = setInterval(() => {
-      getCashRequests().then(setCashRequests);
-    }, 15000);
+    // 1. Initial fetch
+    getCashRequests().then((reqs) => {
+      setCashRequests(reqs);
+      if (knownRequestIds.current === null) {
+        knownRequestIds.current = new Set(reqs.map((r) => r.id));
+      }
+    });
 
-    // 2. Real-time Supabase Broadcast Channel Listener
+    // 2. High-reliability 3-second state watcher
+    const interval = setInterval(async () => {
+      try {
+        const reqs = await getCashRequests();
+        setCashRequests(reqs);
+        if (knownRequestIds.current !== null) {
+          const newPending = reqs.filter(
+            (r) => r.status === 'pending' && !knownRequestIds.current!.has(r.id)
+          );
+          if (newPending.length > 0) {
+            for (const r of newPending) {
+              knownRequestIds.current.add(r.id);
+              handleNewRequestAlert(r);
+            }
+          }
+        }
+      } catch {}
+    }, 3000);
+
+    // 3. Real-time Supabase Broadcast Channel Listener
     const channel = supabase.channel('fundflow-notifications');
     channel
       .on('broadcast', { event: 'fundflow_alert' }, (msg: any) => {
@@ -137,16 +177,32 @@ export function AdminDashboard({
 
         // A. Supervisor submitted a Cash Request
         if (payload.type === 'cash_request') {
+          if (payload.id && knownRequestIds.current?.has(payload.id)) {
+            return; // Already processed
+          }
+          if (payload.id && knownRequestIds.current) {
+            knownRequestIds.current.add(payload.id);
+          }
+          playAlertSound('alert');
+          if ('vibrate' in navigator) {
+            try { navigator.vibrate([200, 100, 200]); } catch {}
+          }
           sendFundFlowNotification(`🔔 New Cash Request: ${formatINR(payload.amount)}`, {
             body: `${payload.supervisor_name} (${payload.factory_name}) requested ${formatINR(payload.amount)}: "${payload.note}"`,
             soundType: 'alert',
             url: '/admin#cash-requests-section',
           });
+          setInAppAlert({
+            title: `🔔 New Cash Request: ${formatINR(payload.amount)}`,
+            body: `${payload.supervisor_name} (${payload.factory_name}) requested cash: "${payload.note}"`,
+          });
+          setTimeout(() => setInAppAlert(null), 8000);
           getCashRequests().then(setCashRequests);
         }
 
         // B. Supervisor confirmed an office disbursement
         if (payload.type === 'receipt_confirmed' && payload.from_type === 'office') {
+          playAlertSound('success');
           sendFundFlowNotification('✅ Cash Receipt Confirmed', {
             body: `${payload.to_supervisor_name} confirmed receipt of ${formatINR(payload.amount)}.`,
             soundType: 'success',
@@ -156,6 +212,7 @@ export function AdminDashboard({
 
         // C. Supervisor disputed a transaction
         if (payload.type === 'receipt_disputed') {
+          playAlertSound('alert');
           sendFundFlowNotification('⚠️ Transaction Disputed', {
             body: `${payload.to_supervisor_name} flagged an issue on a transaction: "${payload.note || 'Dispute raised'}"`,
             soundType: 'alert',
@@ -616,6 +673,25 @@ export function AdminDashboard({
     <div className="space-y-6">
       {/* Real-time Notifications Banner */}
       <NotificationBanner role="admin" />
+
+      {/* Floating In-App Real-Time Alert Card */}
+      {inAppAlert && (
+        <div className="fixed top-4 right-4 z-50 max-w-md bg-slate-900 border-2 border-emerald-500 text-white p-4 rounded-xl shadow-2xl flex items-start gap-3 transition-all">
+          <div className="h-9 w-9 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0 font-bold text-lg">
+            🔔
+          </div>
+          <div className="flex-1">
+            <h4 className="text-sm font-black text-white">{inAppAlert.title}</h4>
+            <p className="text-xs text-slate-300 mt-0.5">{inAppAlert.body}</p>
+          </div>
+          <button
+            onClick={() => setInAppAlert(null)}
+            className="text-slate-400 hover:text-white p-1 text-xs font-bold"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Overview stats */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">

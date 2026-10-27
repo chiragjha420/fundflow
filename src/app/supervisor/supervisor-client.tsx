@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createBrowserClient } from '@/lib/supabase/browser-client';
 import { getOfflineCache, setOfflineCache } from '@/lib/offline-db';
@@ -263,7 +263,36 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       ? initialData.pendingTxs
       : (supervisorId ? getStoredJson<PendingTx[]>(`fundflow_cached_pending_${supervisorId}`, []) : []),
     enabled: !!supervisorId,
+    refetchInterval: 3000,
   });
+
+  const knownPendingTxIds = useRef<Set<string> | null>(null);
+
+  // High-reliability watcher: Triggers sound, vibration and alert if incoming cash appears
+  useEffect(() => {
+    if (!pendingTxs) return;
+    if (knownPendingTxIds.current === null) {
+      knownPendingTxIds.current = new Set(pendingTxs.map((t) => t.id));
+      return;
+    }
+
+    const newTxs = pendingTxs.filter((t) => !knownPendingTxIds.current!.has(t.id));
+    if (newTxs.length > 0) {
+      for (const t of newTxs) {
+        knownPendingTxIds.current.add(t.id);
+        playAlertSound('cash_in');
+        if ('vibrate' in navigator) {
+          try { navigator.vibrate([200, 100, 200]); } catch {}
+        }
+        sendFundFlowNotification('💵 Office Cash Received!', {
+          body: `Main Office sent ${formatINR(t.amount)}. Tap to confirm on your dashboard.`,
+          soundType: 'cash_in',
+          url: '/supervisor',
+        });
+        showToast('success', `💵 Main Office sent ${formatINR(t.amount)}! Please confirm receipt below.`);
+      }
+    }
+  }, [pendingTxs]);
 
   const [cachedPending, setCachedPending] = useState<PendingTx[]>([]);
   useEffect(() => {
