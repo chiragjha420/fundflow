@@ -9,7 +9,8 @@ import { updateWorkerAction } from '@/lib/ledger-actions';
 import { uploadWorkerPhotoAction } from '@/app/actions/upload-actions';
 import { 
   getFactoryWorkersAction, 
-  getFactoryWorkerDisbursementsAction, 
+  getFactoryWorkerDisbursementsAction,
+  getWorkerDisbursementsAction, 
   deleteWorkerServer 
 } from '@/app/actions/workers';
 import { compressImage } from '@/lib/image-compressor';
@@ -142,19 +143,18 @@ export function SupervisorWorkersClientPage() {
     enabled: !!factoryId,
   });
 
-  // 3. Fetch Worker Payment History
+  // 3. Fetch Worker Payment History (via Server Action for co-supervisor sync)
   const { data: paymentHistory, isLoading: historyLoading } = useQuery({
     queryKey: ['worker-payments', editingWorker?.worker_id],
     queryFn: async () => {
       if (!editingWorker?.worker_id) return [];
-      const { data, error } = await supabase
-        .from('cash_transactions')
-        .select('id, amount, note, created_at, status')
-        .eq('to_worker_id', editingWorker.worker_id)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      return data as WorkerPayment[];
+      try {
+        const data = await getWorkerDisbursementsAction(editingWorker.worker_id);
+        return data as WorkerPayment[];
+      } catch (err) {
+        console.error('Failed to fetch worker payments:', err);
+        return [];
+      }
     },
     enabled: !!editingWorker?.worker_id,
   });

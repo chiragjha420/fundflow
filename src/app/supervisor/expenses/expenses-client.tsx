@@ -5,25 +5,16 @@ import { useQuery } from '@tanstack/react-query';
 import { createBrowserClient } from '@/lib/supabase/browser-client';
 import { getOfflineCache, setOfflineCache } from '@/lib/offline-db';
 import { formatINR } from '@/lib/utils';
+import { getFactoryExpensesAction, FactoryExpense } from '@/app/actions/expenses';
 import { 
   Search, 
   IndianRupee, 
   Calendar, 
   X, 
   RefreshCw,
-  Eye
+  Eye,
+  User
 } from 'lucide-react';
-
-interface Expense {
-  id: string;
-  supervisor_id: string;
-  factory_id: string;
-  amount: number;
-  category: string;
-  note: string;
-  photo_url: string | null;
-  created_at: string;
-}
 
 export function SupervisorExpensesClientPage() {
   const supabase = createBrowserClient();
@@ -58,33 +49,34 @@ export function SupervisorExpensesClientPage() {
   });
 
   const supervisorId = supervisor?.id;
+  const factoryId = supervisor?.factory_id;
 
-  // 2. Fetch Expenses list
+  // 2. Fetch Expenses list for the entire factory (shared between co-supervisors)
   const { data: expenses, isLoading } = useQuery({
-    queryKey: ['supervisor-expenses', supervisorId],
+    queryKey: ['factory-expenses', factoryId],
     queryFn: async () => {
-      if (!supervisorId) return [];
-      const { data, error } = await supabase
-        .from('expenses')
-        .select('*')
-        .eq('supervisor_id', supervisorId)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      await setOfflineCache(`expenses-${supervisorId}`, data);
-      return data as Expense[];
+      if (!factoryId) return [];
+      try {
+        const data = await getFactoryExpensesAction(factoryId);
+        await setOfflineCache(`factory-expenses-${factoryId}`, data);
+        return data;
+      } catch (err) {
+        console.warn('Failed to fetch factory expenses, falling back to offline cache:', err);
+        const cached = await getOfflineCache<FactoryExpense[]>(`factory-expenses-${factoryId}`);
+        return cached || [];
+      }
     },
-    enabled: !!supervisorId,
+    enabled: !!factoryId,
   });
 
-  const [cachedExpenses, setCachedExpenses] = useState<Expense[]>([]);
+  const [cachedExpenses, setCachedExpenses] = useState<FactoryExpense[]>([]);
   useEffect(() => {
-    if (supervisorId) {
-      getOfflineCache<Expense[]>(`expenses-${supervisorId}`).then(data => {
+    if (factoryId) {
+      getOfflineCache<FactoryExpense[]>(`factory-expenses-${factoryId}`).then(data => {
         if (data) setCachedExpenses(data);
       });
     }
-  }, [supervisorId, expenses]);
+  }, [factoryId, expenses]);
 
   const activeExpenses = expenses !== undefined ? expenses : cachedExpenses;
 
@@ -96,8 +88,8 @@ export function SupervisorExpensesClientPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-xl font-bold tracking-tight text-slate-900">Logged Expenses Log</h1>
-        <p className="text-xs text-slate-500 mt-0.5">View your previously submitted expenses and receipts.</p>
+        <h1 className="text-xl font-bold tracking-tight text-slate-900">Factory Expense Log</h1>
+        <p className="text-xs text-slate-500 mt-0.5">View previously submitted expenses and receipts across your factory.</p>
       </div>
 
       {/* Expenses List Panel */}
@@ -145,15 +137,23 @@ export function SupervisorExpensesClientPage() {
                 </div>
 
                 <div className="flex items-center justify-between text-[10px] text-slate-400 border-t border-slate-100/50 pt-2">
-                  <div className="flex items-center gap-1 font-semibold">
-                    <Calendar className="h-3 w-3 text-slate-400" />
-                    <span>
-                      {new Date(exp.created_at).toLocaleDateString(undefined, { 
-                        day: 'numeric', 
-                        month: 'short', 
-                        year: 'numeric' 
-                      })}
-                    </span>
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1 font-semibold">
+                      <Calendar className="h-3 w-3 text-slate-400" />
+                      <span>
+                        {new Date(exp.created_at).toLocaleDateString(undefined, { 
+                          day: 'numeric', 
+                          month: 'short', 
+                          year: 'numeric' 
+                        })}
+                      </span>
+                    </div>
+                    {exp.supervisors?.name && (
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 font-bold text-[10px]">
+                        <User className="h-2.5 w-2.5 text-slate-500" />
+                        {exp.supervisors.name}
+                      </span>
+                    )}
                   </div>
 
                   {exp.photo_url ? (

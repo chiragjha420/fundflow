@@ -42,7 +42,7 @@ import { NotificationBanner } from '@/components/notification-banner';
 import { compressImage } from '@/lib/image-compressor';
 import { CameraCaptureModal } from '@/components/camera-capture-modal';
 import { uploadHandoverPhotoAction, uploadWorkerPhotoAction, uploadExpensePhotoAction } from '@/app/actions/upload-actions';
-import { getFactoryWorkersAction } from '@/app/actions/workers';
+import { getFactoryWorkersAction, getFactoryWorkerDisbursementsAction } from '@/app/actions/workers';
 
 interface Worker {
   worker_id: string;
@@ -332,23 +332,19 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const activeOtherSups = (otherSupervisors !== undefined ? otherSupervisors : cachedSups)
     .filter(s => s.id !== supervisorId);
 
-  // 5. Fetch Recent Disbursements by this supervisor (for live feedback & handover proof viewing)
+  // 5. Fetch Recent Disbursements for this factory (unified across co-supervisors)
   const { data: recentDisbursements } = useQuery({
-    queryKey: ['recent-disbursements', supervisorId],
+    queryKey: ['recent-disbursements', factoryId],
     queryFn: async () => {
-      if (!supervisorId) return [];
-      const { data, error } = await supabase
-        .from('cash_transactions')
-        .select('id, amount, note, created_at, to_worker_id, to_work:to_worker_id(name, active)')
-        .eq('from_supervisor_id', supervisorId)
-        .eq('type', 'supervisor_to_worker')
-        .order('created_at', { ascending: false })
-        .limit(10);
-
-      if (error || !data) return [];
-      return data.filter((tx: any) => tx.to_work && tx.to_work.active !== false).slice(0, 5);
+      if (!factoryId) return [];
+      try {
+        const data = await getFactoryWorkerDisbursementsAction(factoryId);
+        return data.filter((tx: any) => tx.to_work && tx.to_work.active !== false).slice(0, 5);
+      } catch (err) {
+        return [];
+      }
     },
-    enabled: !!supervisorId,
+    enabled: !!factoryId,
   });
 
   // Handle Receipt Confirmation
@@ -474,7 +470,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     // 5. OPTIMISTIC CACHE UPDATE: Prepend to recent disbursements
     const tempTxId = `temp-${Date.now()}`;
     const cleanNoteBase = note?.trim() || 'Cash Advance';
-    queryClient.setQueryData(['recent-disbursements', supervisorId], (old: any[] | undefined) => {
+    queryClient.setQueryData(['recent-disbursements', factoryId], (old: any[] | undefined) => {
       const optimisticTx = {
         id: tempTxId,
         amount,
@@ -537,7 +533,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
         // Silent cache reconciliation after 2.5 seconds
         setTimeout(() => {
-          queryClient.invalidateQueries({ queryKey: ['recent-disbursements', supervisorId] });
+          queryClient.invalidateQueries({ queryKey: ['recent-disbursements', factoryId] });
           queryClient.invalidateQueries({ queryKey: ['workers', factoryId] });
           queryClient.invalidateQueries({ queryKey: ['supervisor-balance', supervisorId] });
         }, 2500);
@@ -548,7 +544,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         // Revert optimistic cache on hard failure
         queryClient.invalidateQueries({ queryKey: ['supervisor-balance', supervisorId] });
         queryClient.invalidateQueries({ queryKey: ['workers', factoryId] });
-        queryClient.invalidateQueries({ queryKey: ['recent-disbursements', supervisorId] });
+        queryClient.invalidateQueries({ queryKey: ['recent-disbursements', factoryId] });
       }
     })();
   };

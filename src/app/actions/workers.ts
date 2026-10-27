@@ -69,7 +69,7 @@ export async function getFactoryWorkerDisbursementsAction(factoryId: string): Pr
     // 2. Fetch all disbursements to these workers
     const { data: txs, error } = await admin
       .from('cash_transactions')
-      .select('id, amount, note, created_at, status, to_worker_id, from_supervisor_id')
+      .select('id, amount, note, created_at, status, to_worker_id, from_supervisor_id, to_work:to_worker_id(name, active)')
       .eq('type', 'supervisor_to_worker')
       .in('to_worker_id', workerIds)
       .order('created_at', { ascending: false });
@@ -82,6 +82,34 @@ export async function getFactoryWorkerDisbursementsAction(factoryId: string): Pr
     return txs || [];
   } catch (err) {
     console.error('getFactoryWorkerDisbursementsAction exception:', err);
+    return [];
+  }
+}
+
+/**
+ * Fetch all disbursements for a single worker using admin client.
+ * Allows co-supervisors to view each other's historical payments to the same worker.
+ */
+export async function getWorkerDisbursementsAction(workerId: string): Promise<any[]> {
+  try {
+    if (!workerId) return [];
+    const admin = createAdminClient();
+
+    const { data: txs, error } = await admin
+      .from('cash_transactions')
+      .select('id, amount, note, created_at, status, to_worker_id, from_supervisor_id')
+      .eq('type', 'supervisor_to_worker')
+      .eq('to_worker_id', workerId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('getWorkerDisbursementsAction error:', error);
+      return [];
+    }
+
+    return txs || [];
+  } catch (err) {
+    console.error('getWorkerDisbursementsAction exception:', err);
     return [];
   }
 }
