@@ -27,12 +27,9 @@ export async function disburseToWorkerAction(
   workerId: string,
   supervisorId: string,
   amount: number,
-  note: string
+  note?: string
 ) {
-  const cleanNote = note?.trim();
-  if (!cleanNote) {
-    throw new Error('Notes/remarks are required for disbursement.');
-  }
+  const cleanNote = note?.trim() || 'Cash Advance';
 
   const payload = {
     p_worker_id: workerId,

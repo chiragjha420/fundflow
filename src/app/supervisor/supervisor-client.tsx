@@ -32,7 +32,8 @@ import {
   Smartphone,
   Phone,
   Upload,
-  Eye
+  Eye,
+  Zap
 } from 'lucide-react';
 import { sendWorkerDisbursementSms } from '@/lib/sms';
 import { createCashRequest } from '@/app/actions/cash-requests';
@@ -50,6 +51,7 @@ interface Worker {
   factory_id: string;
   supervisor_id: string;
   opening_advance: number;
+  total_cash_disbursed?: number;
   running_advance: number;
   active: boolean;
 }
@@ -117,7 +119,14 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   // Quick Amount Preset state for Disbursal
   const [disburseAmount, setDisburseAmount] = useState<string>('');
   const [selectedWorkerId, setSelectedWorkerId] = useState<string>('');
+  const [disburseNote, setDisburseNote] = useState<string>('');
   const [lastDisburseSms, setLastDisburseSms] = useState<{ workerName: string; smsUri: string } | null>(null);
+
+  // Fast Line Payout Mode & Quick Worker Search States
+  const [lineMode, setLineMode] = useState<boolean>(false);
+  const [lineModeCount, setLineModeCount] = useState<number>(0);
+  const [workerSearchTerm, setWorkerSearchTerm] = useState<string>('');
+  const [isQuickAddingWorker, setIsQuickAddingWorker] = useState<boolean>(false);
 
   // Missing Worker Phone Modal (Prompts supervisor when giving money to worker without phone)
   const [showPhoneModal, setShowPhoneModal] = useState<boolean>(false);
@@ -284,6 +293,15 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
   const activeWorkers = workers !== undefined ? workers : cachedWorkers;
 
+  // Real-time worker filtering for the Disburse selector
+  const filteredSelectWorkers = activeWorkers.filter(w => {
+    if (!workerSearchTerm.trim()) return true;
+    const q = workerSearchTerm.toLowerCase();
+    return w.worker_name.toLowerCase().includes(q) || (w.worker_phone && w.worker_phone.includes(q));
+  });
+
+  const selectedWorker = activeWorkers.find(w => w.worker_id === selectedWorkerId);
+
   // 4. Fetch Active Supervisors (for transfer selection)
   const { data: otherSupervisors } = useQuery({
     queryKey: ['supervisors-list'],
@@ -380,86 +398,159 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     }
   };
 
-  // Helper to execute disbursement and dispatch SMS
-  const executeDisbursement = async (
-    targetWorker: Worker,
-    amount: number,
-    note: string,
-    overridePhone?: string
-  ) => {
-    // Clear any previous leftover manual SMS dispatch pill
+  // 1-Tap Quick Add Worker right inside the Disburse selector
+  const handleQuickAddWorker = async (name: string) => {
+    const cleanName = name.trim();
+    if (!cleanName || !factoryId || !supervisorId) return;
+    setIsQuickAddingWorker(true);
+    const newId = crypto.randomUUID();
+    const newWorker: Worker = {
+      worker_id: newId,
+      worker_name: cleanName,
+      worker_phone: null,
+      worker_photo_url: null,
+      factory_id: factoryId,
+      supervisor_id: supervisorId,
+      opening_advance: 0,
+      running_advance: 0,
+      active: true,
+    };
+
+    // Optimistically add to workers query data immediately (0ms)
+    queryClient.setQueryData(['workers', factoryId], (old: Worker[] | undefined) => {
+      return [newWorker, ...(old || [])];
+    });
+
+    // Select this new worker immediately
+    setSelectedWorkerId(newId);
+    setWorkerSearchTerm('');
+    setIsQuickAddingWorker(false);
+    showToast('success', `Worker "${cleanName}" created! Enter amount to disburse.`);
+
+    // Background DB insert
+    createWorkerAction(factoryId, supervisorId, cleanName, null, null, 0)
+      .catch((err) => {
+        console.warn('Background worker creation failed:', err);
+        showToast('error', `Failed to save worker to server: ${err.message}`);
+      });
+  };
+
+  // Handler for Cash Handover Photo Capture or Skip (Optimistic 0ms UI)
+  const handleHandoverCapture = async (file: File | null) => {
+    if (!pendingDisburse) return;
+    const { targetWorker, amount, note, overridePhone } = pendingDisburse;
+    
+    // 1. Immediately close modal, unblock UI, and reset form inputs (0ms)
+    setShowHandoverModal(false);
+    setPendingDisburse(null);
+    setDisburseAmount('');
+    setSelectedWorkerId('');
+    if (!lineMode) {
+      setDisburseNote('');
+    }
+    setWorkerSearchTerm('');
+    setActionLoading(false);
     setLastDisburseSms(null);
 
-    const res = await disburseToWorkerAction(targetWorker.worker_id, supervisorId!, amount, note);
-    if (res.queued) {
-      setActionMessage({ type: 'success', text: 'Offline: Disbursement queued. Worker balance will sync later.' });
-    } else {
-      setActionMessage({ type: 'success', text: `Disbursement of ${formatINR(amount)} logged successfully.` });
-      playAlertSound('cash_in');
+    // 2. Track line mode count
+    setLineModeCount(prev => prev + 1);
 
-      // Free Automated Text Message to Worker (strictly confirms amount received)
-      const phoneToUse = overridePhone || targetWorker.worker_phone;
-      if (phoneToUse) {
-        try {
-          const cleanNoteOnly = parseHandoverNote(note).note;
-          const smsRes = await sendWorkerDisbursementSms({
+    // 3. OPTIMISTIC CACHE UPDATE: Deduct supervisor available balance
+    queryClient.setQueryData(['supervisor-balance', supervisorId], (old: number | undefined) => {
+      if (typeof old === 'number') return Math.max(0, old - amount);
+      return old;
+    });
+
+    // 4. OPTIMISTIC CACHE UPDATE: Update worker running advance
+    queryClient.setQueryData(['workers', factoryId], (old: Worker[] | undefined) => {
+      if (!old) return old;
+      return old.map(w => w.worker_id === targetWorker.worker_id ? {
+        ...w,
+        running_advance: Number(w.running_advance) + amount,
+        total_cash_disbursed: (Number(w.total_cash_disbursed) || 0) + amount,
+      } : w);
+    });
+
+    // 5. OPTIMISTIC CACHE UPDATE: Prepend to recent disbursements
+    const tempTxId = `temp-${Date.now()}`;
+    const cleanNoteBase = note?.trim() || 'Cash Advance';
+    queryClient.setQueryData(['recent-disbursements', supervisorId], (old: any[] | undefined) => {
+      const optimisticTx = {
+        id: tempTxId,
+        amount,
+        note: cleanNoteBase,
+        created_at: new Date().toISOString(),
+        to_worker_id: targetWorker.worker_id,
+        to_work: { name: targetWorker.worker_name, active: true },
+      };
+      return [optimisticTx, ...(old || [])].slice(0, 10);
+    });
+
+    // 6. INSTANT AUDIO & TOAST CONFIRMATION (0ms)
+    playAlertSound('cash_in');
+    showToast('success', `₹${amount.toLocaleString('en-IN')} paid to ${targetWorker.worker_name}!`);
+
+    // 7. ASYNCHRONOUS BACKGROUND WORK (Photo Upload + RPC + SMS + Silent Invalidation)
+    (async () => {
+      try {
+        let finalNote = cleanNoteBase;
+
+        // Background photo upload if file was captured
+        if (file && navigator.onLine) {
+          try {
+            const formData = new FormData();
+            formData.append('file', file);
+            const uploadRes = await uploadHandoverPhotoAction(formData);
+            if (uploadRes.success && uploadRes.publicUrl) {
+              finalNote = `${finalNote} [handover_photo:${uploadRes.publicUrl}]`;
+            }
+          } catch (uploadErr) {
+            console.warn('Background photo upload warning:', uploadErr);
+          }
+        }
+
+        // Background Ledger RPC
+        await disburseToWorkerAction(targetWorker.worker_id, supervisorId!, amount, finalNote);
+
+        // Background Free SMS Dispatch (Fire-and-forget)
+        const phoneToUse = overridePhone || targetWorker.worker_phone;
+        if (phoneToUse) {
+          const cleanNoteOnly = parseHandoverNote(finalNote).note;
+          sendWorkerDisbursementSms({
             workerPhone: phoneToUse,
             workerName: targetWorker.worker_name,
             amount,
             supervisorName: supervisor?.name,
             factoryName: (supervisor?.factories as any)?.name,
             note: cleanNoteOnly,
-          });
-
-          if (smsRes.sentViaGateway) {
-            // TextBee sent it automatically! Clear dispatch pill and show confirmation toast
-            setLastDisburseSms(null);
-            showToast('success', `Free automated SMS sent to ${targetWorker.worker_name} (${phoneToUse})!`);
-          } else if (smsRes.smsUri) {
-            // Only if gateway failed or offline, show the fallback manual dispatch pill
-            setLastDisburseSms({
-              workerName: targetWorker.worker_name,
-              smsUri: smsRes.smsUri,
-            });
-          }
-        } catch (smsErr) {
-          console.warn('SMS dispatch error:', smsErr);
+          }).then((smsRes) => {
+            if (smsRes.sentViaGateway) {
+              showToast('success', `Free SMS sent to ${targetWorker.worker_name} (${phoneToUse})!`);
+            } else if (smsRes.smsUri) {
+              setLastDisburseSms({
+                workerName: targetWorker.worker_name,
+                smsUri: smsRes.smsUri,
+              });
+            }
+          }).catch(console.warn);
         }
+
+        // Silent cache reconciliation after 2.5 seconds
+        setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: ['recent-disbursements', supervisorId] });
+          queryClient.invalidateQueries({ queryKey: ['workers', factoryId] });
+          queryClient.invalidateQueries({ queryKey: ['supervisor-balance', supervisorId] });
+        }, 2500);
+
+      } catch (e: any) {
+        console.error('Background disbursement failed:', e);
+        showToast('error', e.message || 'Failed to sync disbursement to server.');
+        // Revert optimistic cache on hard failure
+        queryClient.invalidateQueries({ queryKey: ['supervisor-balance', supervisorId] });
+        queryClient.invalidateQueries({ queryKey: ['workers', factoryId] });
+        queryClient.invalidateQueries({ queryKey: ['recent-disbursements', supervisorId] });
       }
-    }
-    queryClient.invalidateQueries();
-  };
-
-  // Handler for Cash Handover Photo Capture or Skip
-  const handleHandoverCapture = async (file: File | null) => {
-    if (!pendingDisburse) return;
-    const { targetWorker, amount, note, overridePhone } = pendingDisburse;
-    setShowHandoverModal(false);
-    setActionLoading(true);
-
-    let finalNote = note;
-
-    if (file && navigator.onLine) {
-      try {
-        const formData = new FormData();
-        formData.append('file', file);
-        const uploadRes = await uploadHandoverPhotoAction(formData);
-
-        if (uploadRes.success && uploadRes.publicUrl) {
-          finalNote = `${note} [handover_photo:${uploadRes.publicUrl}]`;
-        } else {
-          console.warn('Handover photo server upload warning:', uploadRes.error);
-        }
-      } catch (err) {
-        console.warn('Handover photo upload exception:', err);
-      }
-    }
-
-    setPendingDisburse(null);
-    setDisburseAmount('');
-    setSelectedWorkerId('');
-    await executeDisbursement(targetWorker, amount, finalNote, overridePhone);
-    setActionLoading(false);
+    })();
   };
 
   // Handler for Missing Phone Modal (Save phone & disburse, or skip)
@@ -533,10 +624,14 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       if (activeTab === 'disburse') {
         const workerId = selectedWorkerId || (formData.get('workerId') as string);
         const amount = parseFloat(formData.get('amount') as string);
-        const note = (formData.get('note') as string)?.trim();
+        const note = (formData.get('note') as string)?.trim() || disburseNote.trim() || 'Cash Advance';
 
-        if (!workerId || isNaN(amount) || amount <= 0 || !note) {
-          throw new Error('Please select a worker, specify positive amount, and enter notes/remarks.');
+        if (!workerId) {
+          throw new Error('Please choose a worker to disburse cash to.');
+        }
+
+        if (isNaN(amount) || amount <= 0) {
+          throw new Error('Please enter a valid disbursement amount.');
         }
 
         const targetWorker = activeWorkers.find(w => w.worker_id === workerId);
@@ -544,8 +639,8 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           throw new Error('Selected worker not found in active list.');
         }
 
-        // POPUP: If worker has no phone, prompt supervisor to add phone or skip
-        if (!targetWorker.worker_phone || targetWorker.worker_phone.trim() === '') {
+        // If Fast Line Mode is enabled, skip the interrupting phone modal so queue flows fast!
+        if (!lineMode && (!targetWorker.worker_phone || targetWorker.worker_phone.trim() === '')) {
           setPhoneModalWorker(targetWorker);
           setPhoneModalDisburseDetails({
             workerId,
@@ -567,7 +662,6 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         });
         setShowHandoverModal(true);
         setActionLoading(false);
-        form.reset();
       } else if (activeTab === 'transfer') {
         const toSupervisorId = formData.get('toSupervisorId') as string;
         const amount = parseFloat(formData.get('amount') as string);
@@ -719,11 +813,27 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         }
       }
 
+      // Optimistically add to workers query data
+      const newWorker: Worker = {
+        worker_id: res.id || crypto.randomUUID(),
+        worker_name: name,
+        worker_phone: phone,
+        worker_photo_url: photoUrl,
+        factory_id: factoryId!,
+        supervisor_id: supervisorId!,
+        opening_advance: openingAdvance,
+        running_advance: openingAdvance,
+        active: true,
+      };
+      queryClient.setQueryData(['workers', factoryId], (old: Worker[] | undefined) => {
+        return [newWorker, ...(old || [])];
+      });
+
       form.reset();
       setPhotoFile(null);
       setPhotoPreview(null);
       setShowAddWorker(false);
-      queryClient.invalidateQueries();
+      queryClient.invalidateQueries({ queryKey: ['workers', factoryId] });
     } catch (e: any) {
       setActionMessage({ type: 'error', text: e.message });
     } finally {
@@ -1160,71 +1270,158 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
             {/* DISBURSE FORM */}
             {activeTab === 'disburse' && (
               <>
+                {/* Fast Line Payout Mode Bar */}
+                <div className="flex items-center justify-between p-2.5 bg-slate-900 text-white rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <div className={`h-7 w-7 rounded-full flex items-center justify-center shrink-0 ${
+                      lineMode ? 'bg-amber-400 text-slate-950 font-black' : 'bg-slate-800 text-slate-400'
+                    }`}>
+                      <Zap className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold block">Fast Line Mode</span>
+                      <span className="text-[10px] text-slate-400 block">
+                        {lineMode ? `${lineModeCount} paid • Auto-readies next worker` : 'For paying workers in queue'}
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setLineMode(!lineMode)}
+                    className={`px-3 py-1 text-xs font-bold rounded transition-colors ${
+                      lineMode 
+                        ? 'bg-amber-400 text-slate-950 font-black' 
+                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                    }`}
+                  >
+                    {lineMode ? 'ACTIVE' : 'TURN ON'}
+                  </button>
+                </div>
+
+                {/* Worker Selector with Live Search & 1-Tap Quick Add */}
                 <div>
-                  <div className="flex items-center justify-between">
-                    <label htmlFor="workerId" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
                       Select Worker
                     </label>
-                    {selectedWorkerId && (
-                      <span className="text-[11px] text-slate-500 font-medium">
-                        {activeWorkers.find(w => w.worker_id === selectedWorkerId)?.worker_name}
+                    {selectedWorkerId ? (
+                      <button
+                        type="button"
+                        onClick={() => { setSelectedWorkerId(''); setWorkerSearchTerm(''); }}
+                        className="text-[11px] text-indigo-600 hover:text-indigo-800 font-bold"
+                      >
+                        Change Worker
+                      </button>
+                    ) : (
+                      <span className="text-[11px] text-slate-400 font-medium">
+                        {activeWorkers.length} active workers
                       </span>
                     )}
                   </div>
-                  <select
-                    id="workerId"
-                    name="workerId"
-                    required
-                    disabled={actionLoading}
-                    value={selectedWorkerId}
-                    onChange={(e) => setSelectedWorkerId(e.target.value)}
-                    className="mt-1 block w-full rounded border-slate-300 px-3 py-2 text-slate-950 text-sm min-h-[44px] bg-white font-medium"
-                  >
-                    <option value="">Choose worker...</option>
-                    {activeWorkers.map((w) => (
-                      <option key={w.worker_id} value={w.worker_id}>
-                        {w.worker_name} ({formatINR(w.running_advance)} advance){!w.worker_phone ? ' — ⚠️ No Phone' : ''}
-                      </option>
-                    ))}
-                  </select>
 
-                  {/* Selected Worker Phone Status Indicator */}
-                  {(() => {
-                    const target = activeWorkers.find(w => w.worker_id === selectedWorkerId);
-                    if (!target) return null;
+                  {!selectedWorkerId ? (
+                    <div className="space-y-2">
+                      {/* Search / Filter Input */}
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={workerSearchTerm}
+                          onChange={(e) => setWorkerSearchTerm(e.target.value)}
+                          placeholder="Search name or type new name..."
+                          className="w-full pl-9 pr-3 py-2 rounded border border-slate-300 text-sm min-h-[44px] text-slate-950 bg-white focus:ring-2 focus:ring-slate-900 focus:border-slate-900"
+                        />
+                      </div>
 
-                    if (target.worker_phone) {
-                      return (
-                        <div className="mt-2 flex items-center gap-1.5 text-xs text-emerald-800 bg-emerald-50/80 border border-emerald-200/80 px-2.5 py-1.5 rounded">
-                          <Smartphone className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
-                          <span>SMS alerts active: <strong>{target.worker_phone}</strong></span>
-                        </div>
-                      );
-                    } else {
-                      return (
-                        <div className="mt-2 flex items-center justify-between text-xs text-amber-800 bg-amber-50 border border-amber-200 px-2.5 py-1.5 rounded">
-                          <div className="flex items-center gap-1.5">
-                            <AlertCircle className="h-3.5 w-3.5 text-amber-600 shrink-0" />
-                            <span>No phone saved (SMS receipt won't be sent)</span>
+                      {/* Filtered Dropdown / Quick List */}
+                      <div className="border border-slate-200 rounded-lg max-h-48 overflow-y-auto divide-y divide-slate-100 bg-white shadow-xs">
+                        {/* 1-Tap Quick Add Button if typed name isn't an exact match */}
+                        {workerSearchTerm.trim().length > 1 && !activeWorkers.some(w => w.worker_name.toLowerCase() === workerSearchTerm.trim().toLowerCase()) && (
+                          <div className="p-2 bg-indigo-50/70 border-b border-indigo-100">
+                            <button
+                              type="button"
+                              onClick={() => handleQuickAddWorker(workerSearchTerm.trim())}
+                              disabled={isQuickAddingWorker}
+                              className="w-full py-2 px-3 rounded bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white text-xs font-bold flex items-center justify-between transition-colors shadow-xs"
+                            >
+                              <span className="flex items-center gap-1.5">
+                                <UserPlus className="h-4 w-4" />
+                                <span>Quick Add & Pay "{workerSearchTerm.trim()}"</span>
+                              </span>
+                              <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded uppercase tracking-wider">1-Tap</span>
+                            </button>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setPhoneModalWorker(target);
-                              setPhoneModalDisburseDetails(null);
-                              setPhoneModalInput('');
-                              setPhoneModalError('');
-                              setShowPhoneModal(true);
-                            }}
-                            className="font-bold text-amber-900 underline hover:text-amber-950 ml-2"
-                          >
-                            + Add Phone
-                          </button>
+                        )}
+
+                        {filteredSelectWorkers.length === 0 ? (
+                          <div className="p-4 text-center text-xs text-slate-500">
+                            {workerSearchTerm ? `No worker found matching "${workerSearchTerm}". Tap Quick Add above.` : 'No active workers found.'}
+                          </div>
+                        ) : (
+                          filteredSelectWorkers.map((w) => (
+                            <button
+                              key={w.worker_id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedWorkerId(w.worker_id);
+                                setWorkerSearchTerm('');
+                              }}
+                              className="w-full p-2.5 text-left flex items-center justify-between hover:bg-slate-50 active:bg-slate-100 transition-colors"
+                            >
+                              <div className="flex items-center gap-2.5">
+                                <div className="h-8 w-8 rounded-full bg-slate-100 border border-slate-200 overflow-hidden flex items-center justify-center shrink-0">
+                                  {w.worker_photo_url ? (
+                                    <img src={w.worker_photo_url} alt="" className="h-full w-full object-cover" />
+                                  ) : (
+                                    <User className="h-4 w-4 text-slate-400" />
+                                  )}
+                                </div>
+                                <div>
+                                  <p className="text-xs font-bold text-slate-900">{w.worker_name}</p>
+                                  <p className="text-[11px] text-slate-500">
+                                    {w.worker_phone ? w.worker_phone : '⚠️ No phone'}
+                                  </p>
+                                </div>
+                              </div>
+                              <span className="text-xs font-bold text-red-600">
+                                {formatINR(w.running_advance)} adv
+                              </span>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    /* Selected Worker Card */
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-between">
+                      <div className="flex items-center gap-2.5">
+                        <div className="h-9 w-9 rounded-full bg-white border border-slate-200 overflow-hidden flex items-center justify-center shrink-0">
+                          {selectedWorker?.worker_photo_url ? (
+                            <img src={selectedWorker.worker_photo_url} alt="" className="h-full w-full object-cover" />
+                          ) : (
+                            <User className="h-5 w-5 text-slate-400" />
+                          )}
                         </div>
-                      );
-                    }
-                  })()}
+                        <div>
+                          <p className="text-sm font-bold text-slate-900">{selectedWorker?.worker_name}</p>
+                          <p className="text-xs text-slate-500">
+                            Current Advance: <span className="font-bold text-red-600">{formatINR(selectedWorker?.running_advance || 0)}</span>
+                            {selectedWorker?.worker_phone && <span className="ml-1.5 text-emerald-600 font-semibold">✓ SMS Active</span>}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => { setSelectedWorkerId(''); setWorkerSearchTerm(''); }}
+                        className="px-2.5 py-1 text-xs font-bold text-slate-600 bg-white border border-slate-200 rounded hover:bg-slate-100 transition-colors"
+                      >
+                        Change
+                      </button>
+                    </div>
+                  )}
                 </div>
+
+                {/* Amount Input with Quick Preset Chips */}
                 <div>
                   <label htmlFor="amount" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
                     Amount (INR)
@@ -1269,19 +1466,50 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                     )}
                   </div>
                 </div>
+
+                {/* Notes / Remarks Input with 1-Tap Preset Remark Chips */}
                 <div>
-                  <label htmlFor="note" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                    Notes / Remarks <span className="text-red-500">*</span>
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label htmlFor="note" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                      Notes / Remarks <span className="text-slate-400 font-normal">(Optional)</span>
+                    </label>
+                    {disburseNote && (
+                      <button
+                        type="button"
+                        onClick={() => setDisburseNote('')}
+                        className="text-[11px] text-slate-400 hover:text-slate-600 font-semibold"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
                   <input
                     id="note"
                     name="note"
                     type="text"
-                    required
+                    value={disburseNote}
+                    onChange={(e) => setDisburseNote(e.target.value)}
                     disabled={actionLoading}
-                    placeholder="e.g. Weekly advance pay"
+                    placeholder="e.g. Cash Advance (default)"
                     className="mt-1 block w-full rounded border border-slate-300 px-3 py-2 text-slate-950 text-sm min-h-[44px]"
                   />
+                  {/* 1-Tap Preset Remark Chips */}
+                  <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                    {['Hafta', 'Kharcha', 'Advance', 'Khuraki', 'Bonus', 'Emergency'].map((chip) => (
+                      <button
+                        key={chip}
+                        type="button"
+                        onClick={() => setDisburseNote(chip)}
+                        className={`px-2.5 py-1 text-xs font-semibold rounded transition-colors ${
+                          disburseNote === chip
+                            ? 'bg-slate-900 text-white'
+                            : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200'
+                        }`}
+                      >
+                        {chip}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </>
             )}
@@ -1456,11 +1684,13 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
             <button
               type="submit"
-              disabled={actionLoading}
-              className="w-full flex justify-center items-center rounded-md bg-slate-900 py-3 text-sm font-semibold text-white shadow hover:bg-slate-800 disabled:opacity-50 min-h-[44px] gap-2"
+              disabled={actionLoading || (activeTab === 'disburse' && (!selectedWorkerId || !disburseAmount))}
+              className="w-full flex justify-center items-center rounded-md bg-slate-900 py-3 text-sm font-semibold text-white shadow hover:bg-slate-800 disabled:opacity-50 min-h-[46px] gap-2 transition-all"
             >
               {actionLoading ? (
                 <RefreshCw className="h-4 w-4 animate-spin" />
+              ) : activeTab === 'disburse' ? (
+                <span>Disburse {disburseAmount ? formatINR(Number(disburseAmount)) : 'Cash'}</span>
               ) : (
                 <span>Submit Entry</span>
               )}
@@ -1759,7 +1989,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         }}
         onCapture={(file) => handleHandoverCapture(file)}
         onSkip={() => handleHandoverCapture(null)}
-        skipLabel="Skip Photo"
+        skipLabel={lineMode ? "⚡ Quick Pass (Skip)" : "Skip Photo"}
         title="Cash Handover Photo"
         subtitle={pendingDisburse ? `Handing ${formatINR(pendingDisburse.amount)} to ${pendingDisburse.targetWorker.worker_name}` : undefined}
         defaultFacingMode="environment"
