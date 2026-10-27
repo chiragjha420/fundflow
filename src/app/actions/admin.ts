@@ -4,6 +4,7 @@ import { createAdminClient } from '@/lib/supabase/admin-client';
 import { createServerClient } from '@/lib/supabase/server-client';
 import { revalidatePath } from 'next/cache';
 import { broadcastNotificationAction } from '@/lib/realtime-broadcaster';
+import { sendPushToRole } from '@/lib/web-push-sender';
 
 export async function createFactory(state: any, formData: FormData) {
   const name = formData.get('name') as string;
@@ -142,7 +143,14 @@ export async function createOfficeDisbursement(state: any, formData: FormData) {
     return { error: error.message };
   }
 
-  // Broadcast real-time notification to supervisor's phone
+  // 1. Send real OS Web Push to supervisor's phone (wakes phone up even when app is closed)
+  sendPushToRole('supervisor', {
+    title: '💵 Office Cash Received!',
+    body: `Main Office sent ₹${amount.toLocaleString('en-IN')}: "${note}". Tap to confirm receipt on your dashboard.`,
+    url: '/supervisor',
+  }, supervisorId).catch((err) => console.warn('[WebPush] Error sending push to supervisor:', err));
+
+  // 2. Broadcast real-time notification to supervisor's phone
   broadcastNotificationAction({
     type: 'office_disbursement',
     to_supervisor_id: supervisorId,

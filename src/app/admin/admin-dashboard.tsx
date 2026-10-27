@@ -7,6 +7,7 @@ import { AdminAIChat } from './admin-ai-chat';
 import { NotificationBanner } from '@/components/notification-banner';
 import { getCashRequests, updateCashRequestStatus, CashRequest } from '@/app/actions/cash-requests';
 import { playAlertSound, sendFundFlowNotification } from '@/lib/notifications';
+import { registerDeviceForWebPush } from '@/lib/push-client';
 import { createBrowserClient } from '@/lib/supabase/browser-client';
 import { HandCoins, Coins } from 'lucide-react';
 import { formatINR, parseHandoverNote } from '@/lib/utils';
@@ -123,6 +124,9 @@ export function AdminDashboard({
 
   // Load cash requests on mount, active 3s watcher & subscribe to real-time broadcast alerts
   useEffect(() => {
+    // Register device for Real OS Web Push (works even when tab/browser is closed)
+    registerDeviceForWebPush('admin').catch(() => {});
+
     // Helper to process alerts
     const handleNewRequestAlert = (req: CashRequest) => {
       playAlertSound('alert');

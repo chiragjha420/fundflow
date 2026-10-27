@@ -43,28 +43,38 @@ self.addEventListener('message', (event) => {
   }
 });
 
-// Web Push Event Handler
+// Web Push Event Handler (Wakes up mobile/PC even when app is closed!)
 self.addEventListener('push', (event) => {
-  if (!event.data) return;
-  try {
-    const payload = event.data.json();
-    const title = payload.title || 'FundFlow Notification';
-    const options = {
-      body: payload.body || 'New transaction activity in FundFlow.',
-      icon: '/icon.png',
-      badge: '/icon.png',
-      data: { url: payload.url || '/' },
-      vibrate: [200, 100, 200],
-    };
-    event.waitUntil(self.registration.showNotification(title, options));
-  } catch {
-    const text = event.data.text();
-    event.waitUntil(
-      self.registration.showNotification('FundFlow Alert', {
-        body: text,
-        icon: '/icon.png',
-        vibrate: [200, 100, 200],
-      })
-    );
+  let title = 'FundFlow Notification';
+  let body = 'New transaction activity in FundFlow.';
+  let url = '/';
+  let tag = `fundflow-${Date.now()}`;
+
+  if (event.data) {
+    try {
+      const payload = event.data.json();
+      if (payload.title) title = payload.title;
+      if (payload.body) body = payload.body;
+      if (payload.url) url = payload.url;
+      if (payload.tag) tag = payload.tag;
+    } catch {
+      body = event.data.text();
+    }
   }
+
+  const options = {
+    body,
+    icon: '/icon.png',
+    badge: '/icon.png',
+    tag,
+    data: { url },
+    vibrate: [300, 100, 300, 100, 300],
+    renotify: true,
+    requireInteraction: true,
+    actions: [
+      { action: 'open', title: 'Open FundFlow' }
+    ]
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
 });

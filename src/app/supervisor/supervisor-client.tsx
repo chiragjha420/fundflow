@@ -38,6 +38,7 @@ import {
 import { sendWorkerDisbursementSms } from '@/lib/sms';
 import { createCashRequest } from '@/app/actions/cash-requests';
 import { playAlertSound, sendFundFlowNotification } from '@/lib/notifications';
+import { registerDeviceForWebPush } from '@/lib/push-client';
 import { NotificationBanner } from '@/components/notification-banner';
 import { compressImage } from '@/lib/image-compressor';
 import { CameraCaptureModal } from '@/components/camera-capture-modal';
@@ -241,6 +242,13 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
   const supervisorId = supervisor?.id;
   const factoryId = supervisor?.factory_id;
+
+  // Register device for Real OS Web Push (wakes phone up even when closed)
+  useEffect(() => {
+    if (supervisorId) {
+      registerDeviceForWebPush('supervisor', supervisorId).catch(() => {});
+    }
+  }, [supervisorId]);
 
   // 2. Fetch Incoming Pending Transactions
   const { data: pendingTxs } = useQuery({

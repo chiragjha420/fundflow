@@ -2,6 +2,7 @@ import { createBrowserClient } from '@/lib/supabase/browser-client';
 import { addToSyncQueue } from '@/lib/offline-db';
 import { updateWorkerPhoneServer, updateWorkerServer, createWorkerServer } from '@/app/actions/workers';
 import { broadcastNotificationAction } from '@/lib/realtime-broadcaster';
+import { sendSupervisorTransferPushAction } from '@/app/actions/push-actions';
 
 const supabase = createBrowserClient();
 
@@ -92,6 +93,9 @@ export async function transferToSupervisorAction(
       }
       throw new Error(error.message);
     }
+
+    // Send real OS Web Push to recipient supervisor
+    sendSupervisorTransferPushAction(toSupervisorId, amount, 'A Supervisor').catch(() => {});
 
     // Broadcast instant alert to recipient supervisor's phone
     broadcastNotificationAction({

@@ -3,6 +3,7 @@
 import { createAdminClient } from '@/lib/supabase/admin-client';
 import { revalidatePath } from 'next/cache';
 import { broadcastNotificationAction } from '@/lib/realtime-broadcaster';
+import { sendPushToRole } from '@/lib/web-push-sender';
 
 export interface CashRequest {
   id: string;
@@ -71,7 +72,14 @@ export async function createCashRequest(
       return { success: false, error: error.message };
     }
 
-    // Broadcast real-time alert to Admin Panel
+    // 1. Send real OS Web Push to all Admin devices (wakes laptop/phone up even if closed)
+    sendPushToRole('admin', {
+      title: `🔔 New Cash Request: ₹${amount.toLocaleString('en-IN')}`,
+      body: `${supervisorName} (${factoryName}) requested ₹${amount.toLocaleString('en-IN')}: "${cleanNote}"`,
+      url: '/admin',
+    }).catch(err => console.warn('[WebPush] Error sending push to admins:', err));
+
+    // 2. Broadcast real-time alert to Admin Panel
     broadcastNotificationAction({
       type: 'cash_request',
       supervisor_id: supervisorId,
