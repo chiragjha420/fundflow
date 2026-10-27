@@ -278,3 +278,55 @@ export async function updateWorkerPhoneServer(
     return { success: false, error: err.message || 'Failed to update phone number.' };
   }
 }
+
+export interface BulkWorkerOpeningAdvanceUpdate {
+  workerId: string;
+  openingAdvance: number;
+}
+
+/**
+ * Bulk update opening advances for workers in a factory.
+ * Executes in concurrent batches using admin client to update workers table.
+ * Revalidates /admin and /supervisor pages.
+ */
+export async function bulkUpdateOpeningAdvancesAction(
+  updates: BulkWorkerOpeningAdvanceUpdate[]
+): Promise<{ success: boolean; updatedCount: number; error?: string }> {
+  try {
+    if (!updates || updates.length === 0) {
+      return { success: true, updatedCount: 0 };
+    }
+
+    const admin = createAdminClient();
+
+    // Process in chunks of 25 to respect DB pool limits
+    const CHUNK_SIZE = 25;
+    for (let i = 0; i < updates.length; i += CHUNK_SIZE) {
+      const chunk = updates.slice(i, i + CHUNK_SIZE);
+      const results = await Promise.all(
+        chunk.map(item =>
+          admin
+            .from('workers')
+            .update({ opening_advance: Math.max(0, Math.round(Number(item.openingAdvance) || 0)) })
+            .eq('id', item.workerId)
+        )
+      );
+
+      const failed = results.find(r => r.error);
+      if (failed && failed.error) {
+        console.error('Failed chunk update in bulkUpdateOpeningAdvancesAction:', failed.error);
+        return { success: false, updatedCount: i, error: failed.error.message };
+      }
+    }
+
+    revalidatePath('/admin');
+    revalidatePath('/admin/opening-advances');
+    revalidatePath('/supervisor');
+    revalidatePath('/supervisor/workers');
+
+    return { success: true, updatedCount: updates.length };
+  } catch (err: any) {
+    console.error('bulkUpdateOpeningAdvancesAction exception:', err);
+    return { success: false, updatedCount: 0, error: err.message || 'Failed to update opening advances.' };
+  }
+}

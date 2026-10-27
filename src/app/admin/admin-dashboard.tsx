@@ -1,12 +1,13 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { createOfficeDisbursement } from '@/app/actions/admin';
 import { AdminAIChat } from './admin-ai-chat';
 import { NotificationBanner } from '@/components/notification-banner';
 import { getCashRequests, updateCashRequestStatus, CashRequest } from '@/app/actions/cash-requests';
 import { playAlertSound } from '@/lib/notifications';
-import { HandCoins } from 'lucide-react';
+import { HandCoins, Coins } from 'lucide-react';
 import { formatINR, parseHandoverNote } from '@/lib/utils';
 import { 
   Building2, 
@@ -858,13 +859,22 @@ export function AdminDashboard({
             </div>
           </div>
 
-          <button
-            onClick={exportWorkerAdvancesToCSV}
-            className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 transition-colors min-h-[38px] self-start md:self-auto"
-          >
-            <Download className="h-4 w-4 text-slate-500" />
-            <span>Export Statement to CSV</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2 self-start md:self-auto">
+            <Link
+              href={workerFactoryId !== 'all' ? `/admin/opening-advances?factory=${workerFactoryId}` : '/admin/opening-advances'}
+              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-600 bg-emerald-600 px-3 py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 transition-colors min-h-[38px]"
+            >
+              <Coins className="h-4 w-4" />
+              <span>Edit Opening Advances</span>
+            </Link>
+            <button
+              onClick={exportWorkerAdvancesToCSV}
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 transition-colors min-h-[38px]"
+            >
+              <Download className="h-4 w-4 text-slate-500" />
+              <span>Export Statement to CSV</span>
+            </button>
+          </div>
         </div>
 
         {/* Filter Controls Bar */}
