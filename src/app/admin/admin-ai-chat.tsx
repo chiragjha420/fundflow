@@ -31,7 +31,7 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
   const [openRouterKeyOverride, setOpenRouterKeyOverride] = useState<string>('');
   const [showKeyModal, setShowKeyModal] = useState<boolean>(false);
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const savedGemini = localStorage.getItem('fundflow_gemini_api_key');
@@ -76,9 +76,14 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
     }
   }, [messages]);
 
-  // Auto-scroll to bottom of messages
+  // Auto-scroll internally inside chat box only (never scrolls the outer page or window)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTo({
+        top: messagesContainerRef.current.scrollHeight,
+        behavior: 'smooth',
+      });
+    }
   }, [messages, loading]);
 
   const handleModelChange = (model: string) => {
@@ -348,7 +353,10 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
         </div>
 
         {/* Chat Messages Body */}
-        <div className="p-4 max-h-[420px] min-h-[140px] overflow-y-auto space-y-3 bg-slate-50/50">
+        <div 
+          ref={messagesContainerRef}
+          className="p-4 max-h-[420px] min-h-[140px] overflow-y-auto space-y-3 bg-slate-50/50"
+        >
           {messages.map((msg, index) => {
             const isUser = msg.role === 'user';
 
@@ -428,8 +436,6 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
               </div>
             </div>
           )}
-
-          <div ref={messagesEndRef} />
         </div>
 
         {/* Input Section */}

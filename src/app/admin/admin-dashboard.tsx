@@ -215,12 +215,30 @@ export function AdminDashboard({
     setFormLoading(true);
 
     const formData = new FormData(form);
+    const targetSupId = (formData.get('supervisor_id') as string) || disburseSupervisorId;
+    const amountVal = parseFloat(formData.get('amount') as string) || parseFloat(disburseAmount) || 0;
+    const noteVal = (formData.get('note') as string) || disburseNote || '';
+
     const result = await createOfficeDisbursement(null, formData);
 
     if (result && result.error) {
       setFormError(result.error);
       setFormLoading(false);
     } else {
+      // Direct WebSocket broadcast to supervisor's phone
+      try {
+        supabase.channel('fundflow-notifications').send({
+          type: 'broadcast',
+          event: 'fundflow_alert',
+          payload: {
+            type: 'office_disbursement',
+            to_supervisor_id: targetSupId,
+            amount: amountVal,
+            note: noteVal,
+          }
+        }).catch(() => {});
+      } catch {}
+
       setFormSuccess(true);
       setFormLoading(false);
       playAlertSound('cash_in');
@@ -245,9 +263,9 @@ export function AdminDashboard({
       .filter(s => s.factory_id === factory.id)
       .map(s => s.id);
 
-    // Office Sent (Total, confirmed or pending)
+    // Office Sent (Confirmed or pending, excluding cancelled/disputed)
     const sent = transactions
-      .filter(t => t.type === 'office_to_supervisor' && t.to_supervisor_id && factorySupIds.includes(t.to_supervisor_id))
+      .filter(t => t.type === 'office_to_supervisor' && t.to_supervisor_id && factorySupIds.includes(t.to_supervisor_id) && t.status !== 'disputed')
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
     // Office Confirmed

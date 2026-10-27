@@ -156,6 +156,22 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     try {
       const res = await createCashRequest(supervisorId!, factoryId!, numAmount, requestNote);
       if (res.success) {
+        // Direct broadcast over active WebSocket
+        try {
+          supabase.channel('fundflow-notifications').send({
+            type: 'broadcast',
+            event: 'fundflow_alert',
+            payload: {
+              type: 'cash_request',
+              supervisor_id: supervisorId,
+              supervisor_name: supervisor?.name || 'Supervisor',
+              factory_name: (supervisor as any)?.factories?.name || 'Factory',
+              amount: numAmount,
+              note: requestNote,
+            }
+          }).catch(() => {});
+        } catch {}
+
         showToast('success', `Cash request for ${formatINR(numAmount)} sent to Main Office!`);
         playAlertSound('cash_in');
         setShowCashRequestModal(false);

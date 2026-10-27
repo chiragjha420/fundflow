@@ -47,17 +47,43 @@ export type NotificationBroadcastPayload =
  * Uses Supabase Realtime broadcast channels (<50ms delivery).
  */
 export async function broadcastNotificationAction(payload: NotificationBroadcastPayload) {
-  try {
-    const admin = createAdminClient();
-    const channel = admin.channel('fundflow-notifications');
-    await channel.subscribe();
-    await channel.send({
-      type: 'broadcast',
-      event: 'fundflow_alert',
-      payload,
-    });
-    admin.removeChannel(channel);
-  } catch (err) {
-    console.error('Failed to broadcast notification:', err);
-  }
+  return new Promise<void>((resolve) => {
+    try {
+      const admin = createAdminClient();
+      const channel = admin.channel('fundflow-notifications');
+      
+      const timer = setTimeout(() => {
+        try { admin.removeChannel(channel); } catch {}
+        resolve();
+      }, 4000);
+
+      channel.subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          try {
+            await channel.send({
+              type: 'broadcast',
+              event: 'fundflow_alert',
+              payload,
+            });
+          } catch (e) {
+            console.error('[Broadcaster] Send error:', e);
+          } finally {
+            clearTimeout(timer);
+            // Brief flush delay before disconnecting channel
+            setTimeout(() => {
+              try { admin.removeChannel(channel); } catch {}
+              resolve();
+            }, 300);
+          }
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          clearTimeout(timer);
+          try { admin.removeChannel(channel); } catch {}
+          resolve();
+        }
+      });
+    } catch (err) {
+      console.error('[Broadcaster] Failed to broadcast notification:', err);
+      resolve();
+    }
+  });
 }
