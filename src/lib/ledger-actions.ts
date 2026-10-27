@@ -1,6 +1,6 @@
 import { createBrowserClient } from '@/lib/supabase/browser-client';
 import { addToSyncQueue } from '@/lib/offline-db';
-import { updateWorkerPhoneServer } from '@/app/actions/workers';
+import { updateWorkerPhoneServer, updateWorkerServer, createWorkerServer } from '@/app/actions/workers';
 
 const supabase = createBrowserClient();
 
@@ -216,21 +216,19 @@ export async function createWorkerAction(
   };
 
   if (isAppOnline()) {
-    const { error } = await supabase
-      .from('workers')
-      .insert({
-        ...payload,
-        active: true,
-      });
-
-    if (error) {
-      if (error.message.includes('fetch') || error.message.includes('network')) {
+    try {
+      const res = await createWorkerServer(factoryId, supervisorId, name, phone, photoUrl, openingAdvance);
+      if (!res.success) {
+        throw new Error(res.error || 'Failed to create worker.');
+      }
+      return { success: true, id: res.id || id };
+    } catch (err: any) {
+      if (err.message && (err.message.includes('fetch') || err.message.includes('network'))) {
         await queueAction('create_worker', payload);
         return { queued: true, id };
       }
-      throw new Error(error.message);
+      throw err;
     }
-    return { success: true, id };
   } else {
     await queueAction('create_worker', payload);
     return { queued: true, id };
@@ -251,23 +249,19 @@ export async function updateWorkerAction(
   };
 
   if (isAppOnline()) {
-    const { error } = await supabase
-      .from('workers')
-      .update({
-        name,
-        phone,
-        photo_url: photoUrl,
-      })
-      .eq('id', workerId);
-
-    if (error) {
-      if (error.message.includes('fetch') || error.message.includes('network')) {
+    try {
+      const res = await updateWorkerServer(workerId, name, phone, photoUrl);
+      if (!res.success) {
+        throw new Error(res.error || 'Failed to update worker.');
+      }
+      return { success: true };
+    } catch (err: any) {
+      if (err.message && (err.message.includes('fetch') || err.message.includes('network'))) {
         await queueAction('update_worker', payload);
         return { queued: true };
       }
-      throw new Error(error.message);
+      throw err;
     }
-    return { success: true };
   } else {
     await queueAction('update_worker', payload);
     return { queued: true };

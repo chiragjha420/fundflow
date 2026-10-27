@@ -42,6 +42,7 @@ import { NotificationBanner } from '@/components/notification-banner';
 import { compressImage } from '@/lib/image-compressor';
 import { CameraCaptureModal } from '@/components/camera-capture-modal';
 import { uploadHandoverPhotoAction, uploadWorkerPhotoAction, uploadExpensePhotoAction } from '@/app/actions/upload-actions';
+import { getFactoryWorkersAction } from '@/app/actions/workers';
 
 interface Worker {
   worker_id: string;
@@ -259,22 +260,21 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
   const activePending = pendingTxs !== undefined ? pendingTxs : cachedPending;
 
-  // 3. Fetch Workers List
+  // 3. Fetch Workers List (via Server Action for complete multi-supervisor sync)
   const { data: workers, isLoading: workersLoading } = useQuery({
     queryKey: ['workers', factoryId],
     queryFn: async () => {
       if (!factoryId) return [];
-      const { data, error } = await supabase
-        .from('worker_balances')
-        .select('*')
-        .eq('factory_id', factoryId)
-        .eq('active', true);
-
-      if (error) throw error;
-      
-      await setOfflineCache(`workers-${factoryId}`, data);
-      try { localStorage.setItem(`fundflow_cached_workers_${factoryId}`, JSON.stringify(data)); } catch {}
-      return data as Worker[];
+      try {
+        const data = await getFactoryWorkersAction(factoryId);
+        await setOfflineCache(`workers-${factoryId}`, data);
+        try { localStorage.setItem(`fundflow_cached_workers_${factoryId}`, JSON.stringify(data)); } catch {}
+        return data as Worker[];
+      } catch (err) {
+        const cached = await getOfflineCache<Worker[]>(`workers-${factoryId}`);
+        if (cached) return cached;
+        throw err;
+      }
     },
     initialData: (initialData?.workers && initialData.workers.length > 0)
       ? initialData.workers

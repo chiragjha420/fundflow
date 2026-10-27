@@ -7,6 +7,11 @@ import { getOfflineCache, setOfflineCache } from '@/lib/offline-db';
 import { formatINR, parseHandoverNote } from '@/lib/utils';
 import { updateWorkerAction } from '@/lib/ledger-actions';
 import { uploadWorkerPhotoAction } from '@/app/actions/upload-actions';
+import { 
+  getFactoryWorkersAction, 
+  getFactoryWorkerDisbursementsAction, 
+  deleteWorkerServer 
+} from '@/app/actions/workers';
 import { compressImage } from '@/lib/image-compressor';
 import { CameraCaptureModal } from '@/components/camera-capture-modal';
 import { 
@@ -74,24 +79,9 @@ export function SupervisorWorkersClientPage() {
     setConfirmDelete(false);
 
     try {
-      // 1. Try to hard-delete first
-      const { error: deleteError } = await supabase
-        .from('workers')
-        .delete()
-        .eq('id', editingWorker.worker_id);
-
-      if (deleteError) {
-        // If delete fails due to foreign key violations (restrict constraint), soft-delete
-        if (deleteError.code === '23503') {
-          const { error: updateError } = await supabase
-            .from('workers')
-            .update({ active: false })
-            .eq('id', editingWorker.worker_id);
-          
-          if (updateError) throw updateError;
-        } else {
-          throw deleteError;
-        }
+      const res = await deleteWorkerServer(editingWorker.worker_id);
+      if (!res.success) {
+        throw new Error(res.error || 'Failed to remove worker.');
       }
 
       setActionMessage({ type: 'success', text: 'Worker successfully removed.' });
@@ -132,22 +122,21 @@ export function SupervisorWorkersClientPage() {
 
   const factoryId = supervisor?.factory_id;
 
-  // 2. Fetch Workers
+  // 2. Fetch Workers (Unified across all supervisors in the factory)
   const { data: workers, isLoading } = useQuery({
     queryKey: ['workers', factoryId],
     queryFn: async () => {
       if (!factoryId) return [];
-      const { data, error } = await supabase
-        .from('worker_balances')
-        .select('*')
-        .eq('factory_id', factoryId)
-        .eq('active', true);
-
-      if (error) throw error;
-      
-      await setOfflineCache(`workers-${factoryId}`, data);
-      try { localStorage.setItem(`fundflow_cached_workers_${factoryId}`, JSON.stringify(data)); } catch {}
-      return data as Worker[];
+      try {
+        const data = await getFactoryWorkersAction(factoryId);
+        await setOfflineCache(`workers-${factoryId}`, data);
+        try { localStorage.setItem(`fundflow_cached_workers_${factoryId}`, JSON.stringify(data)); } catch {}
+        return data as Worker[];
+      } catch (err) {
+        const cached = await getOfflineCache<Worker[]>(`workers-${factoryId}`);
+        if (cached) return cached;
+        throw err;
+      }
     },
     initialData: factoryId ? getStoredJson<Worker[]>(`fundflow_cached_workers_${factoryId}`, []) : [],
     enabled: !!factoryId,
@@ -170,18 +159,17 @@ export function SupervisorWorkersClientPage() {
     enabled: !!editingWorker?.worker_id,
   });
 
-  // 4. Fetch All Worker Transactions for this factory for date filtering
+  // 4. Fetch All Worker Transactions for this factory for date filtering (Unified)
   const { data: allWorkerDisbursements } = useQuery({
     queryKey: ['factory-worker-disbursements', factoryId],
     queryFn: async () => {
       if (!factoryId) return [];
-      const { data, error } = await supabase
-        .from('cash_transactions')
-        .select('id, amount, note, created_at, status, to_worker_id')
-        .eq('type', 'supervisor_to_worker');
-
-      if (error) throw error;
-      return (data || []) as WorkerPayment[];
+      try {
+        const data = await getFactoryWorkerDisbursementsAction(factoryId);
+        return (data || []) as WorkerPayment[];
+      } catch (err) {
+        return [];
+      }
     },
     enabled: !!factoryId,
   });

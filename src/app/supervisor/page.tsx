@@ -1,11 +1,13 @@
 import React from 'react';
 import { createServerClient } from '@/lib/supabase/server-client';
+import { createAdminClient } from '@/lib/supabase/admin-client';
 import { SupervisorClientPage } from './supervisor-client';
 
 export const revalidate = 0; // Live real-time dashboard data on navigation
 
 export default async function SupervisorDashboardPage() {
   const supabase = createServerClient();
+  const adminSupabase = createAdminClient();
   
   let initialSupervisor: any = null;
   let initialWorkers: any[] = [];
@@ -27,9 +29,9 @@ export default async function SupervisorDashboardPage() {
       if (sup) {
         initialSupervisor = sup;
 
-        // 2. Fetch Workers, Pending Receipts, and Other Supervisors in Parallel
+        // 2. Fetch Workers (via Admin to unify co-supervisors), Pending Receipts, and Other Supervisors
         const [workersRes, pendingRes, otherSupsRes] = await Promise.all([
-          supabase
+          adminSupabase
             .from('worker_balances')
             .select('*')
             .eq('factory_id', sup.factory_id)
@@ -45,7 +47,7 @@ export default async function SupervisorDashboardPage() {
             .eq('active', true),
         ]);
 
-        initialWorkers = workersRes.data || [];
+        initialWorkers = (workersRes.data || []).filter((w: any) => w.active && w.worker_name !== 'Deleted Worker');
         initialPendingTxs = pendingRes.data || [];
         initialOtherSupervisors = otherSupsRes.data || [];
       }

@@ -467,12 +467,10 @@ create policy "Supervisors insert workers in their factory" on workers
 
 create policy "Supervisors update workers in their factory (non-financial)" on workers
   for update using (
-    factory_id = get_supervisor_factory_id() and
-    supervisor_id = get_supervisor_id()
+    factory_id = get_supervisor_factory_id()
   ) with check (
-    -- Prevent changing factory, supervisor, and opening advance
+    -- Prevent changing factory and opening advance
     factory_id = get_supervisor_factory_id() and
-    supervisor_id = get_supervisor_id() and
     opening_advance = opening_advance
   );
 
@@ -480,10 +478,11 @@ create policy "Supervisors update workers in their factory (non-financial)" on w
 create policy "Admins see and insert all transactions" on cash_transactions
   for all using (is_admin());
 
-create policy "Supervisors read their own transactions" on cash_transactions
+create policy "Supervisors read their own transactions or factory worker disbursements" on cash_transactions
   for select using (
     from_supervisor_id = get_supervisor_id() or
-    to_supervisor_id = get_supervisor_id()
+    to_supervisor_id = get_supervisor_id() or
+    to_worker_id in (select id from workers where factory_id = get_supervisor_factory_id())
   );
 
 create policy "Supervisors insert outgoing transactions" on cash_transactions
