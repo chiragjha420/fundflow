@@ -321,14 +321,14 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       if (!supervisorId) return [];
       const { data, error } = await supabase
         .from('cash_transactions')
-        .select('id, amount, note, created_at, to_worker_id, to_work:to_worker_id(name)')
+        .select('id, amount, note, created_at, to_worker_id, to_work:to_worker_id(name, active)')
         .eq('from_supervisor_id', supervisorId)
         .eq('type', 'supervisor_to_worker')
         .order('created_at', { ascending: false })
-        .limit(5);
+        .limit(10);
 
-      if (error) return [];
-      return data || [];
+      if (error || !data) return [];
+      return data.filter((tx: any) => tx.to_work && tx.to_work.active !== false).slice(0, 5);
     },
     enabled: !!supervisorId,
   });

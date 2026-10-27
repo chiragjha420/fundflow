@@ -21,6 +21,9 @@
     "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
+    "@remotion/bundler": "^4.0.539",
+    "@remotion/cli": "^4.0.539",
+    "@remotion/renderer": "^4.0.539",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
@@ -28,6 +31,7 @@
     "eslint": "^8",
     "eslint-config-next": "14.2.35",
     "postcss": "^8",
+    "remotion": "^4.0.539",
     "tailwindcss": "^3.4.1",
     "typescript": "^5"
   }

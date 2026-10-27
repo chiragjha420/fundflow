@@ -25,7 +25,7 @@ export default async function AdminDashboardPage() {
       .order('name'),
     supabase
       .from('cash_transactions')
-      .select('*, from:from_supervisor_id(name), to_sup:to_supervisor_id(name, factory_id), to_work:to_worker_id(name, factory_id)')
+      .select('*, from:from_supervisor_id(name), to_sup:to_supervisor_id(name, factory_id), to_work:to_worker_id(name, factory_id, active)')
       .order('created_at', { ascending: false }),
     supabase
       .from('expenses')
@@ -34,6 +34,7 @@ export default async function AdminDashboardPage() {
     supabase
       .from('worker_balances')
       .select('*')
+      .eq('active', true)
       .order('running_advance', { ascending: false }),
   ]);
 

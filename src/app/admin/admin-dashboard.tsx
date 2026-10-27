@@ -60,7 +60,7 @@ interface Transaction {
   created_at: string;
   from?: { name: string } | null;
   to_sup?: { name: string; factory_id: string } | null;
-  to_work?: { name: string; factory_id: string } | null;
+  to_work?: { name: string; factory_id: string; active?: boolean } | null;
 }
 
 interface Expense {
@@ -210,7 +210,7 @@ export function AdminDashboard({
 
     // Disbursed to workers
     const disbursed = transactions
-      .filter(t => t.type === 'supervisor_to_worker' && t.from_supervisor_id && factorySupIds.includes(t.from_supervisor_id) && t.status === 'confirmed')
+      .filter(t => t.type === 'supervisor_to_worker' && t.from_supervisor_id && factorySupIds.includes(t.from_supervisor_id) && t.status === 'confirmed' && t.to_work?.active !== false && t.to_work?.name !== 'Deleted Worker')
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
     // Calculate dynamic cash on hand for supervisors in this factory
@@ -233,7 +233,7 @@ export function AdminDashboard({
 
       // Outgoing workers confirmed
       const outWorker = transactions
-        .filter(t => t.type === 'supervisor_to_worker' && t.from_supervisor_id === supId && t.status === 'confirmed')
+        .filter(t => t.type === 'supervisor_to_worker' && t.from_supervisor_id === supId && t.status === 'confirmed' && t.to_work?.active !== false && t.to_work?.name !== 'Deleted Worker')
         .reduce((sum, t) => sum + Number(t.amount), 0);
 
       // Expenses by this supervisor
@@ -298,7 +298,14 @@ export function AdminDashboard({
 
   // --- 3. Combine and Filter Ledger Entries (Transactions + Expenses) ---
   const filteredLedger = [
-    ...transactions.map(tx => {
+    ...transactions
+      .filter(tx => {
+        if (tx.type === 'supervisor_to_worker' && (tx.to_work?.active === false || tx.to_work?.name === 'Deleted Worker')) {
+          return false;
+        }
+        return true;
+      })
+      .map(tx => {
       let purpose: 'Wages' | 'Expenses' | 'Transfers' = 'Transfers';
       if (tx.type === 'supervisor_to_worker') {
         purpose = 'Wages';
@@ -454,7 +461,9 @@ export function AdminDashboard({
     }
   };
 
-  const workerReports = workers.map(w => {
+  const activeWorkers = workers.filter(w => w.active !== false && w.worker_name !== 'Deleted Worker');
+
+  const workerReports = activeWorkers.map(w => {
     const allDisbursements = transactions.filter(
       t => t.type === 'supervisor_to_worker' && t.to_worker_id === w.worker_id && t.status === 'confirmed'
     );
@@ -808,11 +817,11 @@ export function AdminDashboard({
               Filter by Date &darr;
             </a>
           </div>
-          {workers.length === 0 ? (
+          {activeWorkers.length === 0 ? (
             <div className="text-center py-6 text-sm text-slate-500">No workers configured yet</div>
           ) : (
             <ul className="divide-y divide-slate-100">
-              {workers.slice(0, 5).map((w, idx) => (
+              {activeWorkers.slice(0, 5).map((w, idx) => (
                 <li key={w.worker_id} className="py-2.5 flex justify-between items-center text-sm">
                   <div className="flex items-center gap-3">
                     <span className="text-slate-400 font-bold w-4">#{idx + 1}</span>
