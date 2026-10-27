@@ -8,7 +8,9 @@ import {
   Trash2, 
   Copy, 
   Check, 
-  MessageSquare
+  MessageSquare,
+  Sparkles,
+  Zap
 } from 'lucide-react';
 import { askDatabaseAI, ChatMessage } from '@/app/actions/ai-chat';
 
@@ -21,15 +23,21 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
   const [inputValue, setInputValue] = useState('');
   const [loading, setLoading] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [selectedModel, setSelectedModel] = useState<string>('nvidia/nemotron-3.5-super-vl:free');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Clear any legacy client-side keys & load chat history
+  // Clear any legacy client-side keys & load chat history and model choice
   useEffect(() => {
     try {
       localStorage.removeItem('fundflow_gemini_api_key');
       localStorage.removeItem('fundflow_openrouter_api_key');
     } catch {}
+
+    const savedModel = localStorage.getItem('fundflow_ai_selected_model');
+    if (savedModel) {
+      setSelectedModel(savedModel);
+    }
 
     const savedHistory = localStorage.getItem('fundflow_ai_chat_history');
     if (savedHistory) {
@@ -65,6 +73,13 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
 
+  const handleModelChange = (model: string) => {
+    setSelectedModel(model);
+    try {
+      localStorage.setItem('fundflow_ai_selected_model', model);
+    } catch {}
+  };
+
   const handleClearHistory = () => {
     const welcome: ChatMessage = {
       role: 'model',
@@ -98,13 +113,15 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
 
     try {
       const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Request timed out. Please try again.')), 25000)
+        setTimeout(() => reject(new Error('Request timed out after 35s. Please try again.')), 35000)
       );
 
       const response = await Promise.race([
         askDatabaseAI(
           textToSend,
-          messages
+          messages,
+          undefined,
+          selectedModel
         ),
         timeoutPromise
       ]);
@@ -114,6 +131,7 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
           role: 'model',
           content: response.answer,
           timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+          modelUsed: response.modelUsed,
         };
         setMessages([...newHistory, aiMsg]);
       } else {
@@ -245,13 +263,43 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
       className={`bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden ${className}`}
     >
         {/* Simple Clean Header */}
-        <div className="bg-slate-900 text-white px-5 py-3 flex items-center justify-between">
+        <div className="bg-slate-900 text-white px-5 py-3 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <MessageSquare className="h-4 w-4 text-slate-300" />
             <h3 className="text-sm font-bold text-white">Database Questions</h3>
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-2">
+            {/* Model Selector */}
+            <div className="flex items-center bg-slate-800 rounded-lg p-0.5 border border-slate-700 text-[11px] font-semibold">
+              <button
+                type="button"
+                onClick={() => handleModelChange('nvidia/nemotron-3.5-super-vl:free')}
+                className={`px-2.5 py-1 rounded-md transition-all flex items-center gap-1.5 ${
+                  selectedModel.includes('nemotron')
+                    ? 'bg-emerald-600 text-white shadow-xs font-bold'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+                title="Free Nemotron 3.5 Super VL via OpenRouter"
+              >
+                <Sparkles className="h-3 w-3 text-emerald-300" />
+                <span>Free Nemotron</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleModelChange('gemini-3.6-flash')}
+                className={`px-2.5 py-1 rounded-md transition-all flex items-center gap-1.5 ${
+                  selectedModel.includes('gemini')
+                    ? 'bg-indigo-600 text-white shadow-xs font-bold'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+                title="Google Gemini 3.6 Flash"
+              >
+                <Zap className="h-3 w-3 text-indigo-300" />
+                <span>Gemini 3.6</span>
+              </button>
+            </div>
+
             {/* Clear History Button */}
             <button
               onClick={handleClearHistory}
@@ -331,12 +379,20 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
                     )}
                   </div>
 
-                  {/* Timestamp */}
-                  {msg.timestamp && (
-                    <div className="text-[9px] mt-1 text-right text-slate-400">
-                      {msg.timestamp}
+                  {/* Model Tag & Timestamp */}
+                  <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-slate-100/80 text-[9px] text-slate-400 gap-2">
+                    <div>
+                      {!isUser && msg.modelUsed && (
+                        <span className="font-bold text-slate-500 inline-flex items-center gap-1">
+                          <Sparkles className="h-2.5 w-2.5 text-emerald-600" />
+                          <span>{msg.modelUsed.includes('nemotron') ? 'Free Nemotron 3.5' : 'Gemini 3.6 Flash'}</span>
+                        </span>
+                      )}
                     </div>
-                  )}
+                    {msg.timestamp && (
+                      <div className="shrink-0">{msg.timestamp}</div>
+                    )}
+                  </div>
                 </div>
               </div>
             );

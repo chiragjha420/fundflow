@@ -7,6 +7,7 @@ export interface ChatMessage {
   role: 'user' | 'model';
   content: string;
   timestamp?: string;
+  modelUsed?: string;
 }
 
 export interface ChatResponse {
@@ -39,7 +40,7 @@ export async function askDatabaseAI(
   userQuery: string,
   history: ChatMessage[] = [],
   apiKeyOverride?: string,
-  modelRequested: string = 'gemini-3.6-flash',
+  modelRequested: string = 'nvidia/nemotron-3.5-super-vl:free',
   openRouterKeyOverride?: string
 ): Promise<ChatResponse> {
   try {
@@ -305,95 +306,22 @@ ${JSON.stringify(expenseList.slice(0, 25).map(e => ({
 - Use GitHub markdown: bold key metrics, bulleted lists, and clean tables where comparison is helpful.
 - If no discrepancies or records exist for a specific filter, clearly state that everything is clean and balanced.`;
 
-    // 5. Call the Google Gemini API with the Requested Model (Latest Fast Gemini 3.6 / 3.5 Generation)
-    const candidateModels = [
-      modelRequested,
-      'gemini-3.6-flash',
-      'gemini-3.5-flash',
-      'gemini-3.5-flash-lite',
-      'gemini-3-flash-preview',
-      'gemini-3.8-flash'
-    ];
-
-    // Remove duplicates while preserving order
-    const modelsToTry = Array.from(new Set(candidateModels));
+    // 5. Intelligent Multi-Model Execution Engine
+    // Prioritizes Free Nemotron (OpenRouter) or Google Gemini based on modelRequested
+    const wantsNemotron =
+      !modelRequested ||
+      modelRequested.includes('nemotron') ||
+      modelRequested.includes('nvidia') ||
+      modelRequested.includes('openrouter');
 
     let finalAnswer: string | null = null;
     let actualModelUsed: string = modelRequested;
     let lastError: string | null = null;
 
-    // Convert previous chat history
-    const contents: any[] = [];
-
-    // Add previous history
-    for (const msg of history.slice(-6)) {
-      contents.push({
-        role: msg.role === 'model' ? 'model' : 'user',
-        parts: [{ text: msg.content }]
-      });
-    }
-
-    // Add current user prompt
-    contents.push({
-      role: 'user',
-      parts: [{ text: userQuery }]
-    });
-
-    // Attempt Gemini first if key is available
-    if (geminiApiKey) {
-      for (const model of modelsToTry) {
-        try {
-          const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
-            {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                systemInstruction: {
-                  parts: [{ text: systemPrompt }]
-                },
-                contents,
-                generationConfig: {
-                  temperature: 0.2,
-                  maxOutputTokens: 4096,
-                }
-              }),
-              signal: AbortSignal.timeout(6000),
-            }
-          );
-
-          const data = await response.json();
-
-          if (response.ok && data?.candidates?.[0]?.content?.parts?.[0]?.text) {
-            finalAnswer = data.candidates[0].content.parts[0].text;
-            actualModelUsed = model;
-            break;
-          } else {
-            const apiErrorMessage = data?.error?.message || `HTTP ${response.status}: ${response.statusText}`;
-            lastError = `[Gemini ${model}]: ${apiErrorMessage}`;
-            console.warn(`Gemini API call failed for model ${model}:`, apiErrorMessage);
-            // On any model error (404, 503, etc.), continue to next candidate
-            continue;
-          }
-        } catch (err: any) {
-          lastError = err?.name === 'TimeoutError' || err?.name === 'AbortError'
-            ? `Gemini ${model} timed out after 6s`
-            : (err?.message || 'Network error calling Gemini API');
-          console.warn(`Gemini API exception for ${model}:`, lastError);
-          continue;
-        }
-      }
-    } else {
-      lastError = 'No Gemini API key provided.';
-    }
-
-    // Fallback: If Gemini is unavailable or failed, call OpenRouter Nemotron Super VL Free
-    if (!finalAnswer) {
-      console.warn('Gemini unavailable or error:', lastError, 'Attempting OpenRouter Nemotron Super VL Free fallback...');
-
-      const openRouterResult = await callOpenRouterFallback(
+    if (wantsNemotron) {
+      // Priority 1: User requested Free Nemotron (OpenRouter)
+      console.log('Querying OpenRouter Free Nemotron (Primary)...');
+      const openRouterResult = await callOpenRouterNemotron(
         systemPrompt,
         history,
         userQuery,
@@ -404,9 +332,79 @@ ${JSON.stringify(expenseList.slice(0, 25).map(e => ({
         finalAnswer = openRouterResult.answer;
         actualModelUsed = openRouterResult.modelUsed || 'nvidia/nemotron-3.5-super-vl:free';
       } else {
-        lastError = geminiApiKey 
-          ? `Gemini failed: ${lastError}. OpenRouter fallback: ${openRouterResult.error || 'Unknown error'}`
-          : (openRouterResult.error || 'OpenRouter fallback failed');
+        lastError = openRouterResult.error || 'OpenRouter Nemotron call failed';
+        console.warn('Nemotron failed, falling back to Google Gemini:', lastError);
+
+        // Fallback to Gemini 3.6 Flash if OpenRouter fails
+        if (geminiApiKey) {
+          const geminiResult = await callGemini(
+            systemPrompt,
+            history,
+            userQuery,
+            geminiApiKey
+          );
+
+          if (geminiResult.success && geminiResult.answer) {
+            finalAnswer = geminiResult.answer;
+            actualModelUsed = geminiResult.modelUsed || 'gemini-3.6-flash';
+          } else {
+            lastError = `Nemotron failed: ${lastError}. Gemini fallback failed: ${geminiResult.error}`;
+          }
+        }
+      }
+    } else {
+      // Priority 2: User requested Gemini
+      console.log('Querying Google Gemini API (Primary)...');
+      if (geminiApiKey) {
+        const geminiResult = await callGemini(
+          systemPrompt,
+          history,
+          userQuery,
+          geminiApiKey,
+          modelRequested
+        );
+
+        if (geminiResult.success && geminiResult.answer) {
+          finalAnswer = geminiResult.answer;
+          actualModelUsed = geminiResult.modelUsed || 'gemini-3.6-flash';
+        } else {
+          lastError = geminiResult.error || 'Gemini call failed';
+          console.warn('Gemini failed, falling back to OpenRouter Nemotron:', lastError);
+
+          // Fallback to OpenRouter Nemotron
+          if (openRouterApiKey) {
+            const openRouterResult = await callOpenRouterNemotron(
+              systemPrompt,
+              history,
+              userQuery,
+              openRouterApiKey
+            );
+
+            if (openRouterResult.success && openRouterResult.answer) {
+              finalAnswer = openRouterResult.answer;
+              actualModelUsed = openRouterResult.modelUsed || 'nvidia/nemotron-3.5-super-vl:free';
+            } else {
+              lastError = `Gemini failed: ${lastError}. OpenRouter fallback failed: ${openRouterResult.error}`;
+            }
+          }
+        }
+      } else if (openRouterApiKey) {
+        // No Gemini key, use OpenRouter Nemotron
+        const openRouterResult = await callOpenRouterNemotron(
+          systemPrompt,
+          history,
+          userQuery,
+          openRouterApiKey
+        );
+
+        if (openRouterResult.success && openRouterResult.answer) {
+          finalAnswer = openRouterResult.answer;
+          actualModelUsed = openRouterResult.modelUsed || 'nvidia/nemotron-3.5-super-vl:free';
+        } else {
+          lastError = openRouterResult.error || 'OpenRouter Nemotron failed';
+        }
+      } else {
+        lastError = 'Neither OpenRouter nor Gemini API keys are configured.';
       }
     }
 
@@ -440,8 +438,11 @@ ${JSON.stringify(expenseList.slice(0, 25).map(e => ({
   }
 }
 
-// Fallback Helper for OpenRouter Nemotron Models
-async function callOpenRouterFallback(
+/**
+ * Primary / Fallback Helper for OpenRouter Nemotron Models
+ * Uses active, verified free models on OpenRouter (nemotron-3.5-super-vl & nemotron-3.5-lightning)
+ */
+async function callOpenRouterNemotron(
   systemPrompt: string,
   history: ChatMessage[],
   userQuery: string,
@@ -451,15 +452,14 @@ async function callOpenRouterFallback(
   if (!key) {
     return {
       success: false,
-      error: 'No OpenRouter API key found. Add OPENROUTER_API_KEY in .env.local or UI to enable Nemotron fallback.'
+      error: 'No OpenRouter API key found. Add OPENROUTER_API_KEY to enable Nemotron.'
     };
   }
 
+  // Active verified free models on OpenRouter
   const nemotronModels = [
     'nvidia/nemotron-3.5-super-vl:free',
-    'nvidia/nemotron-3-super-120b-a12b:free',
-    'nvidia/nemotron-3.5-lightning:free',
-    'nvidia/nemotron-nano-9b-v2:free'
+    'nvidia/nemotron-3.5-lightning:free'
   ];
 
   const messages: any[] = [
@@ -491,15 +491,18 @@ async function callOpenRouterFallback(
           model,
           messages,
           temperature: 0.2,
+          max_tokens: 4096,
         }),
-        signal: AbortSignal.timeout(7000),
+        signal: AbortSignal.timeout(25000), // 25s timeout for deep reasoning
       });
 
       const data = await res.json();
-      if (res.ok && data?.choices?.[0]?.message?.content) {
+      const answer = data?.choices?.[0]?.message?.content || data?.choices?.[0]?.message?.reasoning;
+
+      if (res.ok && answer && typeof answer === 'string' && answer.trim().length > 0) {
         return {
           success: true,
-          answer: data.choices[0].message.content,
+          answer: answer.trim(),
           modelUsed: model,
         };
       } else {
@@ -507,12 +510,95 @@ async function callOpenRouterFallback(
         console.warn(`OpenRouter model ${model} failed:`, lastErr);
       }
     } catch (e: any) {
-      lastErr = e?.message || 'Network error connecting to OpenRouter';
+      lastErr = e?.name === 'TimeoutError' || e?.name === 'AbortError'
+        ? `OpenRouter ${model} timed out after 25s`
+        : (e?.message || 'Network error connecting to OpenRouter');
+      console.warn(`OpenRouter ${model} exception:`, lastErr);
     }
   }
 
   return {
     success: false,
     error: lastErr || 'Failed to call OpenRouter Nemotron models.',
+  };
+}
+
+/**
+ * Primary / Fallback Helper for Google Gemini API
+ */
+async function callGemini(
+  systemPrompt: string,
+  history: ChatMessage[],
+  userQuery: string,
+  geminiApiKey: string,
+  preferredModel?: string
+): Promise<{ success: boolean; answer?: string; error?: string; modelUsed?: string }> {
+  const candidateModels = Array.from(new Set([
+    preferredModel || 'gemini-3.6-flash',
+    'gemini-3.6-flash',
+    'gemini-3.5-flash',
+    'gemini-3.8-flash'
+  ])).filter(Boolean);
+
+  const contents: any[] = [];
+  for (const msg of history.slice(-6)) {
+    contents.push({
+      role: msg.role === 'model' ? 'model' : 'user',
+      parts: [{ text: msg.content }]
+    });
+  }
+  contents.push({
+    role: 'user',
+    parts: [{ text: userQuery }]
+  });
+
+  let lastError = '';
+
+  for (const model of candidateModels) {
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            systemInstruction: {
+              parts: [{ text: systemPrompt }]
+            },
+            contents,
+            generationConfig: {
+              temperature: 0.2,
+              maxOutputTokens: 4096,
+            }
+          }),
+          signal: AbortSignal.timeout(15000),
+        }
+      );
+
+      const data = await response.json();
+      if (response.ok && data?.candidates?.[0]?.content?.parts?.[0]?.text) {
+        return {
+          success: true,
+          answer: data.candidates[0].content.parts[0].text,
+          modelUsed: model,
+        };
+      } else {
+        const apiErrorMessage = data?.error?.message || `HTTP ${response.status}: ${response.statusText}`;
+        lastError = `[Gemini ${model}]: ${apiErrorMessage}`;
+        console.warn(`Gemini API call failed for ${model}:`, apiErrorMessage);
+      }
+    } catch (err: any) {
+      lastError = err?.name === 'TimeoutError' || err?.name === 'AbortError'
+        ? `Gemini ${model} timed out after 15s`
+        : (err?.message || 'Network error calling Gemini API');
+      console.warn(`Gemini API exception for ${model}:`, lastError);
+    }
+  }
+
+  return {
+    success: false,
+    error: lastError || 'Gemini API failed to generate response.',
   };
 }
