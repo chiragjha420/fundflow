@@ -58,43 +58,74 @@ export default async function SupervisorsAdminPage() {
                 No supervisors provisioned yet. Create a factory first, then add a supervisor.
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
-                  <thead className="bg-slate-50 text-slate-700 font-medium text-xs uppercase tracking-wider">
-                    <tr>
-                      <th className="px-6 py-3">Name</th>
-                      <th className="px-6 py-3">Factory</th>
-                      <th className="px-6 py-3">Phone</th>
-                      <th className="px-6 py-3">Status</th>
-                      <th className="px-6 py-3 text-right">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 bg-white text-slate-900">
-                    {supervisors.map((sub) => (
-                      <tr key={sub.id} className="hover:bg-slate-50">
-                        <td className="px-6 py-4 font-semibold">{sub.name}</td>
-                        <td className="px-6 py-4">{sub.factories?.name}</td>
-                        <td className="px-6 py-4">{sub.phone}</td>
-                        <td className="px-6 py-4">
-                          <span
-                            className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-                              sub.active
-                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                : 'bg-red-50 text-red-700 border border-red-200'
-                            }`}
-                          >
-                            {sub.active ? 'Active' : 'Inactive'}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-right flex items-center justify-end gap-2">
-                          <ToggleSupervisorButton id={sub.id} active={sub.active} />
-                          <DeleteSupervisorButton id={sub.id} />
-                        </td>
+              <>
+                {/* Mobile Cards View (Zero Horizontal Scroll) */}
+                <div className="md:hidden divide-y divide-slate-100 bg-white">
+                  {supervisors.map((sub) => (
+                    <div key={sub.id} className="p-4 space-y-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <h3 className="font-bold text-slate-900 text-sm">{sub.name}</h3>
+                          <p className="text-xs text-slate-500">{sub.factories?.name || 'Unassigned'}</p>
+                          <p className="text-xs text-slate-400 mt-0.5">📱 {sub.phone}</p>
+                        </div>
+                        <span
+                          className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
+                            sub.active
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              : 'bg-red-50 text-red-700 border border-red-200'
+                          }`}
+                        >
+                          {sub.active ? 'Active' : 'Inactive'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-50">
+                        <ToggleSupervisorButton id={sub.id} active={sub.active} />
+                        <DeleteSupervisorButton id={sub.id} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Desktop Table View */}
+                <div className="hidden md:block overflow-x-auto">
+                  <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+                    <thead className="bg-slate-50 text-slate-700 font-medium text-xs uppercase tracking-wider">
+                      <tr>
+                        <th className="px-6 py-3">Name</th>
+                        <th className="px-6 py-3">Factory</th>
+                        <th className="px-6 py-3">Phone</th>
+                        <th className="px-6 py-3">Status</th>
+                        <th className="px-6 py-3 text-right">Action</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white text-slate-900">
+                      {supervisors.map((sub) => (
+                        <tr key={sub.id} className="hover:bg-slate-50">
+                          <td className="px-6 py-4 font-semibold">{sub.name}</td>
+                          <td className="px-6 py-4">{sub.factories?.name}</td>
+                          <td className="px-6 py-4">{sub.phone}</td>
+                          <td className="px-6 py-4">
+                            <span
+                              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                                sub.active
+                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                  : 'bg-red-50 text-red-700 border border-red-200'
+                              }`}
+                            >
+                              {sub.active ? 'Active' : 'Inactive'}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-right flex items-center justify-end gap-2">
+                            <ToggleSupervisorButton id={sub.id} active={sub.active} />
+                            <DeleteSupervisorButton id={sub.id} />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </div>
         </div>

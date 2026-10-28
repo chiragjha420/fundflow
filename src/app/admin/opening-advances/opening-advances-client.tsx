@@ -601,122 +601,57 @@ export function OpeningAdvancesClient({
           )}
         </div>
 
-        {/* Worker Table */}
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
-            <thead className="bg-slate-50 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
-              <tr>
-                <th className="px-4 py-3 w-12 text-center">#</th>
-                <th className="px-4 py-3">Worker Name</th>
-                <th className="px-4 py-3">Phone</th>
-                <th className="px-4 py-3 w-48 text-right">Opening Advance (₹)</th>
-                <th className="px-4 py-3 text-right">Cash Disbursed</th>
-                <th className="px-4 py-3 text-right">Total Advance</th>
-                <th className="px-4 py-3 w-24 text-center">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 bg-white">
-              {filteredWorkers.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center text-slate-400">
-                    No workers match your search or filter.
-                  </td>
-                </tr>
-              ) : (
-                filteredWorkers.map((w, idx) => {
-                  const localVal = localValues[w.worker_id];
-                  const currentOpening = localVal !== undefined
-                    ? Math.max(0, Math.round(Number(localVal) || 0))
-                    : w.opening_advance;
-                  const isDirty = localVal !== undefined && currentOpening !== w.opening_advance;
-                  const runningTotal = currentOpening + (w.total_cash_disbursed || 0);
+        {/* Worker List or Table */}
+        {filteredWorkers.length === 0 ? (
+          <div className="p-12 text-center text-slate-400 text-xs">
+            No workers match your search or filter.
+          </div>
+        ) : (
+          <>
+            {/* Mobile Worker Cards (Zero Horizontal Scroll) */}
+            <div className="md:hidden divide-y divide-slate-100 bg-white">
+              {filteredWorkers.map((w, idx) => {
+                const localVal = localValues[w.worker_id];
+                const currentOpening = localVal !== undefined
+                  ? Math.max(0, Math.round(Number(localVal) || 0))
+                  : w.opening_advance;
+                const isDirty = localVal !== undefined && currentOpening !== w.opening_advance;
+                const runningTotal = currentOpening + (w.total_cash_disbursed || 0);
 
-                  return (
-                    <tr
-                      key={w.worker_id}
-                      className={`hover:bg-slate-50/80 transition-colors ${
-                        isDirty ? 'bg-amber-50/40' : ''
-                      }`}
-                    >
-                      {/* Row Index */}
-                      <td className="px-4 py-2.5 text-center font-bold text-slate-400 text-[11px]">
-                        {idx + 1}
-                      </td>
-
-                      {/* Worker Name & Photo */}
-                      <td className="px-4 py-2.5">
-                        <div className="flex items-center gap-2.5">
-                          {w.worker_photo_url ? (
-                            <img
-                              src={w.worker_photo_url}
-                              alt={w.worker_name}
-                              className="h-8 w-8 rounded-full object-cover border border-slate-200 shrink-0"
-                            />
-                          ) : (
-                            <div className="h-8 w-8 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-600 font-bold text-xs shrink-0">
-                              {w.worker_name.charAt(0).toUpperCase()}
-                            </div>
-                          )}
-                          <div>
-                            <span className="font-extrabold text-slate-900 block text-xs">
-                              {w.worker_name}
-                            </span>
-                            <span className="text-[10px] text-slate-400 block">
-                              ID: {w.worker_id.slice(0, 8)}
-                            </span>
-                          </div>
-                        </div>
-                      </td>
-
-                      {/* Phone */}
-                      <td className="px-4 py-2.5 text-slate-600 font-medium">
-                        {w.worker_phone || (
-                          <span className="text-slate-300 italic">No phone</span>
-                        )}
-                      </td>
-
-                      {/* Opening Advance Input (Fast Excel-like edit) */}
-                      <td className="px-4 py-2.5 text-right">
-                        <div className="relative inline-flex items-center justify-end w-40">
-                          <IndianRupee className="absolute left-2.5 h-3.5 w-3.5 text-slate-400 pointer-events-none" />
-                          <input
-                            ref={el => { inputRefs.current[w.worker_id] = el; }}
-                            type="number"
-                            min="0"
-                            step="1"
-                            value={localVal !== undefined ? localVal : (w.opening_advance || 0)}
-                            onChange={e => handleInputChange(w.worker_id, e.target.value)}
-                            onKeyDown={e => handleKeyDown(e, idx, filteredWorkers)}
-                            onFocus={e => e.target.select()}
-                            className={`w-full pl-8 pr-2.5 py-1.5 text-right font-black rounded-lg text-xs transition-all ${
-                              isDirty
-                                ? 'bg-amber-50 border-2 border-amber-500 text-amber-950 focus:ring-amber-500 shadow-xs'
-                                : currentOpening > 0
-                                ? 'bg-emerald-50/50 border border-emerald-300 text-emerald-950 focus:ring-emerald-500'
-                                : 'bg-white border border-slate-300 text-slate-900 focus:ring-slate-900'
-                            }`}
+                return (
+                  <div
+                    key={w.worker_id}
+                    className={`p-3.5 space-y-2.5 transition-colors ${
+                      isDirty ? 'bg-amber-50/40' : ''
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2.5">
+                        <span className="text-[10px] font-bold text-slate-400 w-5">#{idx + 1}</span>
+                        {w.worker_photo_url ? (
+                          <img
+                            src={w.worker_photo_url}
+                            alt={w.worker_name}
+                            className="h-8 w-8 rounded-full object-cover border border-slate-200 shrink-0"
                           />
+                        ) : (
+                          <div className="h-8 w-8 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-600 font-bold text-xs shrink-0">
+                            {w.worker_name.charAt(0).toUpperCase()}
+                          </div>
+                        )}
+                        <div>
+                          <span className="font-extrabold text-slate-900 block text-xs">
+                            {w.worker_name}
+                          </span>
+                          {w.worker_phone && (
+                            <span className="text-[10px] text-slate-500 block">
+                              📱 {w.worker_phone}
+                            </span>
+                          )}
                         </div>
-                      </td>
+                      </div>
 
-                      {/* Cash Disbursed */}
-                      <td className="px-4 py-2.5 text-right font-semibold text-slate-600">
-                        {formatINR(w.total_cash_disbursed || 0)}
-                      </td>
-
-                      {/* Running Total Preview */}
-                      <td className="px-4 py-2.5 text-right">
-                        <span
-                          className={`font-black text-xs ${
-                            runningTotal > 0 ? 'text-indigo-700' : 'text-slate-400'
-                          }`}
-                        >
-                          {formatINR(runningTotal)}
-                        </span>
-                      </td>
-
-                      {/* Status Badge */}
-                      <td className="px-4 py-2.5 text-center">
+                      <div>
                         {isDirty ? (
                           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
                             Edited
@@ -730,14 +665,181 @@ export function OpeningAdvancesClient({
                             ₹0
                           </span>
                         )}
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-xs bg-slate-50 p-2.5 rounded-lg border border-slate-100 items-center">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                          Opening Advance
+                        </label>
+                        <div className="relative flex items-center w-full">
+                          <IndianRupee className="absolute left-2 h-3.5 w-3.5 text-slate-400 pointer-events-none" />
+                          <input
+                            ref={el => { inputRefs.current[w.worker_id] = el; }}
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={localVal !== undefined ? localVal : (w.opening_advance || 0)}
+                            onChange={e => handleInputChange(w.worker_id, e.target.value)}
+                            onKeyDown={e => handleKeyDown(e, idx, filteredWorkers)}
+                            onFocus={e => e.target.select()}
+                            className={`w-full pl-6 pr-2 py-1.5 text-right font-black rounded-lg text-xs transition-all ${
+                              isDirty
+                                ? 'bg-amber-50 border-2 border-amber-500 text-amber-950 focus:ring-amber-500 shadow-xs'
+                                : currentOpening > 0
+                                ? 'bg-emerald-50/50 border border-emerald-300 text-emerald-950 focus:ring-emerald-500'
+                                : 'bg-white border border-slate-300 text-slate-900 focus:ring-slate-900'
+                            }`}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="text-right space-y-0.5 pl-2 border-l border-slate-200">
+                        <div className="text-[11px] text-slate-500">
+                          Disbursed: <span className="font-semibold text-slate-700">{formatINR(w.total_cash_disbursed || 0)}</span>
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          Total: <span className="font-black text-indigo-700">{formatINR(runningTotal)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Desktop Table View */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
+                <thead className="bg-slate-50 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
+                  <tr>
+                    <th className="px-4 py-3 w-12 text-center">#</th>
+                    <th className="px-4 py-3">Worker Name</th>
+                    <th className="px-4 py-3">Phone</th>
+                    <th className="px-4 py-3 w-48 text-right">Opening Advance (₹)</th>
+                    <th className="px-4 py-3 text-right">Cash Disbursed</th>
+                    <th className="px-4 py-3 text-right">Total Advance</th>
+                    <th className="px-4 py-3 w-24 text-center">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {filteredWorkers.map((w, idx) => {
+                    const localVal = localValues[w.worker_id];
+                    const currentOpening = localVal !== undefined
+                      ? Math.max(0, Math.round(Number(localVal) || 0))
+                      : w.opening_advance;
+                    const isDirty = localVal !== undefined && currentOpening !== w.opening_advance;
+                    const runningTotal = currentOpening + (w.total_cash_disbursed || 0);
+
+                    return (
+                      <tr
+                        key={w.worker_id}
+                        className={`hover:bg-slate-50/80 transition-colors ${
+                          isDirty ? 'bg-amber-50/40' : ''
+                        }`}
+                      >
+                        {/* Row Index */}
+                        <td className="px-4 py-2.5 text-center font-bold text-slate-400 text-[11px]">
+                          {idx + 1}
+                        </td>
+
+                        {/* Worker Name & Photo */}
+                        <td className="px-4 py-2.5">
+                          <div className="flex items-center gap-2.5">
+                            {w.worker_photo_url ? (
+                              <img
+                                src={w.worker_photo_url}
+                                alt={w.worker_name}
+                                className="h-8 w-8 rounded-full object-cover border border-slate-200 shrink-0"
+                              />
+                            ) : (
+                              <div className="h-8 w-8 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-600 font-bold text-xs shrink-0">
+                                {w.worker_name.charAt(0).toUpperCase()}
+                              </div>
+                            )}
+                            <div>
+                              <span className="font-extrabold text-slate-900 block text-xs">
+                                {w.worker_name}
+                              </span>
+                              <span className="text-[10px] text-slate-400 block">
+                                ID: {w.worker_id.slice(0, 8)}
+                              </span>
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Phone */}
+                        <td className="px-4 py-2.5 text-slate-600 font-medium">
+                          {w.worker_phone || (
+                            <span className="text-slate-300 italic">No phone</span>
+                          )}
+                        </td>
+
+                        {/* Opening Advance Input (Fast Excel-like edit) */}
+                        <td className="px-4 py-2.5 text-right">
+                          <div className="relative inline-flex items-center justify-end w-40">
+                            <IndianRupee className="absolute left-2.5 h-3.5 w-3.5 text-slate-400 pointer-events-none" />
+                            <input
+                              ref={el => { inputRefs.current[w.worker_id] = el; }}
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={localVal !== undefined ? localVal : (w.opening_advance || 0)}
+                              onChange={e => handleInputChange(w.worker_id, e.target.value)}
+                              onKeyDown={e => handleKeyDown(e, idx, filteredWorkers)}
+                              onFocus={e => e.target.select()}
+                              className={`w-full pl-8 pr-2.5 py-1.5 text-right font-black rounded-lg text-xs transition-all ${
+                                isDirty
+                                  ? 'bg-amber-50 border-2 border-amber-500 text-amber-950 focus:ring-amber-500 shadow-xs'
+                                  : currentOpening > 0
+                                  ? 'bg-emerald-50/50 border border-emerald-300 text-emerald-950 focus:ring-emerald-500'
+                                  : 'bg-white border border-slate-300 text-slate-900 focus:ring-slate-900'
+                              }`}
+                            />
+                          </div>
+                        </td>
+
+                        {/* Cash Disbursed */}
+                        <td className="px-4 py-2.5 text-right font-semibold text-slate-600">
+                          {formatINR(w.total_cash_disbursed || 0)}
+                        </td>
+
+                        {/* Running Total Preview */}
+                        <td className="px-4 py-2.5 text-right">
+                          <span
+                            className={`font-black text-xs ${
+                              runningTotal > 0 ? 'text-indigo-700' : 'text-slate-400'
+                            }`}
+                          >
+                            {formatINR(runningTotal)}
+                          </span>
+                        </td>
+
+                        {/* Status Badge */}
+                        <td className="px-4 py-2.5 text-center">
+                          {isDirty ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                              Edited
+                            </span>
+                          ) : currentOpening > 0 ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-100 text-emerald-800">
+                              Active
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-slate-300 font-semibold">
+                              ₹0
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
 
         {/* Table Footer Summary */}
         <div className="p-4 border-t border-slate-200 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-semibold text-slate-600">

@@ -289,15 +289,15 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
         </div>
 
         {/* Quick Prompts On Top */}
-        <div className="bg-slate-50 border-b border-slate-200 px-4 py-2.5 overflow-x-auto">
-          <div className="flex items-center gap-2">
+        <div className="bg-slate-50 border-b border-slate-200 px-3 sm:px-4 py-2.5">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
             {quickQuestions.map((q, idx) => (
               <button
                 key={idx}
                 type="button"
                 disabled={loading}
                 onClick={() => handleSend(q)}
-                className="whitespace-nowrap px-3 py-1.5 rounded-full bg-white border border-slate-200 text-slate-700 text-xs font-medium hover:bg-slate-100 hover:text-slate-900 hover:border-slate-300 transition-colors disabled:opacity-50 shrink-0 shadow-sm"
+                className="text-left px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-white border border-slate-200 text-slate-700 text-[11px] sm:text-xs font-medium hover:bg-slate-100 hover:text-slate-900 hover:border-slate-300 transition-colors disabled:opacity-50 shadow-xs"
               >
                 {q}
               </button>

@@ -266,6 +266,7 @@ export function AdminDashboard({
   const [workerSupervisorId, setWorkerSupervisorId] = useState<string>('all');
   const [workerSearchQuery, setWorkerSearchQuery] = useState<string>('');
   const [expandedWorkerId, setExpandedWorkerId] = useState<string | null>(null);
+  const [isWorkerAdvancesCollapsed, setIsWorkerAdvancesCollapsed] = useState<boolean>(true);
 
   // Handle office disbursement submission
   const handleDisbursementSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -883,41 +884,87 @@ export function AdminDashboard({
               No factories configured. Create a factory under the Supervisors tab to see cash positions.
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
-                <thead className="bg-slate-50 text-slate-700 font-medium text-xs uppercase tracking-wider">
-                  <tr>
-                    <th className="px-6 py-3">Factory</th>
-                    <th className="px-6 py-3 text-right">Sent (Total)</th>
-                    <th className="px-6 py-3 text-right">Confirmed Rec</th>
-                    <th className="px-6 py-3 text-right">Transfers (Net)</th>
-                    <th className="px-6 py-3 text-right">Disbursed (Workers)</th>
-                    <th className="px-6 py-3 text-right">Expenses</th>
-                    <th className="px-6 py-3 text-right">Cash On Hand</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 bg-white text-slate-900 font-semibold">
-                  {factoryCashPositions.map((pos) => (
-                    <tr key={pos.id} className="hover:bg-slate-50">
-                      <td className="px-6 py-4">
-                        <div>
-                          <div className="font-bold text-slate-900">{pos.name}</div>
-                          <div className="text-xs text-slate-500 font-normal">{pos.location}</div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-right text-slate-500">{formatINR(pos.sent)}</td>
-                      <td className="px-6 py-4 text-right text-slate-800">{formatINR(pos.confirmed)}</td>
-                      <td className={`px-6 py-4 text-right ${pos.transfers > 0 ? 'text-emerald-600' : pos.transfers < 0 ? 'text-amber-600' : 'text-slate-500'}`}>
-                        {pos.transfers > 0 ? `+${formatINR(pos.transfers)}` : formatINR(pos.transfers)}
-                      </td>
-                      <td className="px-6 py-4 text-right text-slate-600">{formatINR(pos.disbursed)}</td>
-                      <td className="px-6 py-4 text-right text-red-600">{formatINR(pos.expenses)}</td>
-                      <td className="px-6 py-4 text-right font-bold text-emerald-600">{formatINR(pos.remaining)}</td>
+            <>
+              {/* Mobile Factory Cards (Zero Horizontal Scroll) */}
+              <div className="md:hidden divide-y divide-slate-100 bg-white">
+                {factoryCashPositions.map((pos) => (
+                  <div key={pos.id} className="p-4 space-y-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <h3 className="font-bold text-slate-900 text-sm">{pos.name}</h3>
+                        <p className="text-xs text-slate-500">{pos.location}</p>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Cash On Hand</span>
+                        <span className="text-base font-black text-emerald-600">{formatINR(pos.remaining)}</span>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-xs bg-slate-50 p-2.5 rounded-lg border border-slate-100">
+                      <div>
+                        <span className="text-slate-500 block text-[11px]">Sent:</span>
+                        <span className="font-semibold text-slate-700">{formatINR(pos.sent)}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block text-[11px]">Confirmed:</span>
+                        <span className="font-semibold text-slate-800">{formatINR(pos.confirmed)}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block text-[11px]">Net Transfers:</span>
+                        <span className={`font-semibold ${pos.transfers > 0 ? 'text-emerald-600' : pos.transfers < 0 ? 'text-amber-600' : 'text-slate-600'}`}>
+                          {pos.transfers > 0 ? `+${formatINR(pos.transfers)}` : formatINR(pos.transfers)}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block text-[11px]">Disbursed:</span>
+                        <span className="font-semibold text-slate-700">{formatINR(pos.disbursed)}</span>
+                      </div>
+                      <div className="col-span-2 pt-1 border-t border-slate-200/60 flex justify-between items-center">
+                        <span className="text-slate-500 text-[11px]">Expenses:</span>
+                        <span className="font-bold text-red-600">{formatINR(pos.expenses)}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Desktop Table View */}
+              <div className="hidden md:block overflow-x-auto">
+                <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+                  <thead className="bg-slate-50 text-slate-700 font-medium text-xs uppercase tracking-wider">
+                    <tr>
+                      <th className="px-6 py-3">Factory</th>
+                      <th className="px-6 py-3 text-right">Sent (Total)</th>
+                      <th className="px-6 py-3 text-right">Confirmed Rec</th>
+                      <th className="px-6 py-3 text-right">Transfers (Net)</th>
+                      <th className="px-6 py-3 text-right">Disbursed (Workers)</th>
+                      <th className="px-6 py-3 text-right">Expenses</th>
+                      <th className="px-6 py-3 text-right">Cash On Hand</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white text-slate-900 font-semibold">
+                    {factoryCashPositions.map((pos) => (
+                      <tr key={pos.id} className="hover:bg-slate-50">
+                        <td className="px-6 py-4">
+                          <div>
+                            <div className="font-bold text-slate-900">{pos.name}</div>
+                            <div className="text-xs text-slate-500 font-normal">{pos.location}</div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-right text-slate-500">{formatINR(pos.sent)}</td>
+                        <td className="px-6 py-4 text-right text-slate-800">{formatINR(pos.confirmed)}</td>
+                        <td className={`px-6 py-4 text-right ${pos.transfers > 0 ? 'text-emerald-600' : pos.transfers < 0 ? 'text-amber-600' : 'text-slate-500'}`}>
+                          {pos.transfers > 0 ? `+${formatINR(pos.transfers)}` : formatINR(pos.transfers)}
+                        </td>
+                        <td className="px-6 py-4 text-right text-slate-600">{formatINR(pos.disbursed)}</td>
+                        <td className="px-6 py-4 text-right text-red-600">{formatINR(pos.expenses)}</td>
+                        <td className="px-6 py-4 text-right font-bold text-emerald-600">{formatINR(pos.remaining)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -982,379 +1029,525 @@ export function AdminDashboard({
       {/* Worker Advances Statement & Date Range Filter */}
       <div id="worker-advances-section" className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden space-y-0">
         {/* Header */}
-        <div className="px-5 py-4 border-b border-slate-200 bg-slate-50 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div 
+          onClick={() => setIsWorkerAdvancesCollapsed(!isWorkerAdvancesCollapsed)}
+          className="px-4 sm:px-5 py-3.5 sm:py-4 border-b border-slate-200 bg-slate-50 flex flex-col md:flex-row md:items-center justify-between gap-3 cursor-pointer hover:bg-slate-100/70 transition-colors select-none"
+        >
           <div className="flex items-center gap-2.5">
             <div className="h-9 w-9 rounded-lg bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-700 shrink-0">
               <CalendarDays className="h-5 w-5" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-slate-900 tracking-tight flex items-center gap-2">
-                <span>Worker Advances Statement</span>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-sm sm:text-base font-bold text-slate-900 tracking-tight">
+                  Worker Advances Statement
+                </h2>
                 {(workerFromDate || workerToDate) && (
                   <span className="text-[10px] bg-indigo-100 text-indigo-800 font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
                     Date Filter Active
                   </span>
                 )}
-              </h2>
+                {isWorkerAdvancesCollapsed && (
+                  <span className="text-[11px] bg-slate-200 text-slate-700 font-semibold px-2 py-0.5 rounded-full">
+                    {filteredWorkerReports.length} workers • {formatINR(filteredWorkerReports.reduce((sum, item) => sum + Number(item.worker.running_advance), 0))} total
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-slate-500">
-                Audit cash advances disbursed to every worker across any timeframe
+                {isWorkerAdvancesCollapsed 
+                  ? 'Tap to expand statement & filter date ranges' 
+                  : 'Audit cash advances disbursed to every worker across any timeframe'}
               </p>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 self-start md:self-auto">
+          <div className="flex flex-wrap items-center gap-2 self-start md:self-auto" onClick={(e) => e.stopPropagation()}>
             <Link
               href={workerFactoryId !== 'all' ? `/admin/opening-advances?factory=${workerFactoryId}` : '/admin/opening-advances'}
-              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-600 bg-emerald-600 px-3 py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 transition-colors min-h-[38px]"
+              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-600 bg-emerald-600 px-3 py-1.5 sm:py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 transition-colors min-h-[36px]"
             >
-              <Coins className="h-4 w-4" />
+              <Coins className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
               <span>Edit Opening Advances</span>
             </Link>
+
+            {!isWorkerAdvancesCollapsed && (
+              <button
+                type="button"
+                onClick={exportWorkerAdvancesToCSV}
+                className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 sm:py-2 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 transition-colors min-h-[36px]"
+              >
+                <Download className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-slate-500" />
+                <span>Export CSV</span>
+              </button>
+            )}
+
             <button
-              onClick={exportWorkerAdvancesToCSV}
-              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 transition-colors min-h-[38px]"
+              type="button"
+              onClick={() => setIsWorkerAdvancesCollapsed(!isWorkerAdvancesCollapsed)}
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 sm:py-2 text-xs font-bold text-slate-700 shadow-xs hover:bg-slate-50 transition-colors min-h-[36px]"
             >
-              <Download className="h-4 w-4 text-slate-500" />
-              <span>Export Statement to CSV</span>
+              {isWorkerAdvancesCollapsed ? (
+                <>
+                  <ChevronDown className="h-4 w-4 text-slate-500" />
+                  <span>Expand</span>
+                </>
+              ) : (
+                <>
+                  <ChevronUp className="h-4 w-4 text-slate-500" />
+                  <span>Collapse</span>
+                </>
+              )}
             </button>
           </div>
         </div>
 
-        {/* Filter Controls Bar */}
-        <div className="p-5 border-b border-slate-100 bg-white space-y-4">
-          {/* Date Range Inputs and Quick Presets */}
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-            <div className="flex flex-wrap items-center gap-3">
-              <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-                <Calendar className="h-4 w-4 text-slate-400" />
-                Timeframe:
-              </span>
-              <div className="flex items-center gap-2">
-                <input
-                  type="date"
-                  value={workerFromDate}
-                  onChange={(e) => setWorkerFromDate(e.target.value)}
-                  className="rounded border border-slate-300 px-2.5 py-1.5 text-xs text-slate-900 bg-white min-h-[38px] focus:ring-slate-500 focus:border-slate-500 shadow-sm"
-                  title="From Date"
-                />
-                <span className="text-xs text-slate-400 font-medium">to</span>
-                <input
-                  type="date"
-                  value={workerToDate}
-                  onChange={(e) => setWorkerToDate(e.target.value)}
-                  className="rounded border border-slate-300 px-2.5 py-1.5 text-xs text-slate-900 bg-white min-h-[38px] focus:ring-slate-500 focus:border-slate-500 shadow-sm"
-                  title="To Date"
-                />
+        {!isWorkerAdvancesCollapsed && (
+          <>
+            {/* Filter Controls Bar */}
+            <div className="p-5 border-b border-slate-100 bg-white space-y-4">
+              {/* Date Range Inputs and Quick Presets */}
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                    <Calendar className="h-4 w-4 text-slate-400" />
+                    Timeframe:
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="date"
+                      value={workerFromDate}
+                      onChange={(e) => setWorkerFromDate(e.target.value)}
+                      className="rounded border border-slate-300 px-2.5 py-1.5 text-xs text-slate-900 bg-white min-h-[38px] focus:ring-slate-500 focus:border-slate-500 shadow-sm"
+                      title="From Date"
+                    />
+                    <span className="text-xs text-slate-400 font-medium">to</span>
+                    <input
+                      type="date"
+                      value={workerToDate}
+                      onChange={(e) => setWorkerToDate(e.target.value)}
+                      className="rounded border border-slate-300 px-2.5 py-1.5 text-xs text-slate-900 bg-white min-h-[38px] focus:ring-slate-500 focus:border-slate-500 shadow-sm"
+                      title="To Date"
+                    />
+                  </div>
+                </div>
+
+                {/* Quick Presets Pills */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setWorkerDatePreset('all')}
+                    className={`px-3 py-1.5 rounded text-xs font-semibold border transition-colors ${
+                      !workerFromDate && !workerToDate
+                        ? 'bg-slate-900 text-white border-slate-900'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    All Time
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWorkerDatePreset('today')}
+                    className="px-3 py-1.5 rounded text-xs font-semibold bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 transition-colors"
+                  >
+                    Today
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWorkerDatePreset('this_week')}
+                    className="px-3 py-1.5 rounded text-xs font-semibold bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 transition-colors"
+                  >
+                    This Week
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWorkerDatePreset('this_month')}
+                    className="px-3 py-1.5 rounded text-xs font-semibold bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 transition-colors"
+                  >
+                    This Month
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWorkerDatePreset('last_month')}
+                    className="px-3 py-1.5 rounded text-xs font-semibold bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 transition-colors"
+                  >
+                    Last Month
+                  </button>
+                </div>
+              </div>
+
+              {/* Secondary Filters: Factory, Supervisor, Search Worker */}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 pt-1">
+                {/* Factory Filter */}
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                    Filter by Factory
+                  </label>
+                  <select
+                    value={workerFactoryId}
+                    onChange={(e) => setWorkerFactoryId(e.target.value)}
+                    className="block w-full rounded border border-slate-300 text-xs py-2 px-2.5 focus:border-slate-500 focus:outline-none focus:ring-slate-500 min-h-[38px] text-slate-900 bg-white"
+                  >
+                    <option value="all">All Factories</option>
+                    {factories.map(f => (
+                      <option key={f.id} value={f.id}>{f.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Supervisor Filter */}
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                    Filter by Supervisor
+                  </label>
+                  <select
+                    value={workerSupervisorId}
+                    onChange={(e) => setWorkerSupervisorId(e.target.value)}
+                    className="block w-full rounded border border-slate-300 text-xs py-2 px-2.5 focus:border-slate-500 focus:outline-none focus:ring-slate-500 min-h-[38px] text-slate-900 bg-white"
+                  >
+                    <option value="all">All Supervisors</option>
+                    {supervisors.map(s => (
+                      <option key={s.id} value={s.id}>{s.name} ({s.factories?.name || 'Unassigned'})</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Worker Name Search */}
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                    Search Worker
+                  </label>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={workerSearchQuery}
+                      onChange={(e) => setWorkerSearchQuery(e.target.value)}
+                      placeholder="Worker name or phone..."
+                      className="block w-full rounded border border-slate-300 pl-9 pr-3 py-2 text-xs focus:border-slate-500 focus:outline-none focus:ring-slate-500 min-h-[38px] text-slate-900 bg-white"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Metric Summary Banner */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+                <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-3">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                    {workerFromDate || workerToDate ? 'Period Advances Total' : 'All-Time Total Disbursed'}
+                  </span>
+                  <span className="text-lg font-black text-slate-900">
+                    {formatINR(totalWorkerPeriodAdvance)}
+                  </span>
+                  <span className="text-[10px] text-slate-400 block mt-0.5">
+                    Across {workersWithPeriodAdvance} workers with advances
+                  </span>
+                </div>
+
+                <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-3">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                    Advances in Period
+                  </span>
+                  <span className="text-lg font-black text-indigo-700">
+                    {totalWorkerPeriodTxCount}
+                  </span>
+                  <span className="text-[10px] text-slate-400 block mt-0.5">
+                    Disbursements recorded in timeframe
+                  </span>
+                </div>
+
+                <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-3">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                    Total Outstanding Balance
+                  </span>
+                  <span className="text-lg font-black text-red-600">
+                    {formatINR(filteredWorkerReports.reduce((sum, item) => sum + Number(item.worker.running_advance), 0))}
+                  </span>
+                  <span className="text-[10px] text-slate-400 block mt-0.5">
+                    Cumulative across {filteredWorkerReports.length} listed workers
+                  </span>
+                </div>
               </div>
             </div>
 
-            {/* Quick Presets Pills */}
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <button
-                type="button"
-                onClick={() => setWorkerDatePreset('all')}
-                className={`px-3 py-1.5 rounded text-xs font-semibold border transition-colors ${
-                  !workerFromDate && !workerToDate
-                    ? 'bg-slate-900 text-white border-slate-900'
-                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                }`}
-              >
-                All Time
-              </button>
-              <button
-                type="button"
-                onClick={() => setWorkerDatePreset('today')}
-                className="px-3 py-1.5 rounded text-xs font-semibold bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 transition-colors"
-              >
-                Today
-              </button>
-              <button
-                type="button"
-                onClick={() => setWorkerDatePreset('this_week')}
-                className="px-3 py-1.5 rounded text-xs font-semibold bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 transition-colors"
-              >
-                This Week
-              </button>
-              <button
-                type="button"
-                onClick={() => setWorkerDatePreset('this_month')}
-                className="px-3 py-1.5 rounded text-xs font-semibold bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 transition-colors"
-              >
-                This Month
-              </button>
-              <button
-                type="button"
-                onClick={() => setWorkerDatePreset('last_month')}
-                className="px-3 py-1.5 rounded text-xs font-semibold bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 transition-colors"
-              >
-                Last Month
-              </button>
-            </div>
-          </div>
-
-          {/* Secondary Filters: Factory, Supervisor, Search Worker */}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 pt-1">
-            {/* Factory Filter */}
-            <div>
-              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                Filter by Factory
-              </label>
-              <select
-                value={workerFactoryId}
-                onChange={(e) => setWorkerFactoryId(e.target.value)}
-                className="block w-full rounded border border-slate-300 text-xs py-2 px-2.5 focus:border-slate-500 focus:outline-none focus:ring-slate-500 min-h-[38px] text-slate-900 bg-white"
-              >
-                <option value="all">All Factories</option>
-                {factories.map(f => (
-                  <option key={f.id} value={f.id}>{f.name}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* Supervisor Filter */}
-            <div>
-              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                Filter by Supervisor
-              </label>
-              <select
-                value={workerSupervisorId}
-                onChange={(e) => setWorkerSupervisorId(e.target.value)}
-                className="block w-full rounded border border-slate-300 text-xs py-2 px-2.5 focus:border-slate-500 focus:outline-none focus:ring-slate-500 min-h-[38px] text-slate-900 bg-white"
-              >
-                <option value="all">All Supervisors</option>
-                {supervisors.map(s => (
-                  <option key={s.id} value={s.id}>{s.name} ({s.factories?.name || 'Unassigned'})</option>
-                ))}
-              </select>
-            </div>
-
-            {/* Worker Name Search */}
-            <div>
-              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                Search Worker
-              </label>
-              <div className="relative">
-                <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400 pointer-events-none" />
-                <input
-                  type="text"
-                  value={workerSearchQuery}
-                  onChange={(e) => setWorkerSearchQuery(e.target.value)}
-                  placeholder="Worker name or phone..."
-                  className="block w-full rounded border border-slate-300 pl-9 pr-3 py-2 text-xs focus:border-slate-500 focus:outline-none focus:ring-slate-500 min-h-[38px] text-slate-900 bg-white"
-                />
+            {/* Worker Table or Mobile Cards */}
+            {filteredWorkerReports.length === 0 ? (
+              <div className="p-8 text-center text-sm text-slate-500">
+                No workers match the selected timeframe and filter criteria.
               </div>
-            </div>
-          </div>
+            ) : (
+              <>
+                {/* Mobile Worker Cards (Zero Horizontal Scroll) */}
+                <div className="md:hidden divide-y divide-slate-100 bg-white">
+                  {filteredWorkerReports.map((item) => {
+                    const isExpanded = expandedWorkerId === item.worker.worker_id;
 
-          {/* Metric Summary Banner */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
-            <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-3">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
-                {workerFromDate || workerToDate ? 'Period Advances Total' : 'All-Time Total Disbursed'}
-              </span>
-              <span className="text-lg font-black text-slate-900">
-                {formatINR(totalWorkerPeriodAdvance)}
-              </span>
-              <span className="text-[10px] text-slate-400 block mt-0.5">
-                Across {workersWithPeriodAdvance} workers with advances
-              </span>
-            </div>
-
-            <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-3">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
-                Advances in Period
-              </span>
-              <span className="text-lg font-black text-indigo-700">
-                {totalWorkerPeriodTxCount}
-              </span>
-              <span className="text-[10px] text-slate-400 block mt-0.5">
-                Disbursements recorded in timeframe
-              </span>
-            </div>
-
-            <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-3">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
-                Total Outstanding Balance
-              </span>
-              <span className="text-lg font-black text-red-600">
-                {formatINR(filteredWorkerReports.reduce((sum, item) => sum + Number(item.worker.running_advance), 0))}
-              </span>
-              <span className="text-[10px] text-slate-400 block mt-0.5">
-                Cumulative across {filteredWorkerReports.length} listed workers
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* Worker Table */}
-        {filteredWorkerReports.length === 0 ? (
-          <div className="p-8 text-center text-sm text-slate-500">
-            No workers match the selected timeframe and filter criteria.
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
-              <thead className="bg-slate-50 text-slate-700 font-semibold text-xs uppercase tracking-wider">
-                <tr>
-                  <th className="px-5 py-3">Worker</th>
-                  <th className="px-5 py-3">Factory / Supervisor</th>
-                  <th className="px-5 py-3 text-right">
-                    {workerFromDate || workerToDate ? 'Advance in Period' : 'Advance Disbursed'}
-                  </th>
-                  <th className="px-5 py-3 text-center">Advances Count</th>
-                  <th className="px-5 py-3 text-right">All-Time Outstanding</th>
-                  <th className="px-5 py-3 text-center">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 bg-white">
-                {filteredWorkerReports.map((item) => {
-                  const isExpanded = expandedWorkerId === item.worker.worker_id;
-
-                  return (
-                    <React.Fragment key={item.worker.worker_id}>
-                      <tr className={`hover:bg-slate-50/80 transition-colors ${item.periodAdvance > 0 && (workerFromDate || workerToDate) ? 'bg-indigo-50/20' : ''}`}>
-                        <td className="px-5 py-3.5">
-                          <div className="flex items-center gap-3">
+                    return (
+                      <div key={item.worker.worker_id} className={`p-3.5 space-y-2.5 ${item.periodAdvance > 0 && (workerFromDate || workerToDate) ? 'bg-indigo-50/20' : ''}`}>
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-2.5">
                             <div className="h-9 w-9 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
                               {item.worker.worker_photo_url ? (
-                                <img src={item.worker.worker_photo_url} alt={item.worker.worker_name} loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                                <img src={item.worker.worker_photo_url} alt="" className="h-full w-full object-cover" />
                               ) : (
                                 <User className="h-4 w-4 text-slate-400" />
                               )}
                             </div>
                             <div>
-                              <div className="font-bold text-slate-900">{item.worker.worker_name}</div>
-                              <div className="text-xs text-slate-500">{item.worker.worker_phone || 'No phone'}</div>
+                              <h4 className="text-xs font-bold text-slate-900">{item.worker.worker_name}</h4>
+                              <p className="text-[11px] text-slate-500">{item.factoryName} • {item.supervisorName}</p>
+                              {item.worker.worker_phone && (
+                                <p className="text-[10px] text-slate-400">{item.worker.worker_phone}</p>
+                              )}
                             </div>
                           </div>
-                        </td>
 
-                        <td className="px-5 py-3.5">
-                          <div>
-                            <div className="font-semibold text-slate-800 text-xs">{item.factoryName}</div>
-                            <div className="text-[11px] text-slate-500">{item.supervisorName}</div>
+                          <div className="text-right">
+                            <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">All-Time</span>
+                            <span className="text-xs font-black text-slate-900">{formatINR(item.worker.running_advance)}</span>
                           </div>
-                        </td>
+                        </div>
 
-                        <td className="px-5 py-3.5 text-right font-bold">
-                          {item.periodAdvance > 0 ? (
-                            <span className="text-red-600 bg-red-50 border border-red-200/60 px-2 py-0.5 rounded text-xs font-black">
+                        <div className="flex items-center justify-between text-xs bg-slate-50 px-2.5 py-1.5 rounded-md border border-slate-100">
+                          <div>
+                            <span className="text-slate-500 text-[11px]">
+                              {workerFromDate || workerToDate ? 'In Period:' : 'Disbursed:'}
+                            </span>
+                            <span className={`ml-1 font-bold ${item.periodAdvance > 0 ? 'text-red-600' : 'text-slate-400'}`}>
                               {formatINR(item.periodAdvance)}
                             </span>
-                          ) : (
-                            <span className="text-slate-400 text-xs font-normal">₹0</span>
-                          )}
-                        </td>
-
-                        <td className="px-5 py-3.5 text-center">
-                          {item.periodCount > 0 ? (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                              {item.periodCount} payment{item.periodCount > 1 ? 's' : ''}
-                            </span>
-                          ) : (
-                            <span className="text-slate-400 text-xs">-</span>
-                          )}
-                        </td>
-
-                        <td className="px-5 py-3.5 text-right font-black text-slate-900 text-xs">
-                          {formatINR(item.worker.running_advance)}
-                        </td>
-
-                        <td className="px-5 py-3.5 text-center">
+                          </div>
+                          <div>
+                            <span className="text-slate-500 text-[11px]">Count:</span>
+                            <span className="ml-1 font-semibold text-slate-700">{item.periodCount} tx</span>
+                          </div>
                           <button
                             type="button"
                             onClick={() => setExpandedWorkerId(isExpanded ? null : item.worker.worker_id)}
-                            className="inline-flex items-center gap-1 rounded border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100 transition-colors"
+                            className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-0.5"
                           >
-                            <span>{isExpanded ? 'Hide' : 'Details'}</span>
-                            {isExpanded ? (
-                              <ChevronUp className="h-3.5 w-3.5" />
-                            ) : (
-                              <ChevronDown className="h-3.5 w-3.5" />
-                            )}
+                            <span>{isExpanded ? 'Hide' : 'History'}</span>
+                            {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
                           </button>
-                        </td>
-                      </tr>
+                        </div>
 
-                      {/* Expanded Itemized Disbursement List */}
-                      {isExpanded && (
-                        <tr>
-                          <td colSpan={6} className="bg-slate-50/70 p-4 border-t border-b border-slate-200">
-                            <div className="space-y-3">
-                              <div className="flex justify-between items-center">
-                                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-                                  <Clock className="h-3.5 w-3.5 text-slate-500" />
-                                  <span>
-                                    Disbursements to {item.worker.worker_name}
-                                    {(workerFromDate || workerToDate) ? ` (${workerFromDate || 'Start'} to ${workerToDate || 'Today'})` : ' (All-Time)'}
-                                  </span>
-                                </h4>
-                                <span className="text-xs font-bold text-slate-600">
-                                  Total in period: <strong className="text-red-600">{formatINR(item.periodAdvance)}</strong> ({item.periodDisbursements.length} payments)
-                                </span>
-                              </div>
-
-                              {item.periodDisbursements.length === 0 ? (
-                                <p className="text-xs text-slate-500 py-3 text-center bg-white rounded border border-slate-200">
-                                  No disbursements recorded for this worker within the selected timeframe.
-                                </p>
-                              ) : (
-                                <div className="divide-y divide-slate-100 rounded-md border border-slate-200 bg-white overflow-hidden shadow-sm">
-                                  {item.periodDisbursements.map((tx) => (
-                                    <div key={tx.id} className="p-3 text-xs flex justify-between items-center hover:bg-slate-50">
-                                      <div>
-                                        <div className="font-extrabold text-slate-900 text-sm">
-                                          {formatINR(tx.amount)}
-                                        </div>
-                                        <div className="text-[10px] text-slate-500 mt-0.5">
-                                          {new Date(tx.created_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
-                                        </div>
-                                        {tx.note && (() => {
-                                          const parsed = parseHandoverNote(tx.note);
-                                          return (
-                                            <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                                              {parsed.note && (
-                                                <div className="text-[11px] text-slate-600 italic bg-slate-50 border border-slate-100 rounded px-1.5 py-0.5 w-fit">
-                                                  "{parsed.note}"
-                                                </div>
-                                              )}
-                                              {parsed.photoUrl && (
-                                                <button
-                                                  type="button"
-                                                  onClick={() => setAdminViewingPhotoUrl(parsed.photoUrl)}
-                                                  className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-1.5 py-0.5 rounded cursor-pointer transition-colors"
-                                                  title="View Cash Handover Proof"
-                                                >
-                                                  <Camera className="h-3 w-3" />
-                                                  <span>Handover Photo</span>
-                                                </button>
-                                              )}
-                                            </div>
-                                          );
-                                        })()}
-                                      </div>
-                                      <div className="text-right">
-                                        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                          {tx.status.toUpperCase()}
-                                        </span>
-                                        <span className="text-[10px] text-slate-500 block mt-1">
-                                          Disbursed by {tx.from?.name || 'Supervisor'}
-                                        </span>
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
+                        {/* Expanded Itemized Disbursement List on Mobile */}
+                        {isExpanded && (
+                          <div className="p-2.5 bg-indigo-50/50 rounded-lg border border-indigo-100 text-xs space-y-2">
+                            <div className="flex justify-between items-center text-[11px] font-bold text-slate-800">
+                              <span>Disbursements:</span>
+                              <span className="text-red-600">{formatINR(item.periodAdvance)}</span>
                             </div>
-                          </td>
-                        </tr>
-                      )}
-                    </React.Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                            {item.periodDisbursements.length === 0 ? (
+                              <p className="text-slate-500 text-[11px] py-1 text-center bg-white rounded border border-slate-100">
+                                No disbursements in this period.
+                              </p>
+                            ) : (
+                              <div className="space-y-1.5">
+                                {item.periodDisbursements.map((tx: any) => {
+                                  const parsed = parseHandoverNote(tx.note);
+                                  return (
+                                    <div key={tx.id} className="p-2 bg-white rounded border border-slate-100 space-y-1 text-[11px]">
+                                      <div className="flex justify-between items-center">
+                                        <span className="font-extrabold text-slate-900">{formatINR(tx.amount)}</span>
+                                        <span className="text-[10px] text-slate-400">
+                                          {new Date(tx.created_at).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}
+                                        </span>
+                                      </div>
+                                      <div className="flex justify-between items-center text-[10px] text-slate-500">
+                                        <span>By {tx.from?.name || 'Supervisor'}</span>
+                                        {parsed.photoUrl && (
+                                          <button
+                                            type="button"
+                                            onClick={() => setAdminViewingPhotoUrl(parsed.photoUrl)}
+                                            className="text-emerald-700 font-semibold underline flex items-center gap-0.5"
+                                          >
+                                            <Camera className="h-2.5 w-2.5" />
+                                            <span>Photo</span>
+                                          </button>
+                                        )}
+                                      </div>
+                                      {parsed.note && (
+                                        <p className="text-[10px] text-slate-600 italic">"{parsed.note}"</p>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Desktop Table View */}
+                <div className="hidden md:block overflow-x-auto">
+                  <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+                    <thead className="bg-slate-50 text-slate-700 font-semibold text-xs uppercase tracking-wider">
+                      <tr>
+                        <th className="px-5 py-3">Worker</th>
+                        <th className="px-5 py-3">Factory / Supervisor</th>
+                        <th className="px-5 py-3 text-right">
+                          {workerFromDate || workerToDate ? 'Advance in Period' : 'Advance Disbursed'}
+                        </th>
+                        <th className="px-5 py-3 text-center">Advances Count</th>
+                        <th className="px-5 py-3 text-right">All-Time Outstanding</th>
+                        <th className="px-5 py-3 text-center">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {filteredWorkerReports.map((item) => {
+                        const isExpanded = expandedWorkerId === item.worker.worker_id;
+
+                        return (
+                          <React.Fragment key={item.worker.worker_id}>
+                            <tr className={`hover:bg-slate-50/80 transition-colors ${item.periodAdvance > 0 && (workerFromDate || workerToDate) ? 'bg-indigo-50/20' : ''}`}>
+                              <td className="px-5 py-3.5">
+                                <div className="flex items-center gap-3">
+                                  <div className="h-9 w-9 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
+                                    {item.worker.worker_photo_url ? (
+                                      <img src={item.worker.worker_photo_url} alt={item.worker.worker_name} loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                                    ) : (
+                                      <User className="h-4 w-4 text-slate-400" />
+                                    )}
+                                  </div>
+                                  <div>
+                                    <div className="font-bold text-slate-900">{item.worker.worker_name}</div>
+                                    <div className="text-xs text-slate-500">{item.worker.worker_phone || 'No phone'}</div>
+                                  </div>
+                                </div>
+                              </td>
+
+                              <td className="px-5 py-3.5">
+                                <div>
+                                  <div className="font-semibold text-slate-800 text-xs">{item.factoryName}</div>
+                                  <div className="text-[11px] text-slate-500">{item.supervisorName}</div>
+                                </div>
+                              </td>
+
+                              <td className="px-5 py-3.5 text-right font-bold">
+                                {item.periodAdvance > 0 ? (
+                                  <span className="text-red-600 bg-red-50 border border-red-200/60 px-2 py-0.5 rounded text-xs font-black">
+                                    {formatINR(item.periodAdvance)}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-400 text-xs font-normal">₹0</span>
+                                )}
+                              </td>
+
+                              <td className="px-5 py-3.5 text-center">
+                                {item.periodCount > 0 ? (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                    {item.periodCount} payment{item.periodCount > 1 ? 's' : ''}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-400 text-xs">-</span>
+                                )}
+                              </td>
+
+                              <td className="px-5 py-3.5 text-right font-black text-slate-900 text-xs">
+                                {formatINR(item.worker.running_advance)}
+                              </td>
+
+                              <td className="px-5 py-3.5 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedWorkerId(isExpanded ? null : item.worker.worker_id)}
+                                  className="inline-flex items-center gap-1 rounded border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100 transition-colors"
+                                >
+                                  <span>{isExpanded ? 'Hide' : 'Details'}</span>
+                                  {isExpanded ? (
+                                    <ChevronUp className="h-3.5 w-3.5" />
+                                  ) : (
+                                    <ChevronDown className="h-3.5 w-3.5" />
+                                  )}
+                                </button>
+                              </td>
+                            </tr>
+
+                            {/* Expanded Itemized Disbursement List */}
+                            {isExpanded && (
+                              <tr>
+                                <td colSpan={6} className="bg-slate-50/70 p-4 border-t border-b border-slate-200">
+                                  <div className="space-y-3">
+                                    <div className="flex justify-between items-center">
+                                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                                        <Clock className="h-3.5 w-3.5 text-slate-500" />
+                                        <span>
+                                          Disbursements to {item.worker.worker_name}
+                                          {(workerFromDate || workerToDate) ? ` (${workerFromDate || 'Start'} to ${workerToDate || 'Today'})` : ' (All-Time)'}
+                                        </span>
+                                      </h4>
+                                      <span className="text-xs font-bold text-slate-600">
+                                        Total in period: <strong className="text-red-600">{formatINR(item.periodAdvance)}</strong> ({item.periodDisbursements.length} payments)
+                                      </span>
+                                    </div>
+
+                                    {item.periodDisbursements.length === 0 ? (
+                                      <p className="text-xs text-slate-500 py-3 text-center bg-white rounded border border-slate-200">
+                                        No disbursements recorded for this worker within the selected timeframe.
+                                      </p>
+                                    ) : (
+                                      <div className="divide-y divide-slate-100 rounded-md border border-slate-200 bg-white overflow-hidden shadow-sm">
+                                        {item.periodDisbursements.map((tx) => (
+                                          <div key={tx.id} className="p-3 text-xs flex justify-between items-center hover:bg-slate-50">
+                                            <div>
+                                              <div className="font-extrabold text-slate-900 text-sm">
+                                                {formatINR(tx.amount)}
+                                              </div>
+                                              <div className="text-[10px] text-slate-500 mt-0.5">
+                                                {new Date(tx.created_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+                                              </div>
+                                              {tx.note && (() => {
+                                                const parsed = parseHandoverNote(tx.note);
+                                                return (
+                                                  <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                                                    {parsed.note && (
+                                                      <div className="text-[11px] text-slate-600 italic bg-slate-50 border border-slate-100 rounded px-1.5 py-0.5 w-fit">
+                                                        "{parsed.note}"
+                                                      </div>
+                                                    )}
+                                                    {parsed.photoUrl && (
+                                                      <button
+                                                        type="button"
+                                                        onClick={() => setAdminViewingPhotoUrl(parsed.photoUrl)}
+                                                        className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-1.5 py-0.5 rounded cursor-pointer transition-colors"
+                                                        title="View Cash Handover Proof"
+                                                      >
+                                                        <Camera className="h-3 w-3" />
+                                                        <span>Handover Photo</span>
+                                                      </button>
+                                                    )}
+                                                  </div>
+                                                );
+                                              })()}
+                                            </div>
+                                            <div className="text-right">
+                                              <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                                {tx.status.toUpperCase()}
+                                              </span>
+                                              <span className="text-[10px] text-slate-500 block mt-1">
+                                                Disbursed by {tx.from?.name || 'Supervisor'}
+                                              </span>
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </>
         )}
       </div>
 
@@ -1458,34 +1651,17 @@ export function AdminDashboard({
             No transactions found matching the filters.
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
-              <thead className="bg-slate-50 text-slate-700 font-medium text-xs uppercase tracking-wider">
-                <tr>
-                  <th className="px-6 py-3">Timestamp</th>
-                  <th className="px-6 py-3">Purpose</th>
-                  <th className="px-6 py-3">Type/Category</th>
-                  <th className="px-6 py-3">From</th>
-                  <th className="px-6 py-3">To/Vendor</th>
-                  <th className="px-6 py-3 text-right">Amount</th>
-                  <th className="px-6 py-3">Status</th>
-                  <th className="px-6 py-3">Note</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 bg-white text-slate-900">
-                {filteredLedger.map((entry) => {
-                  return (
-                    <tr key={entry.id} className={`hover:bg-slate-50 ${entry.isFlagged ? 'bg-red-50/30' : ''}`}>
-                      <td className="px-6 py-4 whitespace-nowrap text-slate-500 text-xs">
-                        {new Date(entry.created_at).toLocaleString('en-IN', {
-                          day: 'numeric',
-                          month: 'short',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-bold border ${
+          <>
+            {/* Mobile Cards View (Zero Horizontal Scroll) */}
+            <div className="md:hidden divide-y divide-slate-100 bg-white">
+              {filteredLedger.map((entry) => {
+                const parsed = parseHandoverNote(entry.note);
+                return (
+                  <div key={entry.id} className={`p-4 space-y-2.5 ${entry.isFlagged ? 'bg-red-50/30' : ''}`}>
+                    {/* Top Row: Purpose, Status, Date */}
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className={`inline-flex items-center rounded px-2 py-0.5 text-[10px] font-bold border ${
                           entry.purpose === 'Wages' 
                             ? 'bg-blue-50 text-blue-700 border-blue-100' 
                             : entry.purpose === 'Expenses' 
@@ -1494,69 +1670,169 @@ export function AdminDashboard({
                         }`}>
                           {entry.purpose}
                         </span>
-                      </td>
-                      <td className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-600">
-                        {entry.type.replace(/_/g, ' ')}
-                      </td>
-                      <td className="px-6 py-4 text-slate-700">
-                        {entry.fromLabel}
-                      </td>
-                      <td className="px-6 py-4 font-semibold">
-                        {entry.toLabel}
-                      </td>
-                      <td className="px-6 py-4 text-right font-bold text-slate-800">
-                        {formatINR(entry.amount)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex flex-col gap-1">
-                          <span
-                            className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-bold ${
-                              entry.status === 'confirmed'
-                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-100'
-                                : entry.status === 'disputed'
-                                ? 'bg-red-50 text-red-700 border border-red-100'
-                                : 'bg-amber-50 text-amber-700 border border-amber-100'
-                            }`}
-                          >
-                            {entry.status.toUpperCase()}
+                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                          entry.status === 'confirmed'
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-100'
+                            : entry.status === 'disputed'
+                            ? 'bg-red-50 text-red-700 border border-red-100'
+                            : 'bg-amber-50 text-amber-700 border border-amber-100'
+                        }`}>
+                          {entry.status.toUpperCase()}
+                        </span>
+                        {entry.isFlagged && (
+                          <span className="flex items-center gap-0.5 text-[9px] font-bold text-red-600 uppercase">
+                            <AlertTriangle className="h-2.5 w-2.5" />
+                            <span>&gt;24h</span>
                           </span>
-                          
-                          {entry.isFlagged && (
-                            <span className="flex items-center gap-1 text-[10px] font-bold text-red-600 uppercase">
-                              <AlertTriangle className="h-3 w-3" />
-                              <span>Over 24h old</span>
-                            </span>
-                          )}
+                        )}
+                      </div>
+                      <span className="text-[11px] text-slate-400 font-medium">
+                        {new Date(entry.created_at).toLocaleString('en-IN', {
+                          day: 'numeric',
+                          month: 'short',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </span>
+                    </div>
+
+                    {/* Middle Row: Parties & Amount */}
+                    <div className="flex items-baseline justify-between gap-2">
+                      <div className="text-xs text-slate-700 font-medium">
+                        <span className="text-slate-400">From </span>
+                        <span className="font-semibold text-slate-900">{entry.fromLabel}</span>
+                        <span className="text-slate-400"> → </span>
+                        <span className="font-semibold text-slate-900">{entry.toLabel}</span>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <span className="text-base font-black text-slate-900">{formatINR(entry.amount)}</span>
+                      </div>
+                    </div>
+
+                    {/* Bottom Row: Note & Handover Photo Proof */}
+                    {(parsed.note || parsed.photoUrl) && (
+                      <div className="flex items-center justify-between gap-2 text-xs text-slate-500 pt-1.5 border-t border-slate-50">
+                        <div className="italic truncate text-[11px] max-w-[200px]">
+                          {parsed.note || 'Cash handover'}
                         </div>
-                      </td>
-                      <td className="px-6 py-4 text-slate-500 text-xs">
-                        {(() => {
-                          const parsed = parseHandoverNote(entry.note);
-                          return (
-                            <div className="flex items-center gap-2 flex-wrap">
-                              {parsed.note && <span className="italic">{parsed.note}</span>}
-                              {parsed.photoUrl && (
-                                <button
-                                  type="button"
-                                  onClick={() => setAdminViewingPhotoUrl(parsed.photoUrl)}
-                                  className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded cursor-pointer transition-colors shadow-xs"
-                                  title="View Cash Handover Proof"
-                                >
-                                  <Camera className="h-3 w-3" />
-                                  <span>Handover Photo</span>
-                                </button>
-                              )}
-                              {!parsed.note && !parsed.photoUrl && <span className="text-slate-400">-</span>}
-                            </div>
-                          );
-                        })()}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                        {parsed.photoUrl && (
+                          <button
+                            type="button"
+                            onClick={() => setAdminViewingPhotoUrl(parsed.photoUrl)}
+                            className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded cursor-pointer transition-colors shadow-xs shrink-0"
+                          >
+                            <Camera className="h-3 w-3" />
+                            <span>View Proof</span>
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Desktop Table View */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+                <thead className="bg-slate-50 text-slate-700 font-medium text-xs uppercase tracking-wider">
+                  <tr>
+                    <th className="px-6 py-3">Timestamp</th>
+                    <th className="px-6 py-3">Purpose</th>
+                    <th className="px-6 py-3">Type/Category</th>
+                    <th className="px-6 py-3">From</th>
+                    <th className="px-6 py-3">To/Vendor</th>
+                    <th className="px-6 py-3 text-right">Amount</th>
+                    <th className="px-6 py-3">Status</th>
+                    <th className="px-6 py-3">Note</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white text-slate-900">
+                  {filteredLedger.map((entry) => {
+                    return (
+                      <tr key={entry.id} className={`hover:bg-slate-50 ${entry.isFlagged ? 'bg-red-50/30' : ''}`}>
+                        <td className="px-6 py-4 whitespace-nowrap text-slate-500 text-xs">
+                          {new Date(entry.created_at).toLocaleString('en-IN', {
+                            day: 'numeric',
+                            month: 'short',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-bold border ${
+                            entry.purpose === 'Wages' 
+                              ? 'bg-blue-50 text-blue-700 border-blue-100' 
+                              : entry.purpose === 'Expenses' 
+                              ? 'bg-red-50 text-red-700 border-red-100' 
+                              : 'bg-purple-50 text-purple-700 border-purple-100'
+                          }`}>
+                            {entry.purpose}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-600">
+                          {entry.type.replace(/_/g, ' ')}
+                        </td>
+                        <td className="px-6 py-4 text-slate-700">
+                          {entry.fromLabel}
+                        </td>
+                        <td className="px-6 py-4 font-semibold">
+                          {entry.toLabel}
+                        </td>
+                        <td className="px-6 py-4 text-right font-bold text-slate-800">
+                          {formatINR(entry.amount)}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="flex flex-col gap-1">
+                            <span
+                              className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-bold ${
+                                entry.status === 'confirmed'
+                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-100'
+                                  : entry.status === 'disputed'
+                                  ? 'bg-red-50 text-red-700 border border-red-100'
+                                  : 'bg-amber-50 text-amber-700 border border-amber-100'
+                              }`}
+                            >
+                              {entry.status.toUpperCase()}
+                            </span>
+                            
+                            {entry.isFlagged && (
+                              <span className="flex items-center gap-1 text-[10px] font-bold text-red-600 uppercase">
+                                <AlertTriangle className="h-3 w-3" />
+                                <span>Over 24h old</span>
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-slate-500 text-xs">
+                          {(() => {
+                            const parsed = parseHandoverNote(entry.note);
+                            return (
+                              <div className="flex items-center gap-2 flex-wrap">
+                                {parsed.note && <span className="italic">{parsed.note}</span>}
+                                {parsed.photoUrl && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setAdminViewingPhotoUrl(parsed.photoUrl)}
+                                    className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded cursor-pointer transition-colors shadow-xs"
+                                    title="View Cash Handover Proof"
+                                  >
+                                    <Camera className="h-3 w-3" />
+                                    <span>Handover Photo</span>
+                                  </button>
+                                )}
+                                {!parsed.note && !parsed.photoUrl && <span className="text-slate-400">-</span>}
+                              </div>
+                            );
+                          })()}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
 
