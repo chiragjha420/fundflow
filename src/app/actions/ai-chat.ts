@@ -48,7 +48,7 @@ export async function askDatabaseAI(
   userQuery: string,
   history: ChatMessage[] = [],
   apiKeyOverride?: string,
-  modelRequested: string = 'gemini-3.8-flash',
+  _modelRequested?: string,
   openRouterKeyOverride?: string
 ): Promise<ChatResponse> {
   try {
@@ -315,20 +315,14 @@ ${JSON.stringify(expenseList.slice(0, 25).map(e => ({
 - If no discrepancies or records exist for a specific filter, clearly state that everything is clean and balanced.`;
 
     // 5. Intelligent Multi-Model Execution Engine
-    // Prioritizes Free Nemotron (OpenRouter) or Google Gemini based on modelRequested
-    const wantsNemotron =
-      !modelRequested ||
-      modelRequested.includes('nemotron') ||
-      modelRequested.includes('nvidia') ||
-      modelRequested.includes('openrouter');
-
+    // Default to Free Nemotron (OpenRouter), seamlessly falling back to Google Gemini if unavailable
     let finalAnswer: string | null = null;
-    let actualModelUsed: string = modelRequested;
+    let actualModelUsed: string = 'nvidia/nemotron-3.5-super-vl:free';
     let lastError: string | null = null;
 
-    if (wantsNemotron) {
-      // Priority 1: User requested Free Nemotron (OpenRouter)
-      console.log('Querying OpenRouter Free Nemotron (Primary)...');
+    // Priority 1: OpenRouter Free Nemotron (Primary Default)
+    if (openRouterApiKey) {
+      console.log('Querying OpenRouter Free Nemotron (Primary Default)...');
       const openRouterResult = await callOpenRouterNemotron(
         systemPrompt,
         history,
@@ -341,78 +335,32 @@ ${JSON.stringify(expenseList.slice(0, 25).map(e => ({
         actualModelUsed = openRouterResult.modelUsed || 'nvidia/nemotron-3.5-super-vl:free';
       } else {
         lastError = openRouterResult.error || 'OpenRouter Nemotron call failed';
-        console.warn('Nemotron failed, falling back to Google Gemini:', lastError);
-
-        // Fallback to Gemini 3.6 Flash if OpenRouter fails
-        if (geminiApiKey) {
-          const geminiResult = await callGemini(
-            systemPrompt,
-            history,
-            userQuery,
-            geminiApiKey
-          );
-
-          if (geminiResult.success && geminiResult.answer) {
-            finalAnswer = geminiResult.answer;
-            actualModelUsed = geminiResult.modelUsed || 'gemini-3.6-flash';
-          } else {
-            lastError = `Nemotron failed: ${lastError}. Gemini fallback failed: ${geminiResult.error}`;
-          }
-        }
+        console.warn('Nemotron unavailable, seamlessly falling back to Google Gemini:', lastError);
       }
     } else {
-      // Priority 2: User requested Gemini
-      console.log('Querying Google Gemini API (Primary)...');
-      if (geminiApiKey) {
-        const geminiResult = await callGemini(
-          systemPrompt,
-          history,
-          userQuery,
-          geminiApiKey,
-          modelRequested
-        );
+      console.log('No OpenRouter key found, falling back directly to Google Gemini...');
+    }
 
-        if (geminiResult.success && geminiResult.answer) {
-          finalAnswer = geminiResult.answer;
-          actualModelUsed = geminiResult.modelUsed || 'gemini-3.6-flash';
-        } else {
-          lastError = geminiResult.error || 'Gemini call failed';
-          console.warn('Gemini failed, falling back to OpenRouter Nemotron:', lastError);
+    // Priority 2: Fallback to Google Gemini if Nemotron didn't produce an answer
+    if (!finalAnswer && geminiApiKey) {
+      console.log('Querying Google Gemini API (Fallback)...');
+      const geminiResult = await callGemini(
+        systemPrompt,
+        history,
+        userQuery,
+        geminiApiKey,
+        'gemini-3.8-flash'
+      );
 
-          // Fallback to OpenRouter Nemotron
-          if (openRouterApiKey) {
-            const openRouterResult = await callOpenRouterNemotron(
-              systemPrompt,
-              history,
-              userQuery,
-              openRouterApiKey
-            );
-
-            if (openRouterResult.success && openRouterResult.answer) {
-              finalAnswer = openRouterResult.answer;
-              actualModelUsed = openRouterResult.modelUsed || 'nvidia/nemotron-3.5-super-vl:free';
-            } else {
-              lastError = `Gemini failed: ${lastError}. OpenRouter fallback failed: ${openRouterResult.error}`;
-            }
-          }
-        }
-      } else if (openRouterApiKey) {
-        // No Gemini key, use OpenRouter Nemotron
-        const openRouterResult = await callOpenRouterNemotron(
-          systemPrompt,
-          history,
-          userQuery,
-          openRouterApiKey
-        );
-
-        if (openRouterResult.success && openRouterResult.answer) {
-          finalAnswer = openRouterResult.answer;
-          actualModelUsed = openRouterResult.modelUsed || 'nvidia/nemotron-3.5-super-vl:free';
-        } else {
-          lastError = openRouterResult.error || 'OpenRouter Nemotron failed';
-        }
+      if (geminiResult.success && geminiResult.answer) {
+        finalAnswer = geminiResult.answer;
+        actualModelUsed = geminiResult.modelUsed || 'gemini-3.8-flash';
       } else {
-        lastError = 'Neither OpenRouter nor Gemini API keys are configured.';
+        const geminiError = geminiResult.error || 'Gemini call failed';
+        lastError = lastError
+          ? `Nemotron: ${lastError}. Gemini fallback: ${geminiError}`
+          : geminiError;
+        console.warn('Gemini fallback failed:', geminiError);
       }
     }
 

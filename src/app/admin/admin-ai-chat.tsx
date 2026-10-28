@@ -10,9 +10,7 @@ import {
   Check, 
   MessageSquare,
   Sparkles,
-  Zap,
   Key,
-  Settings,
   X
 } from 'lucide-react';
 import { askDatabaseAI, ChatMessage } from '@/app/actions/ai-chat';
@@ -26,7 +24,6 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
   const [inputValue, setInputValue] = useState('');
   const [loading, setLoading] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
-  const [selectedModel, setSelectedModel] = useState<string>('gemini-3.8-flash');
   const [geminiKeyOverride, setGeminiKeyOverride] = useState<string>('');
   const [openRouterKeyOverride, setOpenRouterKeyOverride] = useState<string>('');
   const [showKeyModal, setShowKeyModal] = useState<boolean>(false);
@@ -39,13 +36,6 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
 
     const savedOpenRouter = localStorage.getItem('fundflow_openrouter_api_key');
     if (savedOpenRouter) setOpenRouterKeyOverride(savedOpenRouter);
-
-    const savedModel = localStorage.getItem('fundflow_ai_selected_model');
-    if (savedModel) {
-      setSelectedModel(savedModel);
-    } else {
-      setSelectedModel('gemini-3.8-flash');
-    }
 
     const savedHistory = localStorage.getItem('fundflow_ai_chat_history');
     if (savedHistory) {
@@ -85,13 +75,6 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
       });
     }
   }, [messages, loading]);
-
-  const handleModelChange = (model: string) => {
-    setSelectedModel(model);
-    try {
-      localStorage.setItem('fundflow_ai_selected_model', model);
-    } catch {}
-  };
 
   const handleClearHistory = () => {
     const welcome: ChatMessage = {
@@ -134,7 +117,7 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
           textToSend,
           messages,
           geminiKeyOverride?.trim() || undefined,
-          selectedModel,
+          undefined,
           openRouterKeyOverride?.trim() || undefined
         ),
         timeoutPromise
@@ -284,42 +267,12 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Model Selector */}
-            <div className="flex items-center bg-slate-800 rounded-lg p-0.5 border border-slate-700 text-[11px] font-semibold">
-              <button
-                type="button"
-                onClick={() => handleModelChange('gemini-3.8-flash')}
-                className={`px-2.5 py-1 rounded-md transition-all flex items-center gap-1.5 ${
-                  selectedModel.includes('gemini')
-                    ? 'bg-indigo-600 text-white shadow-xs font-bold'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-                title="Google Gemini 3.8 Flash (Latest)"
-              >
-                <Zap className="h-3 w-3 text-indigo-300" />
-                <span>Gemini 3.8 Flash</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleModelChange('nvidia/nemotron-3.5-super-vl:free')}
-                className={`px-2.5 py-1 rounded-md transition-all flex items-center gap-1.5 ${
-                  selectedModel.includes('nemotron')
-                    ? 'bg-emerald-600 text-white shadow-xs font-bold'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-                title="Free Nemotron 3.5 Super VL via OpenRouter"
-              >
-                <Sparkles className="h-3 w-3 text-emerald-300" />
-                <span>Free Nemotron</span>
-              </button>
-            </div>
-
             {/* API Keys Configuration Button */}
             <button
               type="button"
               onClick={() => setShowKeyModal(true)}
               className="p-1.5 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-              title="Configure API Keys"
+              title="Configure AI API Keys"
             >
               <Key className="h-4 w-4" />
             </button>
@@ -412,7 +365,7 @@ export function AdminAIChat({ className = '' }: AdminAIChatProps) {
                       {!isUser && msg.modelUsed && (
                         <span className="font-bold text-slate-500 inline-flex items-center gap-1">
                           <Sparkles className="h-2.5 w-2.5 text-emerald-600" />
-                          <span>{msg.modelUsed.includes('3.8') ? 'Gemini 3.8 Flash' : msg.modelUsed.includes('nemotron') ? 'Free Nemotron 3.5' : 'Gemini 3.6 Flash'}</span>
+                          <span>{msg.modelUsed.includes('nemotron') ? 'Nemotron' : 'Gemini (Fallback)'}</span>
                         </span>
                       )}
                     </div>
