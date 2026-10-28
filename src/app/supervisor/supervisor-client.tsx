@@ -12,7 +12,6 @@ import {
   confirmTransactionAction, 
   createWorkerAction,
   disputeTransactionAction,
-  updateWorkerAction,
   updateWorkerPhoneAction
 } from '@/lib/ledger-actions';
 import { 
@@ -31,9 +30,7 @@ import {
   MessageSquare,
   Smartphone,
   Phone,
-  Upload,
-  Eye,
-  Zap
+  Upload
 } from 'lucide-react';
 import { sendWorkerDisbursementSms } from '@/lib/sms';
 import { createCashRequest } from '@/app/actions/cash-requests';
@@ -124,9 +121,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const [disburseNote, setDisburseNote] = useState<string>('');
   const [lastDisburseSms, setLastDisburseSms] = useState<{ workerName: string; smsUri: string } | null>(null);
 
-  // Fast Line Payout Mode & Quick Worker Search States
-  const [lineMode, setLineMode] = useState<boolean>(false);
-  const [lineModeCount, setLineModeCount] = useState<number>(0);
+  // Worker Search & Quick Add States
   const [workerSearchTerm, setWorkerSearchTerm] = useState<string>('');
   const [isQuickAddingWorker, setIsQuickAddingWorker] = useState<boolean>(false);
 
@@ -545,17 +540,12 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     setPendingDisburse(null);
     setDisburseAmount('');
     setSelectedWorkerId('');
-    if (!lineMode) {
-      setDisburseNote('');
-    }
+    setDisburseNote('');
     setWorkerSearchTerm('');
     setActionLoading(false);
     setLastDisburseSms(null);
 
-    // 2. Track line mode count
-    setLineModeCount(prev => prev + 1);
-
-    // 3. OPTIMISTIC CACHE UPDATE: Deduct supervisor available balance
+    // 2. OPTIMISTIC CACHE UPDATE: Deduct supervisor available balance
     queryClient.setQueryData(['supervisor-balance', supervisorId], (old: number | undefined) => {
       if (typeof old === 'number') return Math.max(0, old - amount);
       return old;
@@ -739,8 +729,8 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           throw new Error('Selected worker not found in active list.');
         }
 
-        // If Fast Line Mode is enabled, skip the interrupting phone modal so queue flows fast!
-        if (!lineMode && (!targetWorker.worker_phone || targetWorker.worker_phone.trim() === '')) {
+        // If worker doesn't have a phone saved yet, prompt supervisor to enter it for SMS receipts
+        if (!targetWorker.worker_phone || targetWorker.worker_phone.trim() === '') {
           setPhoneModalWorker(targetWorker);
           setPhoneModalDisburseDetails({
             workerId,
@@ -1370,41 +1360,13 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
             {/* DISBURSE FORM */}
             {activeTab === 'disburse' && (
               <>
-                {/* Fast Line Payout Mode Bar */}
-                <div className="flex items-center justify-between p-2.5 bg-slate-900 text-white rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <div className={`h-7 w-7 rounded-full flex items-center justify-center shrink-0 ${
-                      lineMode ? 'bg-amber-400 text-slate-950 font-black' : 'bg-slate-800 text-slate-400'
-                    }`}>
-                      <Zap className="h-4 w-4" />
-                    </div>
-                    <div>
-                      <span className="text-xs font-bold block">Fast Line Mode</span>
-                      <span className="text-[10px] text-slate-400 block">
-                        {lineMode ? `${lineModeCount} paid • Auto-readies next worker` : 'For paying workers in queue'}
-                      </span>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setLineMode(!lineMode)}
-                    className={`px-3 py-1 text-xs font-bold rounded transition-colors ${
-                      lineMode 
-                        ? 'bg-amber-400 text-slate-950 font-black' 
-                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                    }`}
-                  >
-                    {lineMode ? 'ACTIVE' : 'TURN ON'}
-                  </button>
-                </div>
-
                 {/* Worker Selector with Live Search & 1-Tap Quick Add */}
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
                     <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
                       Select Worker
                     </label>
-                    {selectedWorkerId ? (
+                    {selectedWorkerId && (
                       <button
                         type="button"
                         onClick={() => { setSelectedWorkerId(''); setWorkerSearchTerm(''); }}
@@ -1412,10 +1374,6 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                       >
                         Change Worker
                       </button>
-                    ) : (
-                      <span className="text-[11px] text-slate-400 font-medium">
-                        {activeWorkers.length} active workers
-                      </span>
                     )}
                   </div>
 
@@ -1428,68 +1386,72 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                           type="text"
                           value={workerSearchTerm}
                           onChange={(e) => setWorkerSearchTerm(e.target.value)}
-                          placeholder="Search name or type new name..."
-                          className="w-full pl-9 pr-3 py-2 rounded border border-slate-300 text-sm min-h-[44px] text-slate-950 bg-white focus:ring-2 focus:ring-slate-900 focus:border-slate-900"
+                          placeholder="Search worker name to pay..."
+                          className="w-full pl-9 pr-3 py-2.5 rounded border border-slate-300 text-sm min-h-[44px] text-slate-950 bg-white focus:ring-2 focus:ring-slate-900 focus:border-slate-900 placeholder:text-slate-400"
                         />
                       </div>
 
-                      {/* Filtered Dropdown / Quick List */}
-                      <div className="border border-slate-200 rounded-lg max-h-48 overflow-y-auto divide-y divide-slate-100 bg-white shadow-xs">
-                        {/* 1-Tap Quick Add Button if typed name isn't an exact match */}
-                        {workerSearchTerm.trim().length > 1 && !activeWorkers.some(w => w.worker_name.toLowerCase() === workerSearchTerm.trim().toLowerCase()) && (
-                          <div className="p-2 bg-indigo-50/70 border-b border-indigo-100">
-                            <button
-                              type="button"
-                              onClick={() => handleQuickAddWorker(workerSearchTerm.trim())}
-                              disabled={isQuickAddingWorker}
-                              className="w-full py-2 px-3 rounded bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white text-xs font-bold flex items-center justify-between transition-colors shadow-xs"
-                            >
-                              <span className="flex items-center gap-1.5">
-                                <UserPlus className="h-4 w-4" />
-                                <span>Quick Add & Pay "{workerSearchTerm.trim()}"</span>
-                              </span>
-                              <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded uppercase tracking-wider">1-Tap</span>
-                            </button>
-                          </div>
-                        )}
+                      {/* Filtered Dropdown / Quick List - Only shown when supervisor types */}
+                      {workerSearchTerm.trim().length > 0 && (
+                        <div className="border border-slate-200 rounded-lg max-h-56 overflow-y-auto divide-y divide-slate-100 bg-white shadow-lg">
+                          {/* 1-Tap Quick Add Button if typed name isn't an exact match */}
+                          {workerSearchTerm.trim().length > 1 && !activeWorkers.some(w => w.worker_name.toLowerCase() === workerSearchTerm.trim().toLowerCase()) && (
+                            <div className="p-2 bg-indigo-50/70 border-b border-indigo-100">
+                              <button
+                                type="button"
+                                onClick={() => handleQuickAddWorker(workerSearchTerm.trim())}
+                                disabled={isQuickAddingWorker}
+                                className="w-full py-2 px-3 rounded bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white text-xs font-bold flex items-center justify-between transition-colors shadow-xs"
+                              >
+                                <span className="flex items-center gap-1.5">
+                                  <UserPlus className="h-4 w-4" />
+                                  <span>Quick Add & Pay "{workerSearchTerm.trim()}"</span>
+                                </span>
+                                <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded uppercase tracking-wider">1-Tap</span>
+                              </button>
+                            </div>
+                          )}
 
-                        {filteredSelectWorkers.length === 0 ? (
-                          <div className="p-4 text-center text-xs text-slate-500">
-                            {workerSearchTerm ? `No worker found matching "${workerSearchTerm}". Tap Quick Add above.` : 'No active workers found.'}
-                          </div>
-                        ) : (
-                          filteredSelectWorkers.map((w) => (
-                            <button
-                              key={w.worker_id}
-                              type="button"
-                              onClick={() => {
-                                setSelectedWorkerId(w.worker_id);
-                                setWorkerSearchTerm('');
-                              }}
-                              className="w-full p-2.5 text-left flex items-center justify-between hover:bg-slate-50 active:bg-slate-100 transition-colors"
-                            >
-                              <div className="flex items-center gap-2.5">
-                                <div className="h-8 w-8 rounded-full bg-slate-100 border border-slate-200 overflow-hidden flex items-center justify-center shrink-0">
-                                  {w.worker_photo_url ? (
-                                    <img src={w.worker_photo_url} alt="" className="h-full w-full object-cover" />
-                                  ) : (
-                                    <User className="h-4 w-4 text-slate-400" />
-                                  )}
+                          {filteredSelectWorkers.length === 0 ? (
+                            <div className="p-4 text-center text-xs text-slate-500">
+                              No worker found matching "{workerSearchTerm}". Tap Quick Add above.
+                            </div>
+                          ) : (
+                            filteredSelectWorkers.map((w) => (
+                              <button
+                                key={w.worker_id}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedWorkerId(w.worker_id);
+                                  setWorkerSearchTerm('');
+                                }}
+                                className="w-full p-2.5 text-left flex items-center justify-between hover:bg-slate-50 active:bg-slate-100 transition-colors"
+                              >
+                                <div className="flex items-center gap-2.5">
+                                  <div className="h-8 w-8 rounded-full bg-slate-100 border border-slate-200 overflow-hidden flex items-center justify-center shrink-0">
+                                    {w.worker_photo_url ? (
+                                      <img src={w.worker_photo_url} alt="" className="h-full w-full object-cover" />
+                                    ) : (
+                                      <User className="h-4 w-4 text-slate-400" />
+                                    )}
+                                  </div>
+                                  <div>
+                                    <p className="text-xs font-bold text-slate-900">{w.worker_name}</p>
+                                    {w.worker_phone && (
+                                      <p className="text-[11px] text-slate-500">
+                                        {w.worker_phone}
+                                      </p>
+                                    )}
+                                  </div>
                                 </div>
-                                <div>
-                                  <p className="text-xs font-bold text-slate-900">{w.worker_name}</p>
-                                  <p className="text-[11px] text-slate-500">
-                                    {w.worker_phone ? w.worker_phone : '⚠️ No phone'}
-                                  </p>
-                                </div>
-                              </div>
-                              <span className="text-xs font-bold text-red-600">
-                                {formatINR(w.running_advance)} adv
-                              </span>
-                            </button>
-                          ))
-                        )}
-                      </div>
+                                <span className="text-xs font-bold text-red-600">
+                                  {formatINR(w.running_advance)} adv
+                                </span>
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      )}
                     </div>
                   ) : (
                     /* Selected Worker Card */
@@ -2089,7 +2051,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         }}
         onCapture={(file) => handleHandoverCapture(file)}
         onSkip={() => handleHandoverCapture(null)}
-        skipLabel={lineMode ? "⚡ Quick Pass (Skip)" : "Skip Photo"}
+        skipLabel="Skip Photo"
         title="Cash Handover Photo"
         subtitle={pendingDisburse ? `Handing ${formatINR(pendingDisburse.amount)} to ${pendingDisburse.targetWorker.worker_name}` : undefined}
         defaultFacingMode="environment"

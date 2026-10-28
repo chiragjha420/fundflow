@@ -712,17 +712,13 @@ export function SupervisorWorkersClientPage() {
                       </div>
                       <div>
                         <h4 className="text-sm font-bold text-slate-900">{w.worker_name}</h4>
-                        <div className="text-xs text-slate-500 mt-0.5">
-                          {w.worker_phone ? (
+                        {w.worker_phone && (
+                          <div className="text-xs text-slate-500 mt-0.5">
                             <span className="text-emerald-700 font-medium flex items-center gap-1">
                               <span>📱</span> {w.worker_phone}
                             </span>
-                          ) : (
-                            <span className="inline-flex items-center text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-semibold border border-amber-200">
-                              ⚠️ No phone linked
-                            </span>
-                          )}
-                        </div>
+                          </div>
+                        )}
                         {fromDate || toDate ? (
                           <span className="text-[10px] text-indigo-600 font-semibold block mt-0.5">
                             {periodCount > 0 ? `${periodCount} advance payment${periodCount > 1 ? 's' : ''} in period` : 'No advance in period'}
