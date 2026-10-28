@@ -429,6 +429,10 @@ export function AdminDashboard({
         if (tx.type === 'supervisor_to_worker' && (tx.to_work?.active === false || tx.to_work?.name === 'Deleted Worker')) {
           return false;
         }
+        // Exclude disputed / cancelled transactions from ledger log (only keep confirmed and pending)
+        if (tx.status === 'disputed') {
+          return false;
+        }
         return true;
       })
       .map(tx => {
@@ -1602,7 +1606,6 @@ export function AdminDashboard({
                 <option value="all">All Statuses</option>
                 <option value="pending">Pending</option>
                 <option value="confirmed">Confirmed</option>
-                <option value="disputed">Disputed</option>
               </select>
             </div>
 
