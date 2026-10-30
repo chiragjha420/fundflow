@@ -13,6 +13,7 @@ export default async function SupervisorDashboardPage() {
   let initialWorkers: any[] = [];
   let initialPendingTxs: any[] = [];
   let initialOtherSupervisors: any[] = [];
+  let initialExpenses: any[] = [];
 
   try {
     const { data: { session } } = await supabase.auth.getSession();
@@ -29,8 +30,8 @@ export default async function SupervisorDashboardPage() {
       if (sup) {
         initialSupervisor = sup;
 
-        // 2. Fetch Workers (via Admin to unify co-supervisors), Pending Receipts, and Other Supervisors
-        const [workersRes, pendingRes, otherSupsRes] = await Promise.all([
+        // 2. Fetch Workers (via Admin to unify co-supervisors), Pending Receipts, Other Supervisors, and Expenses
+        const [workersRes, pendingRes, otherSupsRes, expensesRes] = await Promise.all([
           adminSupabase
             .from('worker_balances')
             .select('*')
@@ -45,11 +46,18 @@ export default async function SupervisorDashboardPage() {
             .from('supervisors')
             .select('id, name, factory_id, active, factories(name)')
             .eq('active', true),
+          adminSupabase
+            .from('expenses')
+            .select('*, supervisors(name)')
+            .eq('factory_id', sup.factory_id)
+            .order('created_at', { ascending: false })
+            .limit(50),
         ]);
 
         initialWorkers = (workersRes.data || []).filter((w: any) => w.active && w.worker_name !== 'Deleted Worker');
         initialPendingTxs = pendingRes.data || [];
         initialOtherSupervisors = otherSupsRes.data || [];
+        initialExpenses = expensesRes.data || [];
       }
     }
   } catch (e) {
@@ -63,6 +71,7 @@ export default async function SupervisorDashboardPage() {
         workers: initialWorkers,
         pendingTxs: initialPendingTxs,
         otherSupervisors: initialOtherSupervisors,
+        expenses: initialExpenses,
       }}
     />
   );
