@@ -32,7 +32,6 @@ import {
   Phone,
   Upload,
   History,
-  ReceiptText,
   Truck,
   Wrench,
   Package,
@@ -545,15 +544,15 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     }
   };
 
-  // Helper to resolve supervisor display name
-  const getSupervisorDisplayName = (supId: string) => {
-    if (supId === supervisorId) return 'You';
-    const match = (otherSupervisors || []).find(s => s.id === supId);
-    return match?.name || 'Supervisor';
-  };
-
   // Unified spending transactions list (All Expenses + Worker Advances)
   const combinedTransactions = useMemo(() => {
+    // Helper to resolve supervisor display name
+    const getSupervisorDisplayName = (supId: string) => {
+      if (supId === supervisorId) return 'You';
+      const match = (otherSupervisors || []).find(s => s.id === supId);
+      return match?.name || 'Supervisor';
+    };
+
     const list: Array<{
       id: string;
       kind: 'expense' | 'advance';
