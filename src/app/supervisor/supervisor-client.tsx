@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createBrowserClient } from '@/lib/supabase/browser-client';
 import { getOfflineCache, setOfflineCache } from '@/lib/offline-db';
@@ -119,12 +119,11 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const [viewingPhotoUrl, setViewingPhotoUrl] = useState<string | null>(null);
   const [viewingPhotoTitle, setViewingPhotoTitle] = useState<string>('Proof of Handover');
 
-  // Transaction History States (Expenses & Worker Advances)
-  const [historyTab, setHistoryTab] = useState<'expenses' | 'disbursements'>('expenses');
-  const [expenseSearchQuery, setExpenseSearchQuery] = useState<string>('');
-  const [expenseCategoryFilter, setExpenseCategoryFilter] = useState<string>('all');
-  const [expenseSupervisorFilter, setExpenseSupervisorFilter] = useState<'all' | 'my'>('all');
-  const [isAllExpensesExpanded, setIsAllExpensesExpanded] = useState<boolean>(false);
+  // Unified Transaction History States (All Spending: Expenses & Worker Advances)
+  const [historySearchQuery, setHistorySearchQuery] = useState<string>('');
+  const [historyTypeFilter, setHistoryTypeFilter] = useState<'all' | 'advances' | 'expenses'>('all');
+  const [historySupervisorFilter, setHistorySupervisorFilter] = useState<'all' | 'my'>('all');
+  const [isHistoryExpanded, setIsHistoryExpanded] = useState<boolean>(false);
 
   // Form loading states
   const [actionLoading, setActionLoading] = useState(false);
@@ -455,13 +454,28 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       if (!factoryId) return [];
       try {
         const data = await getFactoryWorkerDisbursementsAction(factoryId);
-        return data.filter((tx: any) => tx.to_work && tx.to_work.active !== false).slice(0, 5);
+        const valid = data.filter((tx: any) => tx.to_work && tx.to_work.active !== false);
+        await setOfflineCache(`recent-disbursements-${factoryId}`, valid);
+        return valid;
       } catch (err) {
-        return [];
+        console.warn('Failed to fetch factory disbursements, falling back to offline cache:', err);
+        const cached = await getOfflineCache<any[]>(`recent-disbursements-${factoryId}`);
+        return cached || [];
       }
     },
     enabled: !!factoryId,
   });
+
+  const [cachedDisbursements, setCachedDisbursements] = useState<any[]>([]);
+  useEffect(() => {
+    if (factoryId) {
+      getOfflineCache<any[]>(`recent-disbursements-${factoryId}`).then(data => {
+        if (data) setCachedDisbursements(data);
+      });
+    }
+  }, [factoryId, recentDisbursements]);
+
+  const activeDisbursements = recentDisbursements !== undefined ? recentDisbursements : cachedDisbursements;
 
   // 6. Fetch Expenses list for this factory (unified across co-supervisors)
   const { data: expenses } = useQuery({
@@ -494,29 +508,6 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const activeExpenses = expenses !== undefined ? expenses : cachedExpenses;
 
   const hasCoSupervisors = (otherSupervisors || []).some(s => s.factory_id === factoryId && s.id !== supervisorId);
-
-  const filteredExpenses = (activeExpenses || []).filter(exp => {
-    if (expenseSupervisorFilter === 'my' && exp.supervisor_id !== supervisorId) {
-      return false;
-    }
-    if (expenseCategoryFilter !== 'all' && exp.category.toLowerCase() !== expenseCategoryFilter.toLowerCase()) {
-      return false;
-    }
-    if (expenseSearchQuery.trim()) {
-      const q = expenseSearchQuery.toLowerCase().trim();
-      const matchNote = exp.note && exp.note.toLowerCase().includes(q);
-      const matchCategory = exp.category && exp.category.toLowerCase().includes(q);
-      const matchSup = exp.supervisors?.name && exp.supervisors.name.toLowerCase().includes(q);
-      if (!matchNote && !matchCategory && !matchSup) {
-        return false;
-      }
-    }
-    return true;
-  });
-
-  const totalExpensesAmount = (activeExpenses || [])
-    .filter(exp => expenseSupervisorFilter === 'all' || exp.supervisor_id === supervisorId)
-    .reduce((sum, exp) => sum + Number(exp.amount || 0), 0);
 
   const getCategoryBadge = (category: string) => {
     const cat = (category || 'other').toLowerCase();
@@ -553,6 +544,123 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         };
     }
   };
+
+  // Helper to resolve supervisor display name
+  const getSupervisorDisplayName = (supId: string) => {
+    if (supId === supervisorId) return 'You';
+    const match = (otherSupervisors || []).find(s => s.id === supId);
+    return match?.name || 'Supervisor';
+  };
+
+  // Unified spending transactions list (All Expenses + Worker Advances)
+  const combinedTransactions = useMemo(() => {
+    const list: Array<{
+      id: string;
+      kind: 'expense' | 'advance';
+      amount: number;
+      title: string;
+      subtitle?: string;
+      categoryKey: string;
+      categoryLabel: string;
+      badgeClass: string;
+      badgeIcon: React.ReactNode;
+      note: string;
+      photoUrl: string | null;
+      photoTitle: string;
+      photoButtonLabel: string;
+      created_at: string;
+      supervisorId: string;
+      supervisorName: string;
+      isOwn: boolean;
+    }> = [];
+
+    // 1. Map expenses
+    (activeExpenses || []).forEach((exp) => {
+      const badge = getCategoryBadge(exp.category);
+      const supName = exp.supervisors?.name || getSupervisorDisplayName(exp.supervisor_id);
+      list.push({
+        id: `exp-${exp.id}`,
+        kind: 'expense',
+        amount: Number(exp.amount || 0),
+        title: exp.note || badge.label,
+        subtitle: exp.note ? badge.label : undefined,
+        categoryKey: (exp.category || 'other').toLowerCase(),
+        categoryLabel: `Expense: ${badge.label}`,
+        badgeClass: badge.className,
+        badgeIcon: badge.icon,
+        note: exp.note || '',
+        photoUrl: exp.photo_url || null,
+        photoTitle: `Receipt: ${exp.note || badge.label}`,
+        photoButtonLabel: 'View Receipt',
+        created_at: exp.created_at,
+        supervisorId: exp.supervisor_id,
+        supervisorName: supName,
+        isOwn: exp.supervisor_id === supervisorId,
+      });
+    });
+
+    // 2. Map worker disbursements
+    (activeDisbursements || []).forEach((tx: any) => {
+      const { note: cleanNote, photoUrl } = parseHandoverNote(tx.note);
+      const workerName = tx.to_work?.name || 'Worker';
+      const supName = getSupervisorDisplayName(tx.from_supervisor_id);
+      list.push({
+        id: `adv-${tx.id}`,
+        kind: 'advance',
+        amount: Number(tx.amount || 0),
+        title: workerName,
+        subtitle: cleanNote || 'Cash Advance',
+        categoryKey: 'advance',
+        categoryLabel: 'Worker Advance',
+        badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+        badgeIcon: <HandCoins className="h-3 w-3 text-emerald-600" />,
+        note: cleanNote || '',
+        photoUrl: photoUrl || null,
+        photoTitle: `Handover Proof: ${workerName}`,
+        photoButtonLabel: 'View Proof',
+        created_at: tx.created_at,
+        supervisorId: tx.from_supervisor_id,
+        supervisorName: supName,
+        isOwn: tx.from_supervisor_id === supervisorId,
+      });
+    });
+
+    // Sort chronologically (newest first)
+    return list.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  }, [activeExpenses, activeDisbursements, supervisorId, otherSupervisors]);
+
+  // Filtered transactions based on supervisor toggle, type pill, and search
+  const filteredTransactions = useMemo(() => {
+    return combinedTransactions.filter((tx) => {
+      if (historySupervisorFilter === 'my' && !tx.isOwn) {
+        return false;
+      }
+      if (historyTypeFilter === 'advances' && tx.kind !== 'advance') {
+        return false;
+      }
+      if (historyTypeFilter === 'expenses' && tx.kind !== 'expense') {
+        return false;
+      }
+      if (historySearchQuery.trim()) {
+        const q = historySearchQuery.toLowerCase().trim();
+        const matchTitle = tx.title.toLowerCase().includes(q);
+        const matchNote = tx.note.toLowerCase().includes(q);
+        const matchCategory = tx.categoryLabel.toLowerCase().includes(q);
+        const matchSup = tx.supervisorName.toLowerCase().includes(q);
+        const matchAmt = tx.amount.toString().includes(q);
+        if (!matchTitle && !matchNote && !matchCategory && !matchSup && !matchAmt) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [combinedTransactions, historySupervisorFilter, historyTypeFilter, historySearchQuery]);
+
+  const totalSpendingAmount = useMemo(() => {
+    return combinedTransactions
+      .filter((tx) => historySupervisorFilter === 'all' || tx.isOwn)
+      .reduce((sum, tx) => sum + tx.amount, 0);
+  }, [combinedTransactions, historySupervisorFilter]);
 
   // Handle Receipt Confirmation
   const handleConfirmClick = (txId: string, amount: number, type: string) => {
@@ -652,7 +760,6 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     setWorkerSearchTerm('');
     setActionLoading(false);
     setLastDisburseSms(null);
-    setHistoryTab('disbursements');
 
     // 2. OPTIMISTIC CACHE UPDATE: Deduct supervisor available balance
     queryClient.setQueryData(['supervisor-balance', supervisorId], (old: number | undefined) => {
@@ -681,8 +788,9 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         created_at: new Date().toISOString(),
         to_worker_id: targetWorker.worker_id,
         to_work: { name: targetWorker.worker_name, active: true },
+        from_supervisor_id: supervisorId,
       };
-      return [optimisticTx, ...(old || [])].slice(0, 10);
+      return [optimisticTx, ...(old || [])].slice(0, 50);
     });
 
     // 6. INSTANT AUDIO & TOAST CONFIRMATION (0ms)
@@ -927,7 +1035,6 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         setPhotoFile(null);
         setPhotoPreview(null);
         form.reset();
-        setHistoryTab('expenses');
         queryClient.invalidateQueries({ queryKey: ['factory-expenses', factoryId] });
       }
       
@@ -1430,7 +1537,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         {/* Tabs */}
         <div className="flex border-b border-slate-200 bg-slate-50 text-xs font-bold uppercase tracking-wider text-slate-600">
           <button
-            onClick={() => { setActiveTab('disburse'); setActionMessage(null); setLastDisburseSms(null); setHistoryTab('disbursements'); }}
+            onClick={() => { setActiveTab('disburse'); setActionMessage(null); setLastDisburseSms(null); }}
             className={`flex-1 py-3 text-center border-b-2 min-h-[44px] flex items-center justify-center gap-1.5 ${
               activeTab === 'disburse'
                 ? 'border-slate-900 text-slate-900 bg-white'
@@ -1441,7 +1548,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
             <span>Disburse</span>
           </button>
           <button
-            onClick={() => { setActiveTab('expense'); setActionMessage(null); setHistoryTab('expenses'); }}
+            onClick={() => { setActiveTab('expense'); setActionMessage(null); }}
             className={`flex-1 py-3 text-center border-b-2 min-h-[44px] flex items-center justify-center gap-1.5 ${
               activeTab === 'expense'
                 ? 'border-slate-900 text-slate-900 bg-white'
@@ -1872,278 +1979,184 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         </div>
       </div>
 
-      {/* 3. Transaction History Section (Cash Expenses & Worker Advances) */}
+      {/* 3. Unified Transaction History Section (All Cash Spending: Expenses & Worker Advances) */}
       <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">
-        {/* Header with Segmented Tabs */}
-        <div className="px-4 py-3.5 border-b border-slate-200 bg-slate-50 space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <History className="h-4 w-4 text-slate-800" />
-              <div>
-                <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900">
-                  Transaction History
-                </h2>
-                <p className="text-[11px] text-slate-500">
-                  {historyTab === 'expenses'
-                    ? 'Track how and where cash was used across expenses'
-                    : 'Recent cash advance disbursements to workers'}
-                </p>
-              </div>
+        {/* Header */}
+        <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <History className="h-4 w-4 text-slate-800" />
+            <div>
+              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900">
+                Transaction History
+              </h2>
+              <p className="text-[11px] text-slate-500">
+                Unified record of every cash expense & worker advance
+              </p>
             </div>
-
-            {historyTab === 'expenses' && (
-              <span className="text-[11px] font-black text-red-600 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full shrink-0">
-                {formatINR(totalExpensesAmount)} spent
-              </span>
-            )}
           </div>
 
-          {/* Segmented Tab Controls: Expenses vs Worker Advances */}
-          <div className="flex bg-slate-200/80 p-0.5 rounded-lg text-xs font-semibold">
-            <button
-              type="button"
-              onClick={() => setHistoryTab('expenses')}
-              className={`flex-1 py-1.5 px-3 rounded-md transition-all flex items-center justify-center gap-1.5 min-h-[36px] ${
-                historyTab === 'expenses'
-                  ? 'bg-white text-slate-950 font-bold shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <ReceiptText className="h-3.5 w-3.5 text-indigo-600" />
-              <span>Cash Expenses ({activeExpenses.length})</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setHistoryTab('disbursements')}
-              className={`flex-1 py-1.5 px-3 rounded-md transition-all flex items-center justify-center gap-1.5 min-h-[36px] ${
-                historyTab === 'disbursements'
-                  ? 'bg-white text-slate-950 font-bold shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <HandCoins className="h-3.5 w-3.5 text-emerald-600" />
-              <span>Worker Advances ({(recentDisbursements || []).length})</span>
-            </button>
+          <span className="text-[11px] font-black text-red-600 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full shrink-0">
+            {formatINR(totalSpendingAmount)} spent
+          </span>
+        </div>
+
+        {/* Search & Filter Controls */}
+        <div className="p-3 bg-white border-b border-slate-100 space-y-2.5">
+          {/* Co-Supervisor Filter (Only if multiple supervisors exist in the factory) */}
+          {hasCoSupervisors && (
+            <div className="flex items-center justify-between pb-1 text-xs">
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Show:</span>
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  onClick={() => setHistorySupervisorFilter('all')}
+                  className={`px-2.5 py-0.5 rounded text-[11px] font-bold transition-colors ${
+                    historySupervisorFilter === 'all'
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  All Factory ({combinedTransactions.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setHistorySupervisorFilter('my')}
+                  className={`px-2.5 py-0.5 rounded text-[11px] font-bold transition-colors ${
+                    historySupervisorFilter === 'my'
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  My Spending ({combinedTransactions.filter(t => t.isOwn).length})
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Live Search Bar */}
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+            <input
+              type="text"
+              value={historySearchQuery}
+              onChange={(e) => setHistorySearchQuery(e.target.value)}
+              placeholder="Search where money was spent (worker, expense, note)..."
+              className="w-full pl-9 pr-3 py-2 rounded-lg border border-slate-300 text-xs min-h-[38px] text-slate-950 bg-white placeholder:text-slate-400 focus:ring-2 focus:ring-slate-900 focus:border-slate-900"
+            />
+          </div>
+
+          {/* Type Filter Pills: All, Worker Advances, Cash Expenses */}
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
+            {[
+              { id: 'all', label: `All (${combinedTransactions.length})` },
+              { id: 'advances', label: `Worker Advances (${combinedTransactions.filter(t => t.kind === 'advance').length})` },
+              { id: 'expenses', label: `Cash Expenses (${combinedTransactions.filter(t => t.kind === 'expense').length})` },
+            ].map((pill) => (
+              <button
+                key={pill.id}
+                type="button"
+                onClick={() => setHistoryTypeFilter(pill.id as any)}
+                className={`px-2.5 py-1 rounded-full text-[11px] font-bold shrink-0 transition-colors ${
+                  historyTypeFilter === pill.id
+                    ? 'bg-slate-900 text-white shadow-2xs'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                {pill.label}
+              </button>
+            ))}
           </div>
         </div>
 
-        {/* TAB 1: CASH EXPENSES VIEW */}
-        {historyTab === 'expenses' && (
-          <div>
-            {/* Search & Category Filter Controls */}
-            <div className="p-3 bg-white border-b border-slate-100 space-y-2.5">
-              {/* Co-Supervisor Toggle (Only if multiple supervisors exist in the factory) */}
-              {hasCoSupervisors && (
-                <div className="flex items-center justify-between pb-1 text-xs">
-                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Show:</span>
-                  <div className="flex gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setExpenseSupervisorFilter('all')}
-                      className={`px-2.5 py-0.5 rounded text-[11px] font-bold transition-colors ${
-                        expenseSupervisorFilter === 'all'
-                          ? 'bg-slate-900 text-white'
-                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                      }`}
-                    >
-                      All Factory ({activeExpenses.length})
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setExpenseSupervisorFilter('my')}
-                      className={`px-2.5 py-0.5 rounded text-[11px] font-bold transition-colors ${
-                        expenseSupervisorFilter === 'my'
-                          ? 'bg-slate-900 text-white'
-                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                      }`}
-                    >
-                      My Expenses ({activeExpenses.filter(e => e.supervisor_id === supervisorId).length})
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Live Search Bar */}
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
-                <input
-                  type="text"
-                  value={expenseSearchQuery}
-                  onChange={(e) => setExpenseSearchQuery(e.target.value)}
-                  placeholder="Search where cash was used (e.g. cylinder, mistri, wire)..."
-                  className="w-full pl-9 pr-3 py-2 rounded-lg border border-slate-300 text-xs min-h-[38px] text-slate-950 bg-white placeholder:text-slate-400 focus:ring-2 focus:ring-slate-900 focus:border-slate-900"
-                />
-              </div>
-
-              {/* Category Filter Pills */}
-              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
-                {[
-                  { id: 'all', label: 'All' },
-                  { id: 'wages', label: 'Wages/Labour' },
-                  { id: 'materials', label: 'Materials' },
-                  { id: 'transport', label: 'Transport' },
-                  { id: 'maintenance', label: 'Maintenance' },
-                  { id: 'other', label: 'Other' },
-                ].map((cat) => (
-                  <button
-                    key={cat.id}
-                    type="button"
-                    onClick={() => setExpenseCategoryFilter(cat.id)}
-                    className={`px-2.5 py-1 rounded-full text-[11px] font-bold shrink-0 transition-colors capitalize ${
-                      expenseCategoryFilter === cat.id
-                        ? 'bg-slate-900 text-white shadow-2xs'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                    }`}
-                  >
-                    {cat.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Expenses List */}
-            {filteredExpenses.length === 0 ? (
-              <div className="p-8 text-center text-xs text-slate-500">
-                {expenseSearchQuery || expenseCategoryFilter !== 'all'
-                  ? 'No expenses matching your search or category filter.'
-                  : 'No cash expenses recorded yet. Use the Expense tab above to log where cash is spent.'}
-              </div>
-            ) : (
-              <ul className="divide-y divide-slate-100 bg-white">
-                {(isAllExpensesExpanded ? filteredExpenses : filteredExpenses.slice(0, 6)).map((exp) => {
-                  const badge = getCategoryBadge(exp.category);
-
-                  return (
-                    <li key={exp.id} className="p-3.5 space-y-2 hover:bg-slate-50/70 transition-colors">
-                      {/* Top Row: Category Badge & Amount */}
-                      <div className="flex items-center justify-between gap-2">
-                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border uppercase tracking-wider ${badge.className}`}>
-                          {badge.icon}
-                          <span>{badge.label}</span>
-                        </span>
-                        <div className="text-right">
-                          <span className="text-xs text-slate-400 font-semibold uppercase mr-1">Spent</span>
-                          <span className="text-sm font-black text-red-600">
-                            {formatINR(exp.amount)}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Middle Row: Note / Where Cash Was Used */}
-                      <div className="flex items-start justify-between gap-3">
-                        <p className="text-xs font-bold text-slate-900 leading-snug">
-                          {exp.note || 'No description entered'}
-                        </p>
-                      </div>
-
-                      {/* Bottom Row: Timestamp, Supervisor Tag, and Receipt Button */}
-                      <div className="flex items-center justify-between pt-1 text-[11px] text-slate-400 border-t border-slate-50">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span>
-                            {new Date(exp.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}{' '}
-                            at {new Date(exp.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                          {exp.supervisors?.name && (
-                            <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
-                              {exp.supervisor_id === supervisorId ? 'By You' : `By ${exp.supervisors.name}`}
-                            </span>
-                          )}
-                        </div>
-
-                        {exp.photo_url ? (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setViewingPhotoUrl(exp.photo_url);
-                              setViewingPhotoTitle(`Receipt: ${exp.note || badge.label}`);
-                            }}
-                            className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded cursor-pointer transition-colors shadow-2xs"
-                          >
-                            <Camera className="h-3 w-3 text-emerald-600" />
-                            <span>View Receipt</span>
-                          </button>
-                        ) : (
-                          <span className="text-[10px] text-slate-400 italic">No receipt</span>
-                        )}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-
-            {/* Show All / Collapse Toggle if > 6 entries */}
-            {filteredExpenses.length > 6 && (
-              <div className="p-2.5 bg-slate-50 text-center border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setIsAllExpensesExpanded(!isAllExpensesExpanded)}
-                  className="text-xs font-bold text-indigo-600 hover:text-indigo-800 transition-colors"
-                >
-                  {isAllExpensesExpanded ? '▲ Show Recent (6)' : `▼ View All (${filteredExpenses.length}) Expenses`}
-                </button>
-              </div>
-            )}
+        {/* Unified Transaction History List */}
+        {filteredTransactions.length === 0 ? (
+          <div className="p-8 text-center text-xs text-slate-500">
+            {historySearchQuery || historyTypeFilter !== 'all'
+              ? 'No transactions matching your search or filter.'
+              : 'No cash spending recorded yet. Log an expense or disburse an advance above to track where cash is used.'}
           </div>
+        ) : (
+          <ul className="divide-y divide-slate-100 bg-white">
+            {(isHistoryExpanded ? filteredTransactions : filteredTransactions.slice(0, 8)).map((tx) => {
+              const dateObj = new Date(tx.created_at);
+              const dateStr = dateObj.toLocaleDateString([], { month: 'short', day: 'numeric' });
+              const timeStr = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+              return (
+                <li key={tx.id} className="p-3.5 space-y-2 hover:bg-slate-50/70 transition-colors">
+                  {/* Top Row: Type/Category Badge & Amount */}
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border uppercase tracking-wider ${tx.badgeClass}`}>
+                      {tx.badgeIcon}
+                      <span>{tx.categoryLabel}</span>
+                    </span>
+                    <div className="text-right">
+                      <span className="text-xs text-slate-400 font-semibold uppercase mr-1">Spent</span>
+                      <span className="text-sm font-black text-red-600">
+                        {formatINR(tx.amount)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Middle Row: Title (Worker Name or Expense Description) & Subtitle */}
+                  <div>
+                    <p className="text-xs font-bold text-slate-900 leading-snug">
+                      {tx.title}
+                    </p>
+                    {tx.subtitle && tx.subtitle !== tx.title && (
+                      <p className="text-[11px] text-slate-500 line-clamp-1 mt-0.5">
+                        {tx.subtitle}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Bottom Row: Timestamp, Supervisor Attribution, and Proof/Receipt Button */}
+                  <div className="flex items-center justify-between pt-1 text-[11px] text-slate-400 border-t border-slate-50">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span>
+                        {dateStr} at {timeStr}
+                      </span>
+                      {tx.supervisorName && (
+                        <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
+                          {tx.isOwn ? 'By You' : `By ${tx.supervisorName}`}
+                        </span>
+                      )}
+                    </div>
+
+                    {tx.photoUrl ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setViewingPhotoUrl(tx.photoUrl);
+                          setViewingPhotoTitle(tx.photoTitle);
+                        }}
+                        className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded cursor-pointer transition-colors shadow-2xs"
+                      >
+                        <Camera className="h-3 w-3 text-emerald-600" />
+                        <span>{tx.photoButtonLabel}</span>
+                      </button>
+                    ) : (
+                      <span className="text-[10px] text-slate-400 italic">No proof</span>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
         )}
 
-        {/* TAB 2: WORKER ADVANCES (DISBURSEMENTS) VIEW */}
-        {historyTab === 'disbursements' && (
-          <div>
-            {!recentDisbursements || recentDisbursements.length === 0 ? (
-              <div className="p-8 text-center text-xs text-slate-500">
-                No recent disbursements logged yet. Use the Disburse tab above to pay workers.
-              </div>
-            ) : (
-              <ul className="divide-y divide-slate-100 bg-white">
-                {recentDisbursements.map((tx: any) => {
-                  const { note: cleanNote, photoUrl } = parseHandoverNote(tx.note);
-                  const workerName = tx.to_work?.name || 'Worker';
-                  const timeStr = new Date(tx.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                  const dateStr = new Date(tx.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' });
-
-                  return (
-                    <li key={tx.id} className="p-3.5 flex items-center justify-between hover:bg-slate-50/60 transition-colors">
-                      <div className="flex items-center gap-3">
-                        <div className="h-10 w-10 rounded-full bg-emerald-50 border border-emerald-200 flex items-center justify-center shrink-0">
-                          <IndianRupee className="h-5 w-5 text-emerald-700" />
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-bold text-slate-900">{workerName}</span>
-                            <span className="text-xs font-extrabold text-emerald-700">{formatINR(tx.amount)}</span>
-                          </div>
-                          <p className="text-xs text-slate-500 line-clamp-1">
-                            {cleanNote || 'Cash Advance'}
-                          </p>
-                          <span className="text-[11px] text-slate-400">{dateStr} at {timeStr}</span>
-                        </div>
-                      </div>
-
-                      <div className="shrink-0 ml-3">
-                        {photoUrl ? (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setViewingPhotoUrl(photoUrl);
-                              setViewingPhotoTitle(`Handover Proof: ${workerName}`);
-                            }}
-                            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 text-xs font-bold transition-all shadow-2xs hover:shadow-xs"
-                          >
-                            <Camera className="h-3.5 w-3.5 text-emerald-600" />
-                            <span>View Proof</span>
-                          </button>
-                        ) : (
-                          <span className="text-[11px] font-semibold text-slate-400 bg-slate-100 px-2 py-1 rounded">
-                            No Photo
-                          </span>
-                        )}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+        {/* View All / Collapse Button if > 8 entries */}
+        {filteredTransactions.length > 8 && (
+          <div className="p-2.5 bg-slate-50 text-center border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setIsHistoryExpanded(!isHistoryExpanded)}
+              className="text-xs font-bold text-indigo-600 hover:text-indigo-800 transition-colors"
+            >
+              {isHistoryExpanded
+                ? '▲ Show Recent (8)'
+                : `▼ View All (${filteredTransactions.length}) Transactions`}
+            </button>
           </div>
         )}
       </div>
