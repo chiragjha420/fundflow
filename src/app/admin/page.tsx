@@ -1,6 +1,7 @@
 import React from 'react';
 import { createServerClient } from '@/lib/supabase/server-client';
 import { AdminDashboard } from './admin-dashboard';
+import { getRefundedTransactionsAction } from '@/app/actions/admin';
 
 export const revalidate = 0; // Disable caching for active dashboard
 
@@ -14,6 +15,7 @@ export default async function AdminDashboardPage() {
     { data: transactions },
     { data: expenses },
     { data: workers },
+    refundedTransactions,
   ] = await Promise.all([
     supabase
       .from('factories')
@@ -36,6 +38,7 @@ export default async function AdminDashboardPage() {
       .select('*')
       .eq('active', true)
       .order('running_advance', { ascending: false }),
+    getRefundedTransactionsAction(),
   ]);
 
   return (
@@ -45,6 +48,7 @@ export default async function AdminDashboardPage() {
       transactions={transactions || []}
       expenses={expenses || []}
       workers={workers || []}
+      refundedTransactions={refundedTransactions || {}}
     />
   );
 }

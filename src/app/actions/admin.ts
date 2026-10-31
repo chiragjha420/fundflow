@@ -233,3 +233,191 @@ export async function deleteSupervisor(supervisorId: string) {
   revalidatePath('/admin');
   return { success: true };
 }
+
+
+/**
+ * Refund an erroneous cash advance given to a worker by a supervisor.
+ * 1. Verifies the advance transaction exists.
+ * 2. Writes an immutable refund record in audit_log.
+ * 3. Credits the supervisor's available balance back with an office_to_supervisor ledger entry.
+ * 4. Sends a real Web Push and broadcast notification to the supervisor's phone.
+ * 5. Revalidates admin and supervisor paths so worker advance and balances update instantly.
+ */
+export async function refundWorkerAdvanceAction(transactionId: string, reason?: string): Promise<{ success: boolean; error?: string; message?: string }> {
+  try {
+    const adminClient = createAdminClient();
+
+    // 1. Fetch transaction details
+    const { data: tx, error: txError } = await adminClient
+      .from('cash_transactions')
+      .select('id, amount, note, from_supervisor_id, to_worker_id, status, created_at, to_work:to_worker_id(name), from:from_supervisor_id(name)')
+      .eq('id', transactionId)
+      .single();
+
+    if (txError || !tx) {
+      return { success: false, error: 'Transaction not found.' };
+    }
+
+    if (tx.status !== 'confirmed') {
+      return { success: false, error: `Only confirmed transactions can be refunded. Current status: ${tx.status}` };
+    }
+
+    // 2. Check if already refunded in audit_log
+    const { data: existingRefund } = await adminClient
+      .from('audit_log')
+      .select('id')
+      .eq('table_name', 'cash_transactions')
+      .eq('action', 'refund')
+      .eq('row_id', transactionId)
+      .limit(1);
+
+    if (existingRefund && existingRefund.length > 0) {
+      return { success: false, error: 'This transaction has already been refunded.' };
+    }
+
+    const workerName = (tx.to_work as any)?.name || 'Worker';
+    const supervisorId = tx.from_supervisor_id;
+    const supervisorName = (tx.from as any)?.name || 'Supervisor';
+    const amount = Number(tx.amount);
+    const refundReason = reason?.trim() || 'Advance added by mistake to wrong worker';
+
+    // Get admin user ID
+    const supabaseUser = createServerClient();
+    const { data: { user } } = await supabaseUser.auth.getUser();
+    const adminUserId = user?.id || tx.from_supervisor_id;
+
+    // 3. Insert audit log record for immutable refund tracking
+    const { error: auditError } = await adminClient
+      .from('audit_log')
+      .insert({
+        table_name: 'cash_transactions',
+        action: 'refund',
+        row_id: transactionId,
+        old_data: {
+          id: tx.id,
+          amount,
+          worker_id: tx.to_worker_id,
+          worker_name: workerName,
+          supervisor_id: supervisorId,
+          supervisor_name: supervisorName,
+          status: tx.status,
+          note: tx.note,
+        },
+        new_data: {
+          status: 'refunded',
+          refund_reason: refundReason,
+          refunded_at: new Date().toISOString(),
+          refunded_by: adminUserId,
+        },
+        changed_by: adminUserId,
+      });
+
+    if (auditError) {
+      console.error('Audit log insert failed:', auditError);
+    }
+
+    // 4. Insert refund credit transaction to supervisor's account (office_to_supervisor)
+    // This immediately restores `amount` back to the supervisor's balance in get_supervisor_balance!
+    const refundNote = `[REFUND:${transactionId}] Refund for wrong advance to ${workerName}: ₹${amount.toLocaleString('en-IN')} credited back to your balance. ${refundReason}`;
+
+    const { error: creditError } = await adminClient
+      .from('cash_transactions')
+      .insert({
+        type: 'office_to_supervisor',
+        to_supervisor_id: supervisorId,
+        amount,
+        status: 'confirmed',
+        confirmed_at: new Date().toISOString(),
+        confirmed_by: adminUserId,
+        note: refundNote,
+        created_by: adminUserId,
+      });
+
+    if (creditError) {
+      return { success: false, error: 'Failed to credit supervisor balance: ' + creditError.message };
+    }
+
+    // 5. Send Real OS Web Push to supervisor's phone (works even when app/browser is closed)
+    if (supervisorId) {
+      sendPushToRole('supervisor', {
+        title: '↩ Cash Advance Refunded',
+        body: `₹${amount.toLocaleString('en-IN')} advance to ${workerName} has been refunded back to your balance by Admin.`,
+        url: '/supervisor',
+      }, supervisorId).catch(err => console.warn('[WebPush] Error sending refund push to supervisor:', err));
+
+      // 6. Broadcast real-time notification
+      broadcastNotificationAction({
+        type: 'advance_refunded',
+        to_supervisor_id: supervisorId,
+        amount,
+        note: `₹${amount.toLocaleString('en-IN')} advance to ${workerName} was refunded back to your balance by Admin.`,
+      }).catch(err => console.warn('Broadcast refund notification failed:', err));
+    }
+
+    // 7. Revalidate Next.js cache across admin and supervisor pages
+    revalidatePath('/admin');
+    revalidatePath('/supervisor');
+    revalidatePath('/supervisor/workers');
+
+    return { 
+      success: true, 
+      message: `₹${amount.toLocaleString('en-IN')} successfully refunded to ${supervisorName}'s balance!` 
+    };
+  } catch (err: any) {
+    console.error('refundWorkerAdvanceAction error:', err);
+    return { success: false, error: err.message || 'Failed to refund advance.' };
+  }
+}
+
+/**
+ * Fetch all refunded transactions mapping: txId -> { refundedAt, reason, amount, workerName }
+ */
+export async function getRefundedTransactionsAction(): Promise<Record<string, { refundedAt: string; reason: string; amount: number; workerName: string }>> {
+  try {
+    const adminClient = createAdminClient();
+
+    // 1. Fetch from audit_log
+    const { data: logs } = await adminClient
+      .from('audit_log')
+      .select('row_id, changed_at, old_data, new_data')
+      .eq('table_name', 'cash_transactions')
+      .eq('action', 'refund');
+
+    // 2. Fetch from office_to_supervisor notes matching [REFUND:
+    const { data: refundTxs } = await adminClient
+      .from('cash_transactions')
+      .select('id, amount, note, created_at')
+      .eq('type', 'office_to_supervisor')
+      .like('note', '%[REFUND:%');
+
+    const result: Record<string, { refundedAt: string; reason: string; amount: number; workerName: string }> = {};
+
+    (logs || []).forEach(log => {
+      if (log.row_id) {
+        result[log.row_id] = {
+          refundedAt: (log.new_data as any)?.refunded_at || log.changed_at,
+          reason: (log.new_data as any)?.refund_reason || 'Refunded by Admin',
+          amount: Number((log.old_data as any)?.amount || 0),
+          workerName: (log.old_data as any)?.worker_name || 'Worker',
+        };
+      }
+    });
+
+    (refundTxs || []).forEach(tx => {
+      const match = tx.note?.match(/\[REFUND:([a-f0-9-]+)\]/);
+      if (match && match[1] && !result[match[1]]) {
+        result[match[1]] = {
+          refundedAt: tx.created_at,
+          reason: tx.note || 'Refunded by Admin',
+          amount: Number(tx.amount || 0),
+          workerName: 'Worker',
+        };
+      }
+    });
+
+    return result;
+  } catch (e) {
+    console.error('getRefundedTransactionsAction error:', e);
+    return {};
+  }
+}

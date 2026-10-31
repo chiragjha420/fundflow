@@ -36,7 +36,11 @@ import {
   Wrench,
   Package,
   Tag,
-  Briefcase
+  Briefcase,
+  ArrowUpRight,
+  ArrowDownLeft,
+  RotateCcw,
+  Building2
 } from 'lucide-react';
 import { sendWorkerDisbursementSms } from '@/lib/sms';
 import { createCashRequest } from '@/app/actions/cash-requests';
@@ -46,7 +50,7 @@ import { NotificationBanner } from '@/components/notification-banner';
 import { compressImage } from '@/lib/image-compressor';
 import { CameraCaptureModal } from '@/components/camera-capture-modal';
 import { uploadHandoverPhotoAction, uploadWorkerPhotoAction, uploadExpensePhotoAction } from '@/app/actions/upload-actions';
-import { getFactoryWorkersAction, getFactoryWorkerDisbursementsAction } from '@/app/actions/workers';
+import { getFactoryWorkersAction, getSupervisorAllTransactionsAction } from '@/app/actions/workers';
 import { getFactoryExpensesAction, FactoryExpense } from '@/app/actions/expenses';
 
 interface Worker {
@@ -86,6 +90,10 @@ export interface SupervisorClientPageProps {
     pendingTxs?: PendingTx[];
     otherSupervisors?: Supervisor[];
     expenses?: FactoryExpense[];
+    allTransactions?: {
+      transactions: any[];
+      refundedTxIds: string[];
+    };
   };
 }
 
@@ -118,9 +126,9 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const [viewingPhotoUrl, setViewingPhotoUrl] = useState<string | null>(null);
   const [viewingPhotoTitle, setViewingPhotoTitle] = useState<string>('Proof of Handover');
 
-  // Unified Transaction History States (All Spending: Expenses & Worker Advances)
+  // Unified Transaction History States (All Transactions: Advances, Transfers, Expenses, Refunds)
   const [historySearchQuery, setHistorySearchQuery] = useState<string>('');
-  const [historyTypeFilter, setHistoryTypeFilter] = useState<'all' | 'advances' | 'expenses'>('all');
+  const [historyTypeFilter, setHistoryTypeFilter] = useState<'all' | 'advances' | 'transfers' | 'expenses' | 'refunds'>('all');
   const [historySupervisorFilter, setHistorySupervisorFilter] = useState<'all' | 'my'>('all');
   const [isHistoryExpanded, setIsHistoryExpanded] = useState<boolean>(false);
 
@@ -446,35 +454,37 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const activeOtherSups = (otherSupervisors !== undefined ? otherSupervisors : cachedSups)
     .filter(s => s.id !== supervisorId);
 
-  // 5. Fetch Recent Disbursements for this factory (unified across co-supervisors)
-  const { data: recentDisbursements } = useQuery({
-    queryKey: ['recent-disbursements', factoryId],
+  // 5. Fetch all cash transactions involving this supervisor / factory (transfers, advances, office receipts & refunds)
+  const { data: allTxsData } = useQuery({
+    queryKey: ['supervisor-all-transactions', supervisorId, factoryId],
     queryFn: async () => {
-      if (!factoryId) return [];
+      if (!supervisorId && !factoryId) return { transactions: [], refundedTxIds: [] };
       try {
-        const data = await getFactoryWorkerDisbursementsAction(factoryId);
-        const valid = data.filter((tx: any) => tx.to_work && tx.to_work.active !== false);
-        await setOfflineCache(`recent-disbursements-${factoryId}`, valid);
-        return valid;
+        const res = await getSupervisorAllTransactionsAction(supervisorId, factoryId);
+        await setOfflineCache(`sup-all-txs-${supervisorId || factoryId}`, res);
+        return res;
       } catch (err) {
-        console.warn('Failed to fetch factory disbursements, falling back to offline cache:', err);
-        const cached = await getOfflineCache<any[]>(`recent-disbursements-${factoryId}`);
-        return cached || [];
+        console.warn('Failed to fetch supervisor transactions, falling back to offline cache:', err);
+        const cached = await getOfflineCache<{ transactions: any[]; refundedTxIds: string[] }>(`sup-all-txs-${supervisorId || factoryId}`);
+        return cached || { transactions: [], refundedTxIds: [] };
       }
     },
-    enabled: !!factoryId,
+    initialData: initialData?.allTransactions,
+    enabled: !!(supervisorId || factoryId),
   });
 
-  const [cachedDisbursements, setCachedDisbursements] = useState<any[]>([]);
+  const [cachedAllTxs, setCachedAllTxs] = useState<{ transactions: any[]; refundedTxIds: string[] }>(
+    initialData?.allTransactions || { transactions: [], refundedTxIds: [] }
+  );
   useEffect(() => {
-    if (factoryId) {
-      getOfflineCache<any[]>(`recent-disbursements-${factoryId}`).then(data => {
-        if (data) setCachedDisbursements(data);
+    if (supervisorId || factoryId) {
+      getOfflineCache<{ transactions: any[]; refundedTxIds: string[] }>(`sup-all-txs-${supervisorId || factoryId}`).then(data => {
+        if (data) setCachedAllTxs(data);
       });
     }
-  }, [factoryId, recentDisbursements]);
+  }, [supervisorId, factoryId, allTxsData]);
 
-  const activeDisbursements = recentDisbursements !== undefined ? recentDisbursements : cachedDisbursements;
+  const activeAllTxs = allTxsData !== undefined ? allTxsData : cachedAllTxs;
 
   // 6. Fetch Expenses list for this factory (unified across co-supervisors)
   const { data: expenses } = useQuery({
@@ -544,7 +554,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     }
   };
 
-  // Unified spending transactions list (All Expenses + Worker Advances)
+  // Unified transactions list (All Expenses, Worker Advances, S2S Transfers, Office Cash, and Refunds)
   const combinedTransactions = useMemo(() => {
     // Helper to resolve supervisor display name
     const getSupervisorDisplayName = (supId: string) => {
@@ -553,12 +563,17 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       return match?.name || 'Supervisor';
     };
 
+    const refundedSet = new Set<string>(activeAllTxs?.refundedTxIds || []);
+
     const list: Array<{
       id: string;
-      kind: 'expense' | 'advance';
+      kind: 'expense' | 'advance' | 'transfer_sent' | 'transfer_received' | 'office_cash' | 'advance_refund';
+      direction: 'inflow' | 'outflow';
       amount: number;
       title: string;
       subtitle?: string;
+      status?: string;
+      isRefunded?: boolean;
       categoryKey: string;
       categoryLabel: string;
       badgeClass: string;
@@ -580,6 +595,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       list.push({
         id: `exp-${exp.id}`,
         kind: 'expense',
+        direction: 'outflow',
         amount: Number(exp.amount || 0),
         title: exp.note || badge.label,
         subtitle: exp.note ? badge.label : undefined,
@@ -598,35 +614,189 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       });
     });
 
-    // 2. Map worker disbursements
-    (activeDisbursements || []).forEach((tx: any) => {
-      const { note: cleanNote, photoUrl } = parseHandoverNote(tx.note);
-      const workerName = tx.to_work?.name || 'Worker';
-      const supName = getSupervisorDisplayName(tx.from_supervisor_id);
-      list.push({
-        id: `adv-${tx.id}`,
-        kind: 'advance',
-        amount: Number(tx.amount || 0),
-        title: workerName,
-        subtitle: cleanNote || 'Cash Advance',
-        categoryKey: 'advance',
-        categoryLabel: 'Worker Advance',
-        badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
-        badgeIcon: <HandCoins className="h-3 w-3 text-emerald-600" />,
-        note: cleanNote || '',
-        photoUrl: photoUrl || null,
-        photoTitle: `Handover Proof: ${workerName}`,
-        photoButtonLabel: 'View Proof',
-        created_at: tx.created_at,
-        supervisorId: tx.from_supervisor_id,
-        supervisorName: supName,
-        isOwn: tx.from_supervisor_id === supervisorId,
-      });
+    // 2. Map all transactions from activeAllTxs
+    (activeAllTxs?.transactions || []).forEach((tx: any) => {
+      // (a) Worker Advance (supervisor_to_worker)
+      if (tx.type === 'supervisor_to_worker') {
+        const { note: cleanNote, photoUrl } = parseHandoverNote(tx.note);
+        const workerName = tx.to_work?.name || 'Worker';
+        const supName = tx.from?.name || getSupervisorDisplayName(tx.from_supervisor_id);
+        const isRefunded = refundedSet.has(tx.id);
+
+        list.push({
+          id: `adv-${tx.id}`,
+          kind: 'advance',
+          direction: 'outflow',
+          amount: Number(tx.amount || 0),
+          isRefunded,
+          title: workerName,
+          subtitle: isRefunded 
+            ? 'Refunded by Admin (money credited back)' 
+            : (cleanNote || 'Cash Advance'),
+          categoryKey: isRefunded ? 'refund' : 'advance',
+          categoryLabel: isRefunded ? 'Advance Refunded' : 'Worker Advance',
+          badgeClass: isRefunded 
+            ? 'bg-amber-100 text-amber-800 border-amber-300' 
+            : 'bg-emerald-50 text-emerald-800 border-emerald-200',
+          badgeIcon: isRefunded 
+            ? <RotateCcw className="h-3 w-3 text-amber-700" />
+            : <HandCoins className="h-3 w-3 text-emerald-600" />,
+          note: cleanNote || '',
+          photoUrl: photoUrl || null,
+          photoTitle: `Handover Proof: ${workerName}`,
+          photoButtonLabel: 'View Proof',
+          created_at: tx.created_at,
+          supervisorId: tx.from_supervisor_id,
+          supervisorName: supName,
+          isOwn: tx.from_supervisor_id === supervisorId,
+        });
+      }
+      // (b) Supervisor Transfer (Sent by this supervisor)
+      else if (tx.type === 'supervisor_to_supervisor' && tx.from_supervisor_id === supervisorId) {
+        const recipientName = tx.to_sup?.name || getSupervisorDisplayName(tx.to_supervisor_id);
+        const statusLabel = tx.status === 'pending' ? ' (Pending)' : tx.status === 'disputed' ? ' (Disputed)' : '';
+        const badgeClass = tx.status === 'pending' 
+          ? 'bg-amber-50 text-amber-700 border-amber-200' 
+          : tx.status === 'disputed' 
+          ? 'bg-rose-50 text-rose-700 border-rose-200' 
+          : 'bg-purple-50 text-purple-700 border-purple-200';
+
+        list.push({
+          id: `tx-sent-${tx.id}`,
+          kind: 'transfer_sent',
+          direction: 'outflow',
+          amount: Number(tx.amount || 0),
+          status: tx.status,
+          title: `Transfer to ${recipientName}`,
+          subtitle: tx.note ? `"${tx.note}"` : 'Supervisor Transfer',
+          categoryKey: 'transfer',
+          categoryLabel: `Transfer: Sent${statusLabel}`,
+          badgeClass,
+          badgeIcon: <ArrowUpRight className="h-3 w-3" />,
+          note: tx.note || '',
+          photoUrl: null,
+          photoTitle: `Transfer to ${recipientName}`,
+          photoButtonLabel: '',
+          created_at: tx.created_at,
+          supervisorId: tx.from_supervisor_id,
+          supervisorName: 'You',
+          isOwn: true,
+        });
+      }
+      // (c) Supervisor Transfer (Received by this supervisor)
+      else if (tx.type === 'supervisor_to_supervisor' && tx.to_supervisor_id === supervisorId) {
+        const senderName = tx.from?.name || getSupervisorDisplayName(tx.from_supervisor_id);
+        const statusLabel = tx.status === 'pending' ? ' (Pending)' : tx.status === 'disputed' ? ' (Disputed)' : '';
+        const badgeClass = tx.status === 'pending' 
+          ? 'bg-amber-50 text-amber-700 border-amber-200' 
+          : 'bg-emerald-50 text-emerald-700 border-emerald-200';
+
+        list.push({
+          id: `tx-recv-${tx.id}`,
+          kind: 'transfer_received',
+          direction: 'inflow',
+          amount: Number(tx.amount || 0),
+          status: tx.status,
+          title: `Transfer from ${senderName}`,
+          subtitle: tx.note ? `"${tx.note}"` : 'Supervisor Transfer Received',
+          categoryKey: 'transfer',
+          categoryLabel: `Transfer: Received${statusLabel}`,
+          badgeClass,
+          badgeIcon: <ArrowDownLeft className="h-3 w-3" />,
+          note: tx.note || '',
+          photoUrl: null,
+          photoTitle: `Transfer from ${senderName}`,
+          photoButtonLabel: '',
+          created_at: tx.created_at,
+          supervisorId: tx.to_supervisor_id,
+          supervisorName: 'You',
+          isOwn: true,
+        });
+      }
+      // (d) Supervisor Transfer (Between co-supervisors in same factory)
+      else if (tx.type === 'supervisor_to_supervisor') {
+        const senderName = tx.from?.name || getSupervisorDisplayName(tx.from_supervisor_id);
+        const recipientName = tx.to_sup?.name || getSupervisorDisplayName(tx.to_supervisor_id);
+        list.push({
+          id: `tx-sup-${tx.id}`,
+          kind: 'transfer_sent',
+          direction: 'outflow',
+          amount: Number(tx.amount || 0),
+          status: tx.status,
+          title: `${senderName} → ${recipientName}`,
+          subtitle: tx.note ? `"${tx.note}"` : 'Co-supervisor Transfer',
+          categoryKey: 'transfer',
+          categoryLabel: 'Transfer: S2S',
+          badgeClass: 'bg-slate-100 text-slate-700 border-slate-200',
+          badgeIcon: <ArrowRightLeft className="h-3 w-3" />,
+          note: tx.note || '',
+          photoUrl: null,
+          photoTitle: `${senderName} to ${recipientName}`,
+          photoButtonLabel: '',
+          created_at: tx.created_at,
+          supervisorId: tx.from_supervisor_id,
+          supervisorName: senderName,
+          isOwn: false,
+        });
+      }
+      // (e) Office Cash / Refund Credit (office_to_supervisor)
+      else if (tx.type === 'office_to_supervisor' && tx.to_supervisor_id === supervisorId) {
+        const isRefund = tx.note?.includes('[REFUND:');
+        const cleanNote = tx.note ? tx.note.replace(/\[REFUND:[a-f0-9-]+\]\s*/i, '').trim() : '';
+
+        if (isRefund) {
+          list.push({
+            id: `refund-${tx.id}`,
+            kind: 'advance_refund',
+            direction: 'inflow',
+            amount: Number(tx.amount || 0),
+            status: tx.status,
+            title: 'Advance Refund Credited',
+            subtitle: cleanNote || 'Refund credited back to your balance by Admin',
+            categoryKey: 'refund',
+            categoryLabel: 'Refund from Office',
+            badgeClass: 'bg-teal-50 text-teal-800 border-teal-200',
+            badgeIcon: <RotateCcw className="h-3 w-3 text-teal-700" />,
+            note: cleanNote || '',
+            photoUrl: null,
+            photoTitle: 'Refund Credit',
+            photoButtonLabel: '',
+            created_at: tx.created_at,
+            supervisorId: tx.to_supervisor_id,
+            supervisorName: 'You',
+            isOwn: true,
+          });
+        } else {
+          list.push({
+            id: `office-${tx.id}`,
+            kind: 'office_cash',
+            direction: 'inflow',
+            amount: Number(tx.amount || 0),
+            status: tx.status,
+            title: 'Office Cash Received',
+            subtitle: cleanNote || 'Cash disbursed from Office',
+            categoryKey: 'office',
+            categoryLabel: tx.status === 'pending' ? 'Office Cash (Pending Confirmation)' : 'Office Cash',
+            badgeClass: tx.status === 'pending' 
+              ? 'bg-amber-50 text-amber-700 border-amber-200' 
+              : 'bg-blue-50 text-blue-700 border-blue-200',
+            badgeIcon: <Building2 className="h-3 w-3" />,
+            note: cleanNote || '',
+            photoUrl: null,
+            photoTitle: 'Office Cash',
+            photoButtonLabel: '',
+            created_at: tx.created_at,
+            supervisorId: tx.to_supervisor_id,
+            supervisorName: 'You',
+            isOwn: true,
+          });
+        }
+      }
     });
 
     // Sort chronologically (newest first)
     return list.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-  }, [activeExpenses, activeDisbursements, supervisorId, otherSupervisors]);
+  }, [activeExpenses, activeAllTxs, supervisorId, otherSupervisors]);
 
   // Filtered transactions based on supervisor toggle, type pill, and search
   const filteredTransactions = useMemo(() => {
@@ -637,17 +807,24 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       if (historyTypeFilter === 'advances' && tx.kind !== 'advance') {
         return false;
       }
+      if (historyTypeFilter === 'transfers' && tx.kind !== 'transfer_sent' && tx.kind !== 'transfer_received') {
+        return false;
+      }
       if (historyTypeFilter === 'expenses' && tx.kind !== 'expense') {
+        return false;
+      }
+      if (historyTypeFilter === 'refunds' && tx.kind !== 'advance_refund' && !tx.isRefunded) {
         return false;
       }
       if (historySearchQuery.trim()) {
         const q = historySearchQuery.toLowerCase().trim();
         const matchTitle = tx.title.toLowerCase().includes(q);
         const matchNote = tx.note.toLowerCase().includes(q);
+        const matchSubtitle = (tx.subtitle || '').toLowerCase().includes(q);
         const matchCategory = tx.categoryLabel.toLowerCase().includes(q);
         const matchSup = tx.supervisorName.toLowerCase().includes(q);
         const matchAmt = tx.amount.toString().includes(q);
-        if (!matchTitle && !matchNote && !matchCategory && !matchSup && !matchAmt) {
+        if (!matchTitle && !matchNote && !matchSubtitle && !matchCategory && !matchSup && !matchAmt) {
           return false;
         }
       }
@@ -657,7 +834,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
   const totalSpendingAmount = useMemo(() => {
     return combinedTransactions
-      .filter((tx) => historySupervisorFilter === 'all' || tx.isOwn)
+      .filter((tx) => (historySupervisorFilter === 'all' || tx.isOwn) && tx.direction === 'outflow' && !tx.isRefunded)
       .reduce((sum, tx) => sum + tx.amount, 0);
   }, [combinedTransactions, historySupervisorFilter]);
 
@@ -2026,7 +2203,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  My Spending ({combinedTransactions.filter(t => t.isOwn).length})
+                  My Account ({combinedTransactions.filter(t => t.isOwn).length})
                 </button>
               </div>
             </div>
@@ -2039,17 +2216,19 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
               type="text"
               value={historySearchQuery}
               onChange={(e) => setHistorySearchQuery(e.target.value)}
-              placeholder="Search where money was spent (worker, expense, note)..."
+              placeholder="Search transactions (worker, transfer, expense, note)..."
               className="w-full pl-9 pr-3 py-2 rounded-lg border border-slate-300 text-xs min-h-[38px] text-slate-950 bg-white placeholder:text-slate-400 focus:ring-2 focus:ring-slate-900 focus:border-slate-900"
             />
           </div>
 
-          {/* Type Filter Pills: All, Worker Advances, Cash Expenses */}
+          {/* Type Filter Pills: All, Worker Advances, Transfers, Cash Expenses, Refunds */}
           <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
             {[
               { id: 'all', label: `All (${combinedTransactions.length})` },
-              { id: 'advances', label: `Worker Advances (${combinedTransactions.filter(t => t.kind === 'advance').length})` },
-              { id: 'expenses', label: `Cash Expenses (${combinedTransactions.filter(t => t.kind === 'expense').length})` },
+              { id: 'advances', label: `Advances (${combinedTransactions.filter(t => t.kind === 'advance').length})` },
+              { id: 'transfers', label: `Transfers (${combinedTransactions.filter(t => t.kind === 'transfer_sent' || t.kind === 'transfer_received').length})` },
+              { id: 'expenses', label: `Expenses (${combinedTransactions.filter(t => t.kind === 'expense').length})` },
+              { id: 'refunds', label: `Refunds (${combinedTransactions.filter(t => t.kind === 'advance_refund' || t.isRefunded).length})` },
             ].map((pill) => (
               <button
                 key={pill.id}
@@ -2072,7 +2251,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           <div className="p-8 text-center text-xs text-slate-500">
             {historySearchQuery || historyTypeFilter !== 'all'
               ? 'No transactions matching your search or filter.'
-              : 'No cash spending recorded yet. Log an expense or disburse an advance above to track where cash is used.'}
+              : 'No transactions recorded yet for this factory or account.'}
           </div>
         ) : (
           <ul className="divide-y divide-slate-100 bg-white">
@@ -2090,14 +2269,38 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                       <span>{tx.categoryLabel}</span>
                     </span>
                     <div className="text-right">
-                      <span className="text-xs text-slate-400 font-semibold uppercase mr-1">Spent</span>
-                      <span className="text-sm font-black text-red-600">
-                        {formatINR(tx.amount)}
-                      </span>
+                      {tx.isRefunded ? (
+                        <div className="flex items-center gap-1.5 justify-end">
+                          <span className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded font-bold uppercase">
+                            Refunded
+                          </span>
+                          <span className="text-sm font-black line-through text-slate-400">
+                            {formatINR(tx.amount)}
+                          </span>
+                        </div>
+                      ) : tx.direction === 'inflow' ? (
+                        <div className="flex items-center gap-1 justify-end">
+                          <span className="text-[10px] text-emerald-600 font-bold uppercase mr-1">
+                            {tx.kind === 'advance_refund' ? 'Credited' : 'Received'}
+                          </span>
+                          <span className="text-sm font-black text-emerald-600">
+                            +{formatINR(tx.amount)}
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1 justify-end">
+                          <span className="text-xs text-slate-400 font-semibold uppercase mr-1">
+                            {tx.kind === 'transfer_sent' ? 'Sent' : 'Spent'}
+                          </span>
+                          <span className="text-sm font-black text-red-600">
+                            -{formatINR(tx.amount)}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  {/* Middle Row: Title (Worker Name or Expense Description) & Subtitle */}
+                  {/* Middle Row: Title & Subtitle */}
                   <div>
                     <p className="text-xs font-bold text-slate-900 leading-snug">
                       {tx.title}
@@ -2134,9 +2337,9 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                         <Camera className="h-3 w-3 text-emerald-600" />
                         <span>{tx.photoButtonLabel}</span>
                       </button>
-                    ) : (
-                      <span className="text-[10px] text-slate-400 italic">No proof</span>
-                    )}
+                    ) : tx.kind === 'advance' ? (
+                      <span className="text-[10px] text-slate-400 italic">No photo</span>
+                    ) : null}
                   </div>
                 </li>
               );

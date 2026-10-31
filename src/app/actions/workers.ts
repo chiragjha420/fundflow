@@ -38,9 +38,58 @@ export async function getFactoryWorkersAction(factoryId: string): Promise<Factor
     }
 
     // Filter out any soft-deleted / sanitized worker placeholder rows
-    return ((data || []) as FactoryWorkerBalance[]).filter(
+    const workers = ((data || []) as FactoryWorkerBalance[]).filter(
       w => w.active && w.worker_name !== 'Deleted Worker'
     );
+
+    // Subtract refunded advances so running advances always reflect ledger reality
+    const { data: refundLogs } = await admin
+      .from('audit_log')
+      .select('row_id')
+      .eq('table_name', 'cash_transactions')
+      .eq('action', 'refund');
+
+    const refundedTxIds = new Set<string>((refundLogs || []).map(r => r.row_id));
+
+    const { data: refundNotes } = await admin
+      .from('cash_transactions')
+      .select('note')
+      .eq('type', 'office_to_supervisor')
+      .ilike('note', '%[REFUND:%');
+
+    (refundNotes || []).forEach(tx => {
+      const match = tx.note?.match(/\[REFUND:([a-f0-9-]+)\]/);
+      if (match && match[1]) {
+        refundedTxIds.add(match[1]);
+      }
+    });
+
+    if (refundedTxIds.size > 0) {
+      const { data: refundedAdvances } = await admin
+        .from('cash_transactions')
+        .select('id, to_worker_id, amount')
+        .in('id', Array.from(refundedTxIds));
+
+      if (refundedAdvances && refundedAdvances.length > 0) {
+        const workerRefundTotal: Record<string, number> = {};
+        refundedAdvances.forEach(tx => {
+          if (tx.to_worker_id) {
+            workerRefundTotal[tx.to_worker_id] = (workerRefundTotal[tx.to_worker_id] || 0) + Number(tx.amount || 0);
+          }
+        });
+
+        return workers.map(w => {
+          const refunded = workerRefundTotal[w.worker_id] || 0;
+          return {
+            ...w,
+            total_cash_disbursed: Math.max(0, Number(w.total_cash_disbursed || 0) - refunded),
+            running_advance: Math.max(0, Number(w.running_advance || 0) - refunded),
+          };
+        });
+      }
+    }
+
+    return workers;
   } catch (err) {
     console.error('getFactoryWorkersAction exception:', err);
     return [];
@@ -328,5 +377,90 @@ export async function bulkUpdateOpeningAdvancesAction(
   } catch (err: any) {
     console.error('bulkUpdateOpeningAdvancesAction exception:', err);
     return { success: false, updatedCount: 0, error: err.message || 'Failed to update opening advances.' };
+  }
+}
+
+
+/**
+ * Fetch all transactions associated with a supervisor's account and factory:
+ * 1. Worker advances (supervisor_to_worker)
+ * 2. Transfers sent & received (supervisor_to_supervisor)
+ * 3. Office cash receipts & refunds (office_to_supervisor)
+ * 4. Refunded transaction IDs from audit_log
+ */
+export async function getSupervisorAllTransactionsAction(
+  supervisorId: string, 
+  factoryId: string
+): Promise<{
+  transactions: any[];
+  refundedTxIds: string[];
+}> {
+  try {
+    if (!supervisorId && !factoryId) return { transactions: [], refundedTxIds: [] };
+    const admin = createAdminClient();
+
+    // 1. Get supervisor IDs for this factory
+    let supIds = [supervisorId];
+    if (factoryId) {
+      const { data: sups } = await admin
+        .from('supervisors')
+        .select('id')
+        .eq('factory_id', factoryId);
+      if (sups && sups.length > 0) {
+        supIds = Array.from(new Set([supervisorId, ...sups.map(s => s.id)].filter(Boolean)));
+      }
+    }
+
+    // 2. Fetch all transactions involving these supervisors
+    const { data: txs, error } = await admin
+      .from('cash_transactions')
+      .select(`
+        id,
+        type,
+        amount,
+        note,
+        status,
+        created_at,
+        from_supervisor_id,
+        to_supervisor_id,
+        to_worker_id,
+        from:from_supervisor_id(id, name),
+        to_sup:to_supervisor_id(id, name),
+        to_work:to_worker_id(id, name, active)
+      `)
+      .or(`from_supervisor_id.in.(${supIds.join(',')}),to_supervisor_id.in.(${supIds.join(',')})`)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('getSupervisorAllTransactionsAction error:', error);
+      return { transactions: [], refundedTxIds: [] };
+    }
+
+    // 3. Fetch refunded transaction IDs
+    const { data: refundLogs } = await admin
+      .from('audit_log')
+      .select('row_id')
+      .eq('table_name', 'cash_transactions')
+      .eq('action', 'refund');
+
+    const refundedTxIds = new Set<string>((refundLogs || []).map(r => r.row_id));
+
+    // Also check notes for [REFUND:<id>]
+    (txs || []).forEach(tx => {
+      if (tx.type === 'office_to_supervisor' && tx.note) {
+        const match = tx.note.match(/\[REFUND:([a-f0-9-]+)\]/);
+        if (match && match[1]) {
+          refundedTxIds.add(match[1]);
+        }
+      }
+    });
+
+    return {
+      transactions: txs || [],
+      refundedTxIds: Array.from(refundedTxIds),
+    };
+  } catch (err) {
+    console.error('getSupervisorAllTransactionsAction exception:', err);
+    return { transactions: [], refundedTxIds: [] };
   }
 }

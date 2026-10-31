@@ -1,6 +1,7 @@
 import React from 'react';
 import { createServerClient } from '@/lib/supabase/server-client';
 import { createAdminClient } from '@/lib/supabase/admin-client';
+import { getSupervisorAllTransactionsAction } from '@/app/actions/workers';
 import { SupervisorClientPage } from './supervisor-client';
 
 export const revalidate = 0; // Live real-time dashboard data on navigation
@@ -14,6 +15,7 @@ export default async function SupervisorDashboardPage() {
   let initialPendingTxs: any[] = [];
   let initialOtherSupervisors: any[] = [];
   let initialExpenses: any[] = [];
+  let initialAllTransactions: { transactions: any[]; refundedTxIds: string[] } = { transactions: [], refundedTxIds: [] };
 
   try {
     const { data: { session } } = await supabase.auth.getSession();
@@ -30,8 +32,8 @@ export default async function SupervisorDashboardPage() {
       if (sup) {
         initialSupervisor = sup;
 
-        // 2. Fetch Workers (via Admin to unify co-supervisors), Pending Receipts, Other Supervisors, and Expenses
-        const [workersRes, pendingRes, otherSupsRes, expensesRes] = await Promise.all([
+        // 2. Fetch Workers (via Admin to unify co-supervisors), Pending Receipts, Other Supervisors, Expenses, and All Transactions
+        const [workersRes, pendingRes, otherSupsRes, expensesRes, allTxsRes] = await Promise.all([
           adminSupabase
             .from('worker_balances')
             .select('*')
@@ -52,12 +54,14 @@ export default async function SupervisorDashboardPage() {
             .eq('factory_id', sup.factory_id)
             .order('created_at', { ascending: false })
             .limit(50),
+          getSupervisorAllTransactionsAction(sup.id, sup.factory_id),
         ]);
 
         initialWorkers = (workersRes.data || []).filter((w: any) => w.active && w.worker_name !== 'Deleted Worker');
         initialPendingTxs = pendingRes.data || [];
         initialOtherSupervisors = otherSupsRes.data || [];
         initialExpenses = expensesRes.data || [];
+        initialAllTransactions = allTxsRes || { transactions: [], refundedTxIds: [] };
       }
     }
   } catch (e) {
@@ -72,6 +76,7 @@ export default async function SupervisorDashboardPage() {
         pendingTxs: initialPendingTxs,
         otherSupervisors: initialOtherSupervisors,
         expenses: initialExpenses,
+        allTransactions: initialAllTransactions,
       }}
     />
   );

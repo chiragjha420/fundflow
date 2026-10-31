@@ -40,6 +40,13 @@ export type NotificationBroadcastPayload =
       to_supervisor_name: string;
       amount: number;
       note?: string;
+    }
+  | {
+      type: 'advance_refunded';
+      to_supervisor_id: string;
+      supervisor_name?: string;
+      amount: number;
+      note?: string;
     };
 
 /**

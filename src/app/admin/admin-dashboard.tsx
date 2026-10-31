@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { createOfficeDisbursement } from '@/app/actions/admin';
+import { createOfficeDisbursement, refundWorkerAdvanceAction } from '@/app/actions/admin';
 import { AdminAIChat } from './admin-ai-chat';
 import { NotificationBanner } from '@/components/notification-banner';
 import { getCashRequests, updateCashRequestStatus, CashRequest } from '@/app/actions/cash-requests';
@@ -29,7 +29,8 @@ import {
   Camera,
   Clock,
   User,
-  X
+  X,
+  RotateCcw
 } from 'lucide-react';
 
 interface Factory {
@@ -98,6 +99,7 @@ interface AdminDashboardProps {
   transactions: Transaction[];
   expenses: Expense[];
   workers: WorkerBalance[];
+  refundedTransactions?: Record<string, { refundedAt: string; reason: string; amount: number; workerName: string }>;
 }
 
 export function AdminDashboard({
@@ -106,9 +108,17 @@ export function AdminDashboard({
   transactions,
   expenses,
   workers,
+  refundedTransactions = {},
 }: AdminDashboardProps) {
   const [formError, setFormError] = useState<string | null>(null);
   const [formSuccess, setFormSuccess] = useState(false);
+
+  // Refund Advance States
+  const [localRefundedMap, setLocalRefundedMap] = useState<Record<string, { refundedAt: string; reason: string; amount: number; workerName: string }>>(refundedTransactions || {});
+  const [refundTargetTx, setRefundTargetTx] = useState<{ id: string; amount: number; workerName: string; supervisorName: string } | null>(null);
+  const [refundReason, setRefundReason] = useState<string>('');
+  const [refundLoading, setRefundLoading] = useState<boolean>(false);
+  const [refundSuccessMessage, setRefundSuccessMessage] = useState<string | null>(null);
 
   // Cash Replenishment Requests from Supervisors
   const [cashRequests, setCashRequests] = useState<CashRequest[]>([]);
@@ -121,6 +131,39 @@ export function AdminDashboard({
   const supabase = createBrowserClient();
   const knownRequestIds = React.useRef<Set<string> | null>(null);
   const [inAppAlert, setInAppAlert] = useState<{ title: string; body: string } | null>(null);
+
+  const executeRefund = async () => {
+    if (!refundTargetTx) return;
+    setRefundLoading(true);
+    try {
+      const res = await refundWorkerAdvanceAction(refundTargetTx.id, refundReason);
+      if (!res.success) {
+        alert(res.error || 'Failed to refund advance.');
+        return;
+      }
+
+      setLocalRefundedMap(prev => ({
+        ...prev,
+        [refundTargetTx.id]: {
+          refundedAt: new Date().toISOString(),
+          reason: refundReason || 'Refunded by Admin',
+          amount: refundTargetTx.amount,
+          workerName: refundTargetTx.workerName,
+        }
+      }));
+
+      playAlertSound('cash_in');
+      setRefundSuccessMessage(res.message || 'Advance successfully refunded!');
+      setRefundTargetTx(null);
+      setRefundReason('');
+
+      setTimeout(() => setRefundSuccessMessage(null), 4000);
+    } catch (e: any) {
+      alert(e.message || 'Error executing refund.');
+    } finally {
+      setRefundLoading(false);
+    }
+  };
 
   // Load cash requests on mount, active 3s watcher & subscribe to real-time broadcast alerts
   useEffect(() => {
@@ -450,12 +493,15 @@ export function AdminDashboard({
         factoryId = supervisors.find(s => s.id === tx.from_supervisor_id)?.factory_id || null;
       }
 
+      const isRefunded = !!localRefundedMap[tx.id];
+      const refundInfo = localRefundedMap[tx.id];
+
       return {
         id: tx.id,
         created_at: tx.created_at,
         amount: Number(tx.amount),
-        status: tx.status,
-        note: tx.note,
+        status: isRefunded ? ('refunded' as any) : tx.status,
+        note: isRefunded && refundInfo?.reason ? `[Refunded] ${refundInfo.reason}${tx.note ? ` • ${tx.note}` : ''}` : tx.note,
         type: tx.type,
         purpose,
         fromLabel: tx.type === 'office_to_supervisor' ? 'Office' : tx.from?.name || 'Supervisor',
@@ -463,6 +509,8 @@ export function AdminDashboard({
         factoryId,
         supervisorId: tx.from_supervisor_id || tx.to_supervisor_id,
         isFlagged: tx.status === 'pending' && isOlderThan24Hours(tx.created_at),
+        isRefunded,
+        refundInfo,
       };
     }),
     ...expenses.map(exp => {
@@ -594,20 +642,36 @@ export function AdminDashboard({
   const activeWorkers = workers.filter(w => w.active !== false && w.worker_name !== 'Deleted Worker');
 
   const workerReports = activeWorkers.map(w => {
+    // Total refunded for this worker
+    const workerRefundedAmt = transactions
+      .filter(t => t.type === 'supervisor_to_worker' && t.to_worker_id === w.worker_id && localRefundedMap[t.id])
+      .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+
+    const adjustedRunningAdvance = Math.max(0, Number(w.running_advance || 0) - workerRefundedAmt);
+    const adjustedTotalDisbursed = Math.max(0, Number(w.total_cash_disbursed || 0) - workerRefundedAmt);
+
     const allDisbursements = transactions.filter(
       t => t.type === 'supervisor_to_worker' && t.to_worker_id === w.worker_id && t.status === 'confirmed'
     );
     const periodDisbursements = allDisbursements.filter(t => 
       isWithinDateRange(t.created_at, workerFromDate, workerToDate)
     );
-    const periodAdvance = periodDisbursements.reduce((sum, t) => sum + Number(t.amount), 0);
+    // Only count non-refunded disbursements in totals
+    const periodAdvance = periodDisbursements
+      .filter(t => !localRefundedMap[t.id])
+      .reduce((sum, t) => sum + Number(t.amount), 0);
+    const periodCount = periodDisbursements.filter(t => !localRefundedMap[t.id]).length;
     const factoryName = factories.find(f => f.id === w.factory_id)?.name || 'Unknown Factory';
     const supervisorName = supervisors.find(s => s.id === w.supervisor_id)?.name || 'Unknown Supervisor';
 
     return {
-      worker: w,
+      worker: {
+        ...w,
+        running_advance: adjustedRunningAdvance,
+        total_cash_disbursed: adjustedTotalDisbursed,
+      },
       periodAdvance,
-      periodCount: periodDisbursements.length,
+      periodCount,
       periodDisbursements,
       allDisbursements,
       factoryName,
@@ -1349,26 +1413,54 @@ export function AdminDashboard({
                               <div className="space-y-1.5">
                                 {item.periodDisbursements.map((tx: any) => {
                                   const parsed = parseHandoverNote(tx.note);
+                                  const isRefunded = !!localRefundedMap[tx.id];
+                                  const supName = tx.from?.name || supervisors.find(s => s.id === tx.from_supervisor_id)?.name || 'Supervisor';
+
                                   return (
-                                    <div key={tx.id} className="p-2 bg-white rounded border border-slate-100 space-y-1 text-[11px]">
+                                    <div key={tx.id} className={`p-2.5 bg-white rounded border space-y-1.5 text-[11px] ${isRefunded ? 'border-amber-200 bg-amber-50/40' : 'border-slate-100'}`}>
                                       <div className="flex justify-between items-center">
-                                        <span className="font-extrabold text-slate-900">{formatINR(tx.amount)}</span>
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                          <span className={`font-extrabold ${isRefunded ? 'line-through text-slate-400' : 'text-slate-900'}`}>{formatINR(tx.amount)}</span>
+                                          {isRefunded && (
+                                            <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-300">
+                                              Refunded
+                                            </span>
+                                          )}
+                                        </div>
                                         <span className="text-[10px] text-slate-400">
                                           {new Date(tx.created_at).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}
                                         </span>
                                       </div>
                                       <div className="flex justify-between items-center text-[10px] text-slate-500">
-                                        <span>By {tx.from?.name || 'Supervisor'}</span>
-                                        {parsed.photoUrl && (
-                                          <button
-                                            type="button"
-                                            onClick={() => setAdminViewingPhotoUrl(parsed.photoUrl)}
-                                            className="text-emerald-700 font-semibold underline flex items-center gap-0.5"
-                                          >
-                                            <Camera className="h-2.5 w-2.5" />
-                                            <span>Photo</span>
-                                          </button>
-                                        )}
+                                        <span>By {supName}</span>
+                                        <div className="flex items-center gap-2">
+                                          {parsed.photoUrl && (
+                                            <button
+                                              type="button"
+                                              onClick={() => setAdminViewingPhotoUrl(parsed.photoUrl)}
+                                              className="text-emerald-700 font-semibold underline flex items-center gap-0.5"
+                                            >
+                                              <Camera className="h-2.5 w-2.5" />
+                                              <span>Photo</span>
+                                            </button>
+                                          )}
+                                          {!isRefunded && (
+                                            <button
+                                              type="button"
+                                              onClick={() => setRefundTargetTx({
+                                                id: tx.id,
+                                                amount: Number(tx.amount),
+                                                workerName: item.worker.worker_name,
+                                                supervisorName: supName,
+                                              })}
+                                              className="text-red-600 hover:text-red-800 font-bold flex items-center gap-0.5 bg-red-50 hover:bg-red-100 px-1.5 py-0.5 rounded border border-red-200 transition-colors"
+                                              title="Refund money back to supervisor balance"
+                                            >
+                                              <RotateCcw className="h-2.5 w-2.5" />
+                                              <span>Refund</span>
+                                            </button>
+                                          )}
+                                        </div>
                                       </div>
                                       {parsed.note && (
                                         <p className="text-[10px] text-slate-600 italic">"{parsed.note}"</p>
@@ -1494,49 +1586,82 @@ export function AdminDashboard({
                                       </p>
                                     ) : (
                                       <div className="divide-y divide-slate-100 rounded-md border border-slate-200 bg-white overflow-hidden shadow-sm">
-                                        {item.periodDisbursements.map((tx) => (
-                                          <div key={tx.id} className="p-3 text-xs flex justify-between items-center hover:bg-slate-50">
-                                            <div>
-                                              <div className="font-extrabold text-slate-900 text-sm">
-                                                {formatINR(tx.amount)}
+                                        {item.periodDisbursements.map((tx) => {
+                                          const isRefunded = !!localRefundedMap[tx.id];
+                                          const supName = tx.from?.name || supervisors.find(s => s.id === tx.from_supervisor_id)?.name || 'Supervisor';
+                                          return (
+                                            <div key={tx.id} className={`p-3 text-xs flex justify-between items-center hover:bg-slate-50 ${isRefunded ? 'bg-amber-50/20' : ''}`}>
+                                              <div>
+                                                <div className="flex items-center gap-2">
+                                                  <span className={`font-extrabold text-sm ${isRefunded ? 'line-through text-slate-400' : 'text-slate-900'}`}>
+                                                    {formatINR(tx.amount)}
+                                                  </span>
+                                                  {isRefunded && (
+                                                    <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                                                      REFUNDED
+                                                    </span>
+                                                  )}
+                                                </div>
+                                                <div className="text-[10px] text-slate-500 mt-0.5">
+                                                  {new Date(tx.created_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+                                                </div>
+                                                {tx.note && (() => {
+                                                  const parsed = parseHandoverNote(tx.note);
+                                                  return (
+                                                    <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                                                      {parsed.note && (
+                                                        <div className="text-[11px] text-slate-600 italic bg-slate-50 border border-slate-100 rounded px-1.5 py-0.5 w-fit">
+                                                          "{parsed.note}"
+                                                        </div>
+                                                      )}
+                                                      {parsed.photoUrl && (
+                                                        <button
+                                                          type="button"
+                                                          onClick={() => setAdminViewingPhotoUrl(parsed.photoUrl)}
+                                                          className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-1.5 py-0.5 rounded cursor-pointer transition-colors"
+                                                          title="View Cash Handover Proof"
+                                                        >
+                                                          <Camera className="h-3 w-3" />
+                                                          <span>Handover Photo</span>
+                                                        </button>
+                                                      )}
+                                                    </div>
+                                                  );
+                                                })()}
                                               </div>
-                                              <div className="text-[10px] text-slate-500 mt-0.5">
-                                                {new Date(tx.created_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
-                                              </div>
-                                              {tx.note && (() => {
-                                                const parsed = parseHandoverNote(tx.note);
-                                                return (
-                                                  <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                                                    {parsed.note && (
-                                                      <div className="text-[11px] text-slate-600 italic bg-slate-50 border border-slate-100 rounded px-1.5 py-0.5 w-fit">
-                                                        "{parsed.note}"
-                                                      </div>
-                                                    )}
-                                                    {parsed.photoUrl && (
-                                                      <button
-                                                        type="button"
-                                                        onClick={() => setAdminViewingPhotoUrl(parsed.photoUrl)}
-                                                        className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-1.5 py-0.5 rounded cursor-pointer transition-colors"
-                                                        title="View Cash Handover Proof"
-                                                      >
-                                                        <Camera className="h-3 w-3" />
-                                                        <span>Handover Photo</span>
-                                                      </button>
-                                                    )}
+                                              <div className="text-right flex flex-col items-end gap-1.5">
+                                                {isRefunded ? (
+                                                  <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded">
+                                                    Refunded to {supName}
+                                                  </span>
+                                                ) : (
+                                                  <div className="flex items-center gap-2">
+                                                    <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                                      {tx.status.toUpperCase()}
+                                                    </span>
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => setRefundTargetTx({
+                                                        id: tx.id,
+                                                        amount: Number(tx.amount),
+                                                        workerName: item.worker.worker_name,
+                                                        supervisorName: supName,
+                                                      })}
+                                                      className="text-red-600 hover:text-red-800 font-bold text-xs flex items-center gap-1 bg-red-50 hover:bg-red-100 px-2 py-1 rounded border border-red-200 transition-colors shadow-2xs"
+                                                      title="Refund advance back to supervisor account"
+                                                    >
+                                                      <RotateCcw className="h-3 w-3" />
+                                                      <span>Refund / Delete</span>
+                                                    </button>
                                                   </div>
-                                                );
-                                              })()}
+                                                )}
+                                                <span className="text-[10px] text-slate-500 block">
+                                                  Disbursed by {supName}
+                                                </span>
+                                              </div>
                                             </div>
-                                            <div className="text-right">
-                                              <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                                {tx.status.toUpperCase()}
-                                              </span>
-                                              <span className="text-[10px] text-slate-500 block mt-1">
-                                                Disbursed by {tx.from?.name || 'Supervisor'}
-                                              </span>
-                                            </div>
-                                          </div>
-                                        ))}
+                                          );
+                                        })}
                                       </div>
                                     )}
                                   </div>
@@ -1811,20 +1936,38 @@ export function AdminDashboard({
                           {(() => {
                             const parsed = parseHandoverNote(entry.note);
                             return (
-                              <div className="flex items-center gap-2 flex-wrap">
-                                {parsed.note && <span className="italic">{parsed.note}</span>}
-                                {parsed.photoUrl && (
+                              <div className="flex items-center justify-between gap-2 flex-wrap">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  {parsed.note && <span className="italic">{parsed.note}</span>}
+                                  {parsed.photoUrl && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setAdminViewingPhotoUrl(parsed.photoUrl)}
+                                      className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded cursor-pointer transition-colors shadow-xs"
+                                      title="View Cash Handover Proof"
+                                    >
+                                      <Camera className="h-3 w-3" />
+                                      <span>Handover Photo</span>
+                                    </button>
+                                  )}
+                                  {!parsed.note && !parsed.photoUrl && <span className="text-slate-400">-</span>}
+                                </div>
+                                {entry.purpose === 'Wages' && !entry.isRefunded && (
                                   <button
                                     type="button"
-                                    onClick={() => setAdminViewingPhotoUrl(parsed.photoUrl)}
-                                    className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded cursor-pointer transition-colors shadow-xs"
-                                    title="View Cash Handover Proof"
+                                    onClick={() => setRefundTargetTx({
+                                      id: entry.id,
+                                      amount: entry.amount,
+                                      workerName: entry.toLabel,
+                                      supervisorName: entry.fromLabel,
+                                    })}
+                                    className="text-red-600 hover:text-red-800 font-bold text-[11px] flex items-center gap-1 bg-red-50 hover:bg-red-100 px-2 py-0.5 rounded border border-red-200 transition-colors shadow-2xs ml-auto shrink-0"
+                                    title="Refund this advance back to supervisor's balance"
                                   >
-                                    <Camera className="h-3 w-3" />
-                                    <span>Handover Photo</span>
+                                    <RotateCcw className="h-2.5 w-2.5" />
+                                    <span>Refund</span>
                                   </button>
                                 )}
-                                {!parsed.note && !parsed.photoUrl && <span className="text-slate-400">-</span>}
                               </div>
                             );
                           })()}
@@ -1872,6 +2015,110 @@ export function AdminDashboard({
           </div>
         </div>
       )}
-    </div>
+    
+      {/* Refund Success Banner */}
+      {refundSuccessMessage && (
+        <div className="fixed top-5 right-5 z-50 bg-emerald-900 text-white px-4 py-3 rounded-lg shadow-xl border border-emerald-700 flex items-center gap-3 animate-in fade-in duration-200">
+          <RotateCcw className="h-5 w-5 text-emerald-400 shrink-0" />
+          <span className="text-xs font-bold">{refundSuccessMessage}</span>
+          <button type="button" onClick={() => setRefundSuccessMessage(null)} className="text-emerald-300 hover:text-white ml-2">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Refund Confirmation Modal */}
+      {refundTargetTx && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="h-9 w-9 rounded-full bg-red-100 flex items-center justify-center text-red-600">
+                  <RotateCcw className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Refund Cash Advance</h3>
+                  <p className="text-[11px] text-slate-500">Correct mistaken payment to wrong worker</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setRefundTargetTx(null); setRefundReason(''); }}
+                className="text-slate-400 hover:text-slate-600 p-1"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-2.5 bg-slate-50 p-3.5 rounded-lg border border-slate-200 text-xs">
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Worker:</span>
+                <span className="font-bold text-slate-900 text-sm">{refundTargetTx.workerName}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Advance Amount:</span>
+                <span className="font-black text-red-600 text-base">{formatINR(refundTargetTx.amount)}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Refund To:</span>
+                <span className="font-bold text-slate-900">{refundTargetTx.supervisorName}'s Balance</span>
+              </div>
+            </div>
+
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-[11px] text-amber-900 space-y-1">
+              <p className="font-bold">What will happen:</p>
+              <ul className="list-disc pl-4 space-y-0.5 text-amber-800">
+                <li><strong>{formatINR(refundTargetTx.amount)}</strong> will be credited back to <strong>{refundTargetTx.supervisorName}</strong>'s available balance.</li>
+                <li><strong>{formatINR(refundTargetTx.amount)}</strong> will be deducted from <strong>{refundTargetTx.workerName}</strong>'s running advance.</li>
+                <li>A push notification will be sent to <strong>{refundTargetTx.supervisorName}</strong>.</li>
+                <li>This transaction will be marked as <strong>Refunded</strong> in history.</li>
+              </ul>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Reason / Remark (Optional)
+              </label>
+              <input
+                type="text"
+                value={refundReason}
+                onChange={(e) => setRefundReason(e.target.value)}
+                placeholder="e.g. Supervisor selected wrong worker by mistake"
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-slate-900 focus:ring-1 focus:ring-slate-900"
+              />
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                disabled={refundLoading}
+                onClick={() => { setRefundTargetTx(null); setRefundReason(''); }}
+                className="flex-1 py-2 px-3 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 min-h-[40px]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={refundLoading}
+                onClick={executeRefund}
+                className="flex-1 py-2 px-3 rounded-lg bg-red-600 hover:bg-red-700 text-xs font-bold text-white flex items-center justify-center gap-1.5 min-h-[40px] shadow-sm disabled:opacity-50"
+              >
+                {refundLoading ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                    <span>Refunding...</span>
+                  </>
+                ) : (
+                  <>
+                    <RotateCcw className="h-4 w-4" />
+                    <span>Confirm Refund</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+</div>
   );
 }
