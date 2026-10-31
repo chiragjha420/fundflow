@@ -262,17 +262,16 @@ export async function refundWorkerAdvanceAction(transactionId: string, reason?: 
       return { success: false, error: `Only confirmed transactions can be refunded. Current status: ${tx.status}` };
     }
 
-    // 2. Check if already refunded in audit_log
-    const { data: existingRefund } = await adminClient
-      .from('audit_log')
+    // 2. Check if already refunded and credited in cash_transactions
+    const { data: existingCredit } = await adminClient
+      .from('cash_transactions')
       .select('id')
-      .eq('table_name', 'cash_transactions')
-      .eq('action', 'refund')
-      .eq('row_id', transactionId)
+      .eq('type', 'office_to_supervisor')
+      .ilike('note', `%[REFUND:${transactionId}]%`)
       .limit(1);
 
-    if (existingRefund && existingRefund.length > 0) {
-      return { success: false, error: 'This transaction has already been refunded.' };
+    if (existingCredit && existingCredit.length > 0) {
+      return { success: false, error: 'This transaction has already been refunded and credited back.' };
     }
 
     const workerName = (tx.to_work as any)?.name || 'Worker';
@@ -281,12 +280,59 @@ export async function refundWorkerAdvanceAction(transactionId: string, reason?: 
     const amount = Number(tx.amount);
     const refundReason = reason?.trim() || 'Advance added by mistake to wrong worker';
 
-    // Get admin user ID
+    // Safely resolve an auth.users ID for foreign key constraints (confirmed_by / created_by)
     const supabaseUser = createServerClient();
     const { data: { user } } = await supabaseUser.auth.getUser();
-    const adminUserId = user?.id || tx.from_supervisor_id;
+    let authUserId = user?.id;
 
-    // 3. Insert audit log record for immutable refund tracking
+    if (!authUserId) {
+      // Fallback 1: Query admin user from profiles table
+      const { data: adminProfile } = await adminClient
+        .from('profiles')
+        .select('id')
+        .eq('role', 'admin')
+        .limit(1)
+        .single();
+      authUserId = adminProfile?.id;
+    }
+
+    if (!authUserId && supervisorId) {
+      // Fallback 2: Query supervisor's auth user_id (NOT supervisor table id)
+      const { data: sup } = await adminClient
+        .from('supervisors')
+        .select('user_id')
+        .eq('id', supervisorId)
+        .single();
+      authUserId = sup?.user_id;
+    }
+
+    if (!authUserId) {
+      return { success: false, error: 'Could not resolve a valid authentication profile to authorize refund credit.' };
+    }
+
+    // 3. Insert refund credit transaction FIRST to supervisor's account (office_to_supervisor)
+    // This immediately restores `amount` back to the supervisor's balance in get_supervisor_balance!
+    const refundNote = `[REFUND:${transactionId}] Refund for wrong advance to ${workerName}: ₹${amount.toLocaleString('en-IN')} credited back to your balance. ${refundReason}`;
+
+    const { error: creditError } = await adminClient
+      .from('cash_transactions')
+      .insert({
+        type: 'office_to_supervisor',
+        to_supervisor_id: supervisorId,
+        amount,
+        status: 'confirmed',
+        confirmed_at: new Date().toISOString(),
+        confirmed_by: authUserId,
+        note: refundNote,
+        created_by: authUserId,
+      });
+
+    if (creditError) {
+      console.error('Failed to credit supervisor balance:', creditError);
+      return { success: false, error: 'Failed to credit supervisor balance: ' + creditError.message };
+    }
+
+    // 4. Insert audit log record for immutable refund tracking (only after credit succeeds)
     const { error: auditError } = await adminClient
       .from('audit_log')
       .insert({
@@ -307,34 +353,13 @@ export async function refundWorkerAdvanceAction(transactionId: string, reason?: 
           status: 'refunded',
           refund_reason: refundReason,
           refunded_at: new Date().toISOString(),
-          refunded_by: adminUserId,
+          refunded_by: authUserId,
         },
-        changed_by: adminUserId,
+        changed_by: authUserId,
       });
 
     if (auditError) {
-      console.error('Audit log insert failed:', auditError);
-    }
-
-    // 4. Insert refund credit transaction to supervisor's account (office_to_supervisor)
-    // This immediately restores `amount` back to the supervisor's balance in get_supervisor_balance!
-    const refundNote = `[REFUND:${transactionId}] Refund for wrong advance to ${workerName}: ₹${amount.toLocaleString('en-IN')} credited back to your balance. ${refundReason}`;
-
-    const { error: creditError } = await adminClient
-      .from('cash_transactions')
-      .insert({
-        type: 'office_to_supervisor',
-        to_supervisor_id: supervisorId,
-        amount,
-        status: 'confirmed',
-        confirmed_at: new Date().toISOString(),
-        confirmed_by: adminUserId,
-        note: refundNote,
-        created_by: adminUserId,
-      });
-
-    if (creditError) {
-      return { success: false, error: 'Failed to credit supervisor balance: ' + creditError.message };
+      console.warn('Audit log insert warning (credit was still applied):', auditError);
     }
 
     // 5. Send Real OS Web Push to supervisor's phone (works even when app/browser is closed)
