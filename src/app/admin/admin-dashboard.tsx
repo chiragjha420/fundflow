@@ -48,7 +48,11 @@ import {
   batchReclassifyKharchaAction, 
   getWorkerFullLedgerAction, 
   FullWorkerLedgerEntry,
-  addWorkerSalaryWithDeductionAction
+  addWorkerSalaryWithDeductionAction,
+  getAdvanceCorrectionRequestsAction,
+  reviewAdvanceCorrectionAction,
+  AdvanceCorrectionRequest,
+  getAllWorkersWithSalaryBalancesAction
 } from '@/app/actions/workers';
 
 interface Factory {
@@ -138,6 +142,51 @@ export function AdminDashboard({
   const supabase = createBrowserClient();
   const knownRequestIds = React.useRef<Set<string> | null>(null);
   const [inAppAlert, setInAppAlert] = useState<{ title: string; body: string } | null>(null);
+
+  // Advance Correction Requests from Supervisors
+  const [advanceCorrectionRequests, setAdvanceCorrectionRequests] = useState<AdvanceCorrectionRequest[]>([]);
+  const [reviewCorrectionLoadingId, setReviewCorrectionLoadingId] = useState<string | null>(null);
+
+  const fetchCorrectionRequests = async () => {
+    try {
+      const reqs = await getAdvanceCorrectionRequestsAction();
+      setAdvanceCorrectionRequests(reqs);
+    } catch (e) {
+      console.warn('Failed to fetch correction requests:', e);
+    }
+  };
+
+  useEffect(() => {
+    fetchCorrectionRequests();
+    const interval = setInterval(fetchCorrectionRequests, 6000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleReviewCorrection = async (requestId: string, action: 'APPROVED' | 'REJECTED') => {
+    setReviewCorrectionLoadingId(requestId);
+    try {
+      const res = await reviewAdvanceCorrectionAction({
+        requestId,
+        decision: action === 'APPROVED' ? 'approve' : 'reject',
+      });
+      if (!res.success) {
+        alert(res.error || `Failed to ${action.toLowerCase()} request.`);
+        return;
+      }
+      playAlertSound('success');
+      await fetchCorrectionRequests();
+      if (action === 'APPROVED') {
+        const updatedWorkers = await getAllWorkersWithSalaryBalancesAction();
+        if (updatedWorkers) {
+          setLocalWorkers(updatedWorkers);
+        }
+      }
+    } catch (err: any) {
+      alert(err.message || 'Error processing request.');
+    } finally {
+      setReviewCorrectionLoadingId(null);
+    }
+  };
 
   const executeRefund = async () => {
     if (!refundTargetTx) return;
@@ -1143,6 +1192,72 @@ export function AdminDashboard({
                         className="py-1 px-2 rounded border border-slate-200 text-slate-500 text-[11px] font-medium hover:bg-slate-50"
                       >
                         Dismiss
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Pending Advance Correction Requests from Supervisors */}
+          {advanceCorrectionRequests.filter(r => r.status === 'PENDING').length > 0 && (
+            <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-indigo-900">
+                  <RotateCcw className="h-4 w-4 text-indigo-600" />
+                  <span>Advance Correction Requests ({advanceCorrectionRequests.filter(r => r.status === 'PENDING').length})</span>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {advanceCorrectionRequests.filter(r => r.status === 'PENDING').map(req => (
+                  <div key={req.id} className="bg-white border border-indigo-200 rounded p-2.5 shadow-xs text-xs space-y-1.5">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <span className="font-bold text-slate-900">{req.worker_name}</span>
+                        <span className="text-[10px] text-slate-500 block">{req.factory_name} • By {req.supervisor_name}</span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[10px] text-slate-400 block line-through">{formatINR(req.current_advance)}</span>
+                        <span className="font-extrabold text-indigo-950 text-sm">{formatINR(req.requested_advance)}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between text-[11px] bg-indigo-50/60 rounded px-2 py-1 border border-indigo-100">
+                      <span className="text-slate-600">Correction:</span>
+                      <span className={`font-bold ${req.difference > 0 ? 'text-amber-800' : 'text-emerald-700'}`}>
+                        {req.difference > 0 ? `+${formatINR(req.difference)} (Increase)` : `${formatINR(req.difference)} (Decrease)`}
+                      </span>
+                    </div>
+
+                    <p className="text-[11px] text-slate-600 italic bg-slate-50 rounded p-1.5 border border-slate-100">
+                      "{req.reason}"
+                    </p>
+
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        disabled={reviewCorrectionLoadingId === req.id}
+                        onClick={() => handleReviewCorrection(req.id, 'APPROVED')}
+                        className="flex-1 py-1.5 px-2 rounded bg-indigo-600 text-white text-[11px] font-bold hover:bg-indigo-700 disabled:opacity-50 transition-colors flex items-center justify-center gap-1 shadow-xs"
+                      >
+                        {reviewCorrectionLoadingId === req.id ? (
+                          <RefreshCw className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <>
+                            <CheckCircle2 className="h-3 w-3" />
+                            <span>Approve & Update Advance</span>
+                          </>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={reviewCorrectionLoadingId === req.id}
+                        onClick={() => handleReviewCorrection(req.id, 'REJECTED')}
+                        className="py-1.5 px-2.5 rounded border border-slate-200 text-slate-500 text-[11px] font-medium hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        Reject
                       </button>
                     </div>
                   </div>

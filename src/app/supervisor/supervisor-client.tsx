@@ -42,7 +42,9 @@ import {
   RotateCcw,
   Building2,
   Coins,
-  Banknote
+  Banknote,
+  Calculator,
+  CalendarDays
 } from 'lucide-react';
 import { sendWorkerDisbursementSms } from '@/lib/sms';
 import { createCashRequest } from '@/app/actions/cash-requests';
@@ -52,7 +54,13 @@ import { NotificationBanner } from '@/components/notification-banner';
 import { compressImage } from '@/lib/image-compressor';
 import { CameraCaptureModal } from '@/components/camera-capture-modal';
 import { uploadHandoverPhotoAction, uploadWorkerPhotoAction, uploadExpensePhotoAction } from '@/app/actions/upload-actions';
-import { getFactoryWorkersAction, getSupervisorAllTransactionsAction, recoverWorkerAdvanceAction, addWorkerSalaryWithDeductionAction } from '@/app/actions/workers';
+import { 
+  getFactoryWorkersAction, 
+  getSupervisorAllTransactionsAction, 
+  recoverWorkerAdvanceAction, 
+  recordWorkerHisaabAction,
+  createAdvanceCorrectionRequestAction
+} from '@/app/actions/workers';
 import { getFactoryExpensesAction, FactoryExpense } from '@/app/actions/expenses';
 
 interface Worker {
@@ -111,15 +119,30 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const queryClient = useQueryClient();
 
   // Active Tab for Quick Actions
-  const [activeTab, setActiveTab] = useState<'disburse' | 'salary' | 'expense' | 'transfer'>('disburse');
+  const [activeTab, setActiveTab] = useState<'advance' | 'hisaab' | 'expense' | 'transfer'>('advance');
 
-  // Add Salary Quick Action States
-  const [salarySelectedWorkerId, setSalarySelectedWorkerId] = useState<string>('');
-  const [salaryWorkerSearchTerm, setSalaryWorkerSearchTerm] = useState<string>('');
-  const [salaryInputAmount, setSalaryInputAmount] = useState<string>('');
-  const [salaryDeductAmount, setSalaryDeductAmount] = useState<string>('0');
-  const [salaryInputMonth, setSalaryInputMonth] = useState<string>(() => new Date().toLocaleString('en-IN', { month: 'long', year: 'numeric' }));
-  const [salaryInputNote, setSalaryInputNote] = useState<string>('');
+  // Hisaab States
+  const [hisaabWorkerId, setHisaabWorkerId] = useState<string>('');
+  const [hisaabWorkerSearch, setHisaabWorkerSearch] = useState<string>('');
+  const [hisaabFromDate, setHisaabFromDate] = useState<string>(() => {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split('T')[0];
+  });
+  const [hisaabToDate, setHisaabToDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  const [hisaabTotalWages, setHisaabTotalWages] = useState<string>('');
+  const [hisaabAdvanceDeduct, setHisaabAdvanceDeduct] = useState<string>('0');
+  const [hisaabPayCashNow, setHisaabPayCashNow] = useState<boolean>(false);
+  const [hisaabNote, setHisaabNote] = useState<string>('');
+  const [hisaabLoading, setHisaabLoading] = useState<boolean>(false);
+  const [hisaabError, setHisaabError] = useState<string>('');
+
+  // Advance Correction Modal States (Supervisor -> Admin)
+  const [showCorrectionModal, setShowCorrectionModal] = useState<boolean>(false);
+  const [correctionWorker, setCorrectionWorker] = useState<Worker | null>(null);
+  const [correctionRequestedAmount, setCorrectionRequestedAmount] = useState<string>('');
+  const [correctionReason, setCorrectionReason] = useState<string>('');
+  const [correctionLoading, setCorrectionLoading] = useState<boolean>(false);
+  const [correctionError, setCorrectionError] = useState<string>('');
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
@@ -139,13 +162,10 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     amount: number;
     note: string;
     overridePhone?: string;
-    paymentType?: 'advance' | 'salary_payment';
+    paymentType?: 'advance';
   } | null>(null);
   const [viewingPhotoUrl, setViewingPhotoUrl] = useState<string | null>(null);
   const [viewingPhotoTitle, setViewingPhotoTitle] = useState<string>('Proof of Handover');
-
-  // Disburse Payment Type (Advance vs Salary Payment)
-  const [disbursePaymentType, setDisbursePaymentType] = useState<'advance' | 'salary_payment'>('advance');
 
   // Settle Advance from Salary Modal States
   const [showSettleModal, setShowSettleModal] = useState<boolean>(false);
@@ -231,6 +251,49 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       showToast('error', e.message || 'Error submitting request.');
     } finally {
       setRequestLoading(false);
+    }
+  };
+
+  const handleExecuteAdvanceCorrection = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!correctionWorker || !supervisorId) return;
+
+    const requestedNum = parseFloat(correctionRequestedAmount);
+    if (isNaN(requestedNum) || requestedNum < 0) {
+      setCorrectionError('Please enter a valid requested advance amount (0 or positive).');
+      return;
+    }
+    if (!correctionReason.trim()) {
+      setCorrectionError('Please explain the reason for the advance correction.');
+      return;
+    }
+
+    setCorrectionLoading(true);
+    setCorrectionError('');
+
+    try {
+      const res = await createAdvanceCorrectionRequestAction({
+        workerId: correctionWorker.worker_id,
+        supervisorId,
+        currentAdvance: correctionWorker.running_advance || 0,
+        requestedAdvance: requestedNum,
+        reason: correctionReason.trim(),
+      });
+
+      if (!res.success) {
+        setCorrectionError(res.error || 'Failed to submit correction request.');
+        return;
+      }
+
+      showToast('success', `Correction request for ${correctionWorker.worker_name} sent to Admin!`);
+      setShowCorrectionModal(false);
+      setCorrectionWorker(null);
+      setCorrectionRequestedAmount('');
+      setCorrectionReason('');
+    } catch (err: any) {
+      setCorrectionError(err.message || 'Error submitting correction request.');
+    } finally {
+      setCorrectionLoading(false);
     }
   };
 
@@ -452,20 +515,6 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   });
 
   const selectedWorker = activeWorkers.find(w => w.worker_id === selectedWorkerId);
-
-  // Automatically adapt payment classification when a worker is selected
-  useEffect(() => {
-    if (!selectedWorkerId) {
-      setDisbursePaymentType('advance');
-      return;
-    }
-    const currentWorker = activeWorkers.find(w => w.worker_id === selectedWorkerId);
-    if (currentWorker && (currentWorker.unpaid_salary || 0) > 0) {
-      setDisbursePaymentType('salary_payment');
-    } else {
-      setDisbursePaymentType('advance');
-    }
-  }, [selectedWorkerId, activeWorkers]);
 
   // 4. Fetch Active Supervisors (for transfer selection)
   const { data: otherSupervisors } = useQuery({
@@ -1007,7 +1056,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const handleHandoverCapture = async (file: File | null) => {
     if (!pendingDisburse) return;
     const { targetWorker, amount, note, overridePhone } = pendingDisburse;
-    const activePaymentType = pendingDisburse.paymentType || disbursePaymentType;
+    const activePaymentType = pendingDisburse.paymentType || 'advance';
     
     // 1. Immediately close modal, unblock UI, and reset form inputs (0ms)
     setShowHandoverModal(false);
@@ -1025,36 +1074,24 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       return old;
     });
 
-    // 4. OPTIMISTIC CACHE UPDATE: Update worker running advance or unpaid salary
+    // 4. OPTIMISTIC CACHE UPDATE: Update worker running advance
     queryClient.setQueryData(['workers', factoryId], (old: Worker[] | undefined) => {
       if (!old) return old;
       return old.map(w => {
         if (w.worker_id !== targetWorker.worker_id) return w;
-        if (activePaymentType === 'salary_payment') {
-          const newUnpaid = Math.max(0, (w.unpaid_salary || 0) - amount);
-          return {
-            ...w,
-            unpaid_salary: newUnpaid,
-            total_salary_paid: (w.total_salary_paid || 0) + amount,
-            net_payable: newUnpaid - (w.running_advance || 0),
-            total_cash_disbursed: (Number(w.total_cash_disbursed) || 0) + amount,
-          };
-        } else {
-          const newAdv = Number(w.running_advance) + amount;
-          return {
-            ...w,
-            running_advance: newAdv,
-            total_advance_given: (w.total_advance_given || 0) + amount,
-            net_payable: (w.unpaid_salary || 0) - newAdv,
-            total_cash_disbursed: (Number(w.total_cash_disbursed) || 0) + amount,
-          };
-        }
+        const newAdv = Number(w.running_advance || 0) + amount;
+        return {
+          ...w,
+          running_advance: newAdv,
+          total_advance_given: (w.total_advance_given || 0) + amount,
+          total_cash_disbursed: (Number(w.total_cash_disbursed) || 0) + amount,
+        };
       });
     });
 
     // 5. OPTIMISTIC CACHE UPDATE: Prepend to recent disbursements
     const tempTxId = `temp-${Date.now()}`;
-    const defaultLabel = activePaymentType === 'salary_payment' ? 'Salary Payment' : 'Cash Advance';
+    const defaultLabel = 'Cash Advance';
     const cleanNoteBase = note?.trim() || defaultLabel;
     queryClient.setQueryData(['recent-disbursements', factoryId], (old: any[] | undefined) => {
       const optimisticTx = {
@@ -1071,8 +1108,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
     // 6. INSTANT AUDIO & TOAST CONFIRMATION (0ms)
     playAlertSound('cash_in');
-    const paymentLabel = activePaymentType === 'salary_payment' ? 'Salary payment' : 'Advance';
-    showToast('success', `₹${amount.toLocaleString('en-IN')} ${paymentLabel} paid to ${targetWorker.worker_name}!`);
+    showToast('success', `₹${amount.toLocaleString('en-IN')} advance paid to ${targetWorker.worker_name}!`);
 
     // 7. ASYNCHRONOUS BACKGROUND WORK (Photo Upload + RPC + SMS + Silent Invalidation)
     (async () => {
@@ -1227,7 +1263,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           amount: phoneModalDisburseDetails.amount,
           note: phoneModalDisburseDetails.note,
           overridePhone: savedPhone,
-          paymentType: disbursePaymentType,
+          paymentType: 'advance',
         });
         setShowHandoverModal(true);
         setDisburseAmount('');
@@ -1256,17 +1292,17 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     const form = e.currentTarget;
 
     try {
-      if (activeTab === 'disburse') {
+      if (activeTab === 'advance') {
         const workerId = selectedWorkerId || (formData.get('workerId') as string);
-        const amount = parseFloat(formData.get('amount') as string);
+        const amount = parseFloat((formData.get('amount') as string) || disburseAmount);
         const note = (formData.get('note') as string)?.trim() || disburseNote.trim() || 'Cash Advance';
 
         if (!workerId) {
-          throw new Error('Please choose a worker to disburse cash to.');
+          throw new Error('Please choose a worker to disburse advance to.');
         }
 
         if (isNaN(amount) || amount <= 0) {
-          throw new Error('Please enter a valid disbursement amount.');
+          throw new Error('Please enter a valid advance amount.');
         }
 
         const targetWorker = activeWorkers.find(w => w.worker_id === workerId);
@@ -1294,22 +1330,26 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           targetWorker,
           amount,
           note,
-          paymentType: disbursePaymentType,
+          paymentType: 'advance',
         });
         setShowHandoverModal(true);
         setActionLoading(false);
-      } else if (activeTab === 'salary') {
-        const workerId = salarySelectedWorkerId || selectedWorkerId || (formData.get('salaryWorkerId') as string);
-        const salaryAmount = parseFloat((formData.get('salaryAmount') as string) || salaryInputAmount);
-        const deductAmount = Math.max(0, parseFloat((formData.get('deductAmount') as string) || salaryDeductAmount || '0'));
-        const month = ((formData.get('salaryMonth') as string) || salaryInputMonth)?.trim() || undefined;
-        const note = ((formData.get('salaryNote') as string) || salaryInputNote)?.trim() || undefined;
+      } else if (activeTab === 'hisaab') {
+        const workerId = hisaabWorkerId || (formData.get('hisaabWorkerId') as string);
+        const fromDate = hisaabFromDate || (formData.get('hisaabFromDate') as string);
+        const toDate = hisaabToDate || (formData.get('hisaabToDate') as string);
+        const totalWages = parseFloat((formData.get('hisaabTotalWages') as string) || hisaabTotalWages);
+        const advanceDeduct = Math.max(0, parseFloat((formData.get('hisaabAdvanceDeduct') as string) || hisaabAdvanceDeduct || '0'));
+        const note = (formData.get('hisaabNote') as string)?.trim() || hisaabNote.trim() || undefined;
 
         if (!workerId) {
-          throw new Error('Please select a worker to add salary for.');
+          throw new Error('Please select a worker for Hisaab.');
         }
-        if (isNaN(salaryAmount) || salaryAmount <= 0) {
-          throw new Error('Please enter a valid salary amount greater than zero.');
+        if (!fromDate || !toDate) {
+          throw new Error('Please specify both From and To dates.');
+        }
+        if (isNaN(totalWages) || totalWages <= 0) {
+          throw new Error('Please enter valid total wages earned by the worker.');
         }
 
         const targetWorker = activeWorkers.find(w => w.worker_id === workerId);
@@ -1318,41 +1358,42 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         }
 
         const currentAdvance = targetWorker.running_advance || 0;
-        if (deductAmount > 0) {
-          if (deductAmount > currentAdvance) {
-            throw new Error(`Deduction amount (₹${deductAmount.toLocaleString('en-IN')}) cannot exceed worker's advance of ₹${currentAdvance.toLocaleString('en-IN')}.`);
-          }
-          if (deductAmount > salaryAmount) {
-            throw new Error(`Deduction amount (₹${deductAmount.toLocaleString('en-IN')}) cannot exceed salary amount of ₹${salaryAmount.toLocaleString('en-IN')}.`);
-          }
+        if (advanceDeduct > currentAdvance) {
+          throw new Error(`Deduction amount (₹${advanceDeduct.toLocaleString('en-IN')}) cannot exceed worker's advance of ₹${currentAdvance.toLocaleString('en-IN')}.`);
+        }
+        if (advanceDeduct > totalWages) {
+          throw new Error(`Deduction amount (₹${advanceDeduct.toLocaleString('en-IN')}) cannot exceed wages earned of ₹${totalWages.toLocaleString('en-IN')}.`);
         }
 
-        const res = await addWorkerSalaryWithDeductionAction({
+        const res = await recordWorkerHisaabAction({
           workerId,
           factoryId: factoryId || targetWorker.factory_id,
-          salaryAmount,
-          advanceDeductAmount: deductAmount,
-          periodMonth: month,
-          note,
           supervisorId: supervisorId || undefined,
+          fromDate,
+          toDate,
+          totalWages,
+          advanceDeducted: advanceDeduct,
+          payNetCashNow: hisaabPayCashNow,
+          note,
         });
 
         if (!res.success) {
-          throw new Error(res.error || 'Failed to add salary.');
+          throw new Error(res.error || 'Failed to record Hisaab.');
         }
 
-        showToast('success', `Salary of ${formatINR(salaryAmount)} added for ${targetWorker.worker_name}.${deductAmount > 0 ? ` ${formatINR(deductAmount)} deducted from advance.` : ''}`);
+        showToast('success', `Hisaab saved for ${targetWorker.worker_name}! Advance remaining: ${formatINR(res.newAdvanceRemaining || 0)}`);
         setActionMessage({
           type: 'success',
-          text: `Salary of ${formatINR(salaryAmount)} recorded for ${targetWorker.worker_name}.${deductAmount > 0 ? ` ${formatINR(deductAmount)} subtracted from advance (remaining advance: ${formatINR(res.advanceRemaining || 0)}).` : ''}`,
+          text: `Hisaab saved for ${targetWorker.worker_name}. Wages: ${formatINR(totalWages)}, Deducted from Advance: ${formatINR(advanceDeduct)}. New remaining advance: ${formatINR(res.newAdvanceRemaining || 0)}.`,
         });
 
         queryClient.invalidateQueries({ queryKey: ['workers', factoryId] });
         queryClient.invalidateQueries({ queryKey: ['supervisor-all-transactions'] });
 
-        setSalaryInputAmount('');
-        setSalaryDeductAmount('0');
-        setSalaryInputNote('');
+        setHisaabTotalWages('');
+        setHisaabAdvanceDeduct('0');
+        setHisaabNote('');
+        setHisaabPayCashNow(false);
       } else if (activeTab === 'transfer') {
         const toSupervisorId = formData.get('toSupervisorId') as string;
         const amount = parseFloat(formData.get('amount') as string);
@@ -1922,26 +1963,26 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         {/* Tabs */}
         <div className="grid grid-cols-4 border-b border-slate-200 bg-slate-50 text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-600">
           <button
-            onClick={() => { setActiveTab('disburse'); setActionMessage(null); setLastDisburseSms(null); }}
+            onClick={() => { setActiveTab('advance'); setActionMessage(null); setLastDisburseSms(null); }}
             className={`py-3 text-center border-b-2 min-h-[44px] flex items-center justify-center gap-1 sm:gap-1.5 ${
-              activeTab === 'disburse'
+              activeTab === 'advance'
                 ? 'border-slate-900 text-slate-900 bg-white font-black'
                 : 'border-transparent hover:bg-slate-100'
             }`}
           >
-            <Send className="h-3.5 w-3.5 shrink-0" />
-            <span className="truncate">Disburse</span>
+            <HandCoins className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">Add Advance</span>
           </button>
           <button
-            onClick={() => { setActiveTab('salary'); setActionMessage(null); }}
+            onClick={() => { setActiveTab('hisaab'); setActionMessage(null); }}
             className={`py-3 text-center border-b-2 min-h-[44px] flex items-center justify-center gap-1 sm:gap-1.5 ${
-              activeTab === 'salary'
+              activeTab === 'hisaab'
                 ? 'border-slate-900 text-slate-900 bg-white font-black'
                 : 'border-transparent hover:bg-slate-100'
             }`}
           >
-            <Coins className="h-3.5 w-3.5 shrink-0 text-slate-700" />
-            <span className="truncate">+ Salary</span>
+            <Calculator className="h-3.5 w-3.5 shrink-0 text-slate-700" />
+            <span className="truncate">Hisaab</span>
           </button>
           <button
             onClick={() => { setActiveTab('expense'); setActionMessage(null); }}
@@ -1971,8 +2012,8 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         <div className="p-4">
           <form onSubmit={handleActionSubmit} className="space-y-4">
             
-            {/* DISBURSE FORM */}
-            {activeTab === 'disburse' && (
+            {/* ADD ADVANCE FORM */}
+            {activeTab === 'advance' && (
               <>
                 {/* Worker Selector with Live Search & 1-Tap Quick Add */}
                 <div>
@@ -2000,7 +2041,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                           type="text"
                           value={workerSearchTerm}
                           onChange={(e) => setWorkerSearchTerm(e.target.value)}
-                          placeholder="Search worker name to pay..."
+                          placeholder="Search worker name to give advance..."
                           className="w-full pl-9 pr-3 py-2.5 rounded border border-slate-300 text-sm min-h-[44px] text-slate-950 bg-white focus:ring-2 focus:ring-slate-900 focus:border-slate-900 placeholder:text-slate-400"
                         />
                       </div>
@@ -2038,11 +2079,6 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                                 onClick={() => {
                                   setSelectedWorkerId(w.worker_id);
                                   setWorkerSearchTerm('');
-                                  if ((w.unpaid_salary || 0) > 0) {
-                                    setDisbursePaymentType('salary_payment');
-                                  } else {
-                                    setDisbursePaymentType('advance');
-                                  }
                                 }}
                                 className="w-full p-2.5 text-left flex items-center justify-between hover:bg-slate-50 active:bg-slate-100 transition-colors"
                               >
@@ -2057,10 +2093,11 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                                   <div>
                                     <p className="text-xs font-bold text-slate-900">{w.worker_name}</p>
                                     <div className="flex items-center gap-1.5 text-[10px]">
-                                      {(w.unpaid_salary || 0) > 0 && (
-                                        <span className="text-emerald-700 font-semibold">Sal: {formatINR(w.unpaid_salary || 0)}</span>
+                                      {(w.running_advance || 0) > 0 ? (
+                                        <span className="text-amber-800 font-bold">Advance Owed: {formatINR(w.running_advance)}</span>
+                                      ) : (
+                                        <span className="text-emerald-700 font-semibold">Advance: ₹0 (Clear)</span>
                                       )}
-                                      <span className="text-red-600 font-semibold">Adv: {formatINR(w.running_advance)}</span>
                                     </div>
                                   </div>
                                 </div>
@@ -2074,7 +2111,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                       )}
                     </div>
                   ) : (
-                    /* Selected Worker Card with Balances & Payment Type Selector */
+                    /* Selected Worker Card with Advance Existence Check */
                     <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-3">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2.5">
@@ -2087,22 +2124,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                           </div>
                           <div>
                             <p className="text-sm font-bold text-slate-900">{selectedWorker?.worker_name}</p>
-                            <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-                              <span className={`text-[11px] font-bold px-2 py-0.5 rounded border ${
-                                (selectedWorker?.unpaid_salary || 0) > 0
-                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                                  : 'bg-white text-slate-500 border-slate-200'
-                              }`}>
-                                Unpaid Salary: {formatINR(selectedWorker?.unpaid_salary || 0)}
-                              </span>
-                              <span className={`text-[11px] font-bold px-2 py-0.5 rounded border ${
-                                (selectedWorker?.running_advance || 0) > 0
-                                  ? 'bg-amber-50 text-amber-900 border-amber-200'
-                                  : 'bg-white text-slate-500 border-slate-200'
-                              }`}>
-                                Advance Owed: {formatINR(selectedWorker?.running_advance || 0)}
-                              </span>
-                            </div>
+                            <p className="text-[11px] text-slate-500">{selectedWorker?.worker_phone || 'No phone recorded'}</p>
                           </div>
                         </div>
                         <button
@@ -2114,88 +2136,46 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                         </button>
                       </div>
 
-                      {/* Payment Type 2-Button Toggle */}
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1">
-                          Payment Classification
-                        </label>
-                        <div className="grid grid-cols-2 gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setDisbursePaymentType('salary_payment')}
-                            className={`py-2 px-3 rounded-lg border text-xs font-bold transition-all text-left flex flex-col ${
-                              disbursePaymentType === 'salary_payment'
-                                ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
-                                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                            }`}
-                          >
-                            <span className="flex items-center gap-1.5">
-                              <Banknote className="h-4 w-4" />
-                              <span>Salary Payment</span>
+                      {/* Advance Existence Check Banner */}
+                      {(selectedWorker?.running_advance || 0) > 0 ? (
+                        <div className="rounded-lg p-3 bg-amber-50 border border-amber-300 space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-amber-950 uppercase tracking-wider flex items-center gap-1.5">
+                              <AlertCircle className="h-4 w-4 text-amber-700 shrink-0" />
+                              <span>Active Advance Found</span>
                             </span>
-                            <span className={`text-[10px] font-normal mt-0.5 ${disbursePaymentType === 'salary_payment' ? 'text-slate-300' : 'text-slate-400'}`}>
-                              Wages / Kharcha withdrawal
+                            <span className="text-xs font-black text-amber-950 bg-amber-200/90 px-2 py-0.5 rounded border border-amber-300">
+                              {formatINR(selectedWorker?.running_advance || 0)}
                             </span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => setDisbursePaymentType('advance')}
-                            className={`py-2 px-3 rounded-lg border text-xs font-bold transition-all text-left flex flex-col ${
-                              disbursePaymentType === 'advance'
-                                ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
-                                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                            }`}
-                          >
-                            <span className="flex items-center gap-1.5">
-                              <HandCoins className="h-4 w-4" />
-                              <span>Cash Advance</span>
-                            </span>
-                            <span className={`text-[10px] font-normal mt-0.5 ${disbursePaymentType === 'advance' ? 'text-slate-300' : 'text-slate-400'}`}>
-                              Advance on future salary
-                            </span>
-                          </button>
+                          </div>
+                          <p className="text-[11px] text-amber-900">
+                            {selectedWorker?.worker_name} already owes an outstanding advance of {formatINR(selectedWorker?.running_advance || 0)}. Any advance given below will be added to this balance.
+                          </p>
+                          <div className="pt-1 flex items-center justify-between border-t border-amber-200/70">
+                            <span className="text-[10px] text-amber-800">Incorrect advance showing?</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (selectedWorker) {
+                                  setCorrectionWorker(selectedWorker);
+                                  setCorrectionRequestedAmount(String(selectedWorker.running_advance || 0));
+                                  setCorrectionReason('');
+                                  setCorrectionError('');
+                                  setShowCorrectionModal(true);
+                                }
+                              }}
+                              className="text-[11px] font-bold text-amber-950 underline hover:text-black"
+                            >
+                              Request Correction from Admin
+                            </button>
+                          </div>
                         </div>
-                      </div>
-
-                      {/* 1-Tap Advance Settle Shortcut (if worker has both unpaid salary and advance) */}
-                      {Boolean(selectedWorker && (selectedWorker.unpaid_salary || 0) > 0 && (selectedWorker.running_advance || 0) > 0) && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (!selectedWorker) return;
-                            setSettleWorker(selectedWorker);
-                            const maxSettle = Math.min(selectedWorker.unpaid_salary || 0, selectedWorker.running_advance || 0);
-                            setSettleAmount(String(maxSettle));
-                            setShowSettleModal(true);
-                          }}
-                          className="w-full py-1.5 px-2.5 rounded bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-800 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
-                        >
-                          <ArrowRightLeft className="h-3.5 w-3.5 text-slate-600" />
-                          <span>Settle Advance from Salary (No Cash Outflow)</span>
-                        </button>
+                      ) : (
+                        <div className="rounded-lg p-2.5 bg-slate-100/70 border border-slate-200 text-xs text-slate-700 flex items-center justify-between">
+                          <span>No previous advance on record ({formatINR(0)}). Worker is currently clear.</span>
+                          <span className="font-semibold text-emerald-700">Clear</span>
+                        </div>
                       )}
-
-                      {/* Action to switch directly to Add Salary for this worker */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!selectedWorker) return;
-                          setSalarySelectedWorkerId(selectedWorker.worker_id);
-                          if (selectedWorker.monthly_salary && selectedWorker.monthly_salary > 0) {
-                            setSalaryInputAmount(String(selectedWorker.monthly_salary));
-                            setSalaryDeductAmount(String(Math.min(selectedWorker.monthly_salary, selectedWorker.running_advance || 0)));
-                          } else if (selectedWorker.running_advance > 0) {
-                            setSalaryDeductAmount(String(selectedWorker.running_advance));
-                          }
-                          setActiveTab('salary');
-                          setActionMessage(null);
-                        }}
-                        className="w-full py-2 px-3 rounded bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-xs"
-                      >
-                        <Coins className="h-4 w-4" />
-                        <span>Add Salary for {selectedWorker?.worker_name}</span>
-                      </button>
                     </div>
                   )}
                 </div>
@@ -2293,22 +2273,21 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
               </>
             )}
 
-            {/* SALARY ACCRUAL & ADVANCE DEDUCTION FORM */}
-            {activeTab === 'salary' && (
+            {/* HISAAB SETTLEMENT FORM */}
+            {activeTab === 'hisaab' && (
               <>
                 {/* Worker Selector */}
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
                     <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                      Select Worker
+                      Select Worker for Hisaab
                     </label>
-                    {(salarySelectedWorkerId || selectedWorkerId) && (
+                    {hisaabWorkerId && (
                       <button
                         type="button"
-                        onClick={() => { 
-                          setSalarySelectedWorkerId(''); 
-                          setSelectedWorkerId(''); 
-                          setSalaryWorkerSearchTerm(''); 
+                        onClick={() => {
+                          setHisaabWorkerId('');
+                          setHisaabWorkerSearch('');
                         }}
                         className="text-[11px] text-indigo-600 hover:text-indigo-800 font-bold"
                       >
@@ -2317,24 +2296,24 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                     )}
                   </div>
 
-                  {!(salarySelectedWorkerId || selectedWorkerId) ? (
+                  {!hisaabWorkerId ? (
                     <div className="space-y-2">
                       <div className="relative">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
                         <input
                           type="text"
-                          value={salaryWorkerSearchTerm}
-                          onChange={(e) => setSalaryWorkerSearchTerm(e.target.value)}
-                          placeholder="Search worker name to add salary..."
+                          value={hisaabWorkerSearch}
+                          onChange={(e) => setHisaabWorkerSearch(e.target.value)}
+                          placeholder="Search worker name for Hisaab..."
                           className="w-full pl-9 pr-3 py-2.5 rounded border border-slate-300 text-sm min-h-[44px] text-slate-950 bg-white focus:ring-2 focus:ring-slate-900 focus:border-slate-900 placeholder:text-slate-400"
                         />
                       </div>
 
-                      {salaryWorkerSearchTerm.trim().length > 0 && (
+                      {hisaabWorkerSearch.trim().length > 0 && (
                         <div className="border border-slate-200 rounded-lg max-h-56 overflow-y-auto divide-y divide-slate-100 bg-white shadow-lg">
                           {activeWorkers
                             .filter(w => {
-                              const q = salaryWorkerSearchTerm.toLowerCase();
+                              const q = hisaabWorkerSearch.toLowerCase();
                               return w.worker_name.toLowerCase().includes(q) || (w.worker_phone && w.worker_phone.includes(q));
                             })
                             .map((w) => (
@@ -2342,13 +2321,9 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                                 key={w.worker_id}
                                 type="button"
                                 onClick={() => {
-                                  setSalarySelectedWorkerId(w.worker_id);
-                                  setSelectedWorkerId(w.worker_id);
-                                  setSalaryWorkerSearchTerm('');
-                                  if (w.monthly_salary && w.monthly_salary > 0 && !salaryInputAmount) {
-                                    setSalaryInputAmount(String(w.monthly_salary));
-                                  }
-                                  setSalaryDeductAmount(w.running_advance > 0 ? String(Math.min(w.monthly_salary || 0, w.running_advance)) : '0');
+                                  setHisaabWorkerId(w.worker_id);
+                                  setHisaabWorkerSearch('');
+                                  setHisaabAdvanceDeduct(w.running_advance > 0 ? String(w.running_advance) : '0');
                                 }}
                                 className="w-full p-2.5 text-left flex items-center justify-between hover:bg-slate-50 active:bg-slate-100 transition-colors"
                               >
@@ -2363,12 +2338,10 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                                   <div>
                                     <p className="text-xs font-bold text-slate-900">{w.worker_name}</p>
                                     <div className="flex items-center gap-1.5 text-[10px]">
-                                      {(w.unpaid_salary || 0) > 0 && (
-                                        <span className="text-emerald-700 font-semibold">Sal: {formatINR(w.unpaid_salary || 0)}</span>
-                                      )}
-                                      <span className="text-amber-700 font-semibold">Adv: {formatINR(w.running_advance)}</span>
-                                      {(w.monthly_salary || 0) > 0 && (
-                                        <span className="text-slate-500 font-medium">Rate: {formatINR(w.monthly_salary || 0)}/mo</span>
+                                      {w.running_advance > 0 ? (
+                                        <span className="text-amber-800 font-bold">Advance Owed: {formatINR(w.running_advance)}</span>
+                                      ) : (
+                                        <span className="text-emerald-700 font-semibold">Advance: ₹0 (Clear)</span>
                                       )}
                                     </div>
                                   </div>
@@ -2384,7 +2357,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                   ) : (
                     /* Selected Worker Details */
                     (() => {
-                      const curWorker = activeWorkers.find(w => w.worker_id === (salarySelectedWorkerId || selectedWorkerId));
+                      const curWorker = activeWorkers.find(w => w.worker_id === hisaabWorkerId);
                       if (!curWorker) return null;
                       return (
                         <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-3">
@@ -2399,35 +2372,49 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                               </div>
                               <div>
                                 <p className="text-sm font-bold text-slate-900">{curWorker.worker_name}</p>
-                                <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-                                  <span className={`text-[11px] font-bold px-2 py-0.5 rounded border ${
-                                    (curWorker.unpaid_salary || 0) > 0
-                                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                                      : 'bg-white text-slate-500 border-slate-200'
-                                  }`}>
-                                    Unpaid Salary: {formatINR(curWorker.unpaid_salary || 0)}
-                                  </span>
-                                  <span className={`text-[11px] font-bold px-2 py-0.5 rounded border ${
-                                    (curWorker.running_advance || 0) > 0
-                                      ? 'bg-amber-50 text-amber-900 border-amber-200'
-                                      : 'bg-white text-slate-500 border-slate-200'
-                                  }`}>
-                                    Advance Owed: {formatINR(curWorker.running_advance || 0)}
-                                  </span>
-                                </div>
+                                <p className="text-[11px] text-slate-500">{curWorker.worker_phone || 'No phone recorded'}</p>
                               </div>
                             </div>
                             <button
                               type="button"
                               onClick={() => { 
-                                setSalarySelectedWorkerId(''); 
-                                setSelectedWorkerId(''); 
-                                setSalaryWorkerSearchTerm(''); 
+                                setHisaabWorkerId(''); 
+                                setHisaabWorkerSearch(''); 
                               }}
                               className="px-2.5 py-1 text-xs font-bold text-slate-600 bg-white border border-slate-200 rounded hover:bg-slate-100 transition-colors"
                             >
                               Change
                             </button>
+                          </div>
+
+                          {/* Advance Status & Correction Trigger */}
+                          <div className="rounded-lg p-2.5 bg-amber-50 border border-amber-200 space-y-1.5">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-bold text-amber-950 uppercase tracking-wider">
+                                Current Outstanding Advance
+                              </span>
+                              <span className="text-xs font-black text-amber-950 bg-amber-200/90 px-2 py-0.5 rounded border border-amber-300">
+                                {formatINR(curWorker.running_advance || 0)}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between pt-0.5">
+                              <span className="text-[11px] text-amber-900">
+                                Calculated after all past disbursements & salary deductions.
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setCorrectionWorker(curWorker);
+                                  setCorrectionRequestedAmount(String(curWorker.running_advance || 0));
+                                  setCorrectionReason('');
+                                  setCorrectionError('');
+                                  setShowCorrectionModal(true);
+                                }}
+                                className="text-[11px] font-bold text-indigo-700 hover:text-indigo-900 underline shrink-0 ml-2"
+                              >
+                                Request Correction
+                              </button>
+                            </div>
                           </div>
                         </div>
                       );
@@ -2435,107 +2422,111 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                   )}
                 </div>
 
-                {/* Salary Amount Input */}
+                <input type="hidden" name="hisaabWorkerId" value={hisaabWorkerId} />
+
+                {/* Date Range: From Date & To Date */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label htmlFor="hisaabFromDate" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                      From Date
+                    </label>
+                    <div className="relative">
+                      <CalendarDays className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400 pointer-events-none" />
+                      <input
+                        id="hisaabFromDate"
+                        name="hisaabFromDate"
+                        type="date"
+                        required
+                        disabled={actionLoading}
+                        value={hisaabFromDate}
+                        onChange={(e) => setHisaabFromDate(e.target.value)}
+                        className="block w-full rounded border border-slate-300 pl-8 pr-2 py-2 text-slate-950 text-xs min-h-[40px] bg-white font-medium"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label htmlFor="hisaabToDate" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                      To Date
+                    </label>
+                    <div className="relative">
+                      <CalendarDays className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400 pointer-events-none" />
+                      <input
+                        id="hisaabToDate"
+                        name="hisaabToDate"
+                        type="date"
+                        required
+                        disabled={actionLoading}
+                        value={hisaabToDate}
+                        onChange={(e) => setHisaabToDate(e.target.value)}
+                        className="block w-full rounded border border-slate-300 pl-8 pr-2 py-2 text-slate-950 text-xs min-h-[40px] bg-white font-medium"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Total Wages Earned Input */}
                 <div>
-                  <label htmlFor="salaryAmount" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                    Salary Amount to Add (INR)
+                  <label htmlFor="hisaabTotalWages" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                    Total Wages Made During Period (INR)
                   </label>
                   <div className="relative mt-1 rounded shadow-sm">
                     <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-                      <span className="text-slate-500 text-sm">₹</span>
+                      <span className="text-slate-500 text-sm font-bold">₹</span>
                     </div>
                     <input
-                      id="salaryAmount"
-                      name="salaryAmount"
+                      id="hisaabTotalWages"
+                      name="hisaabTotalWages"
                       type="number"
                       required
                       min="1"
-                      value={salaryInputAmount}
+                      value={hisaabTotalWages}
                       onChange={(e) => {
                         const val = e.target.value;
-                        setSalaryInputAmount(val);
-                        const curWorker = activeWorkers.find(w => w.worker_id === (salarySelectedWorkerId || selectedWorkerId));
+                        setHisaabTotalWages(val);
+                        const curWorker = activeWorkers.find(w => w.worker_id === hisaabWorkerId);
                         if (curWorker && curWorker.running_advance > 0) {
-                          const salNum = parseFloat(val) || 0;
-                          const currentDeduct = parseFloat(salaryDeductAmount) || 0;
-                          if (currentDeduct > salNum) {
-                            setSalaryDeductAmount(String(Math.min(salNum, curWorker.running_advance)));
+                          const wagesNum = parseFloat(val) || 0;
+                          const currentDeduct = parseFloat(hisaabAdvanceDeduct) || 0;
+                          if (currentDeduct > wagesNum) {
+                            setHisaabAdvanceDeduct(String(Math.min(wagesNum, curWorker.running_advance)));
                           }
                         }
                       }}
                       disabled={actionLoading}
-                      placeholder="e.g. 15000"
+                      placeholder="e.g. 12000"
                       className="block w-full rounded border border-slate-300 pl-7 pr-3 py-2 text-slate-950 text-sm min-h-[44px] font-bold"
                     />
                   </div>
-
-                  {/* Preset chips */}
-                  {(() => {
-                    const curWorker = activeWorkers.find(w => w.worker_id === (salarySelectedWorkerId || selectedWorkerId));
-                    return (
-                      <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                        {curWorker && (curWorker.monthly_salary || 0) > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSalaryInputAmount(String(curWorker.monthly_salary));
-                              if (curWorker.running_advance > 0) {
-                                setSalaryDeductAmount(String(Math.min(curWorker.monthly_salary || 0, curWorker.running_advance)));
-                              }
-                            }}
-                            className="text-xs px-2.5 py-1 rounded bg-slate-900 text-white font-bold hover:bg-slate-800 transition-colors"
-                          >
-                            Wage: {formatINR(curWorker.monthly_salary || 0)}
-                          </button>
-                        )}
-                        {[5000, 10000, 15000, 20000].map(amt => (
-                          <button
-                            key={amt}
-                            type="button"
-                            onClick={() => {
-                              setSalaryInputAmount(String(amt));
-                              if (curWorker && curWorker.running_advance > 0) {
-                                setSalaryDeductAmount(String(Math.min(amt, curWorker.running_advance)));
-                              }
-                            }}
-                            className="text-xs px-2.5 py-1 rounded border border-slate-300 bg-white text-slate-700 font-medium hover:bg-slate-50 transition-colors"
-                          >
-                            +{formatINR(amt)}
-                          </button>
-                        ))}
-                      </div>
-                    );
-                  })()}
                 </div>
 
-                {/* ADVANCE DEDUCTION SECTION */}
+                {/* Advance Deduction Section */}
                 {(() => {
-                  const curWorker = activeWorkers.find(w => w.worker_id === (salarySelectedWorkerId || selectedWorkerId));
+                  const curWorker = activeWorkers.find(w => w.worker_id === hisaabWorkerId);
                   if (!curWorker) return null;
 
                   const workerAdv = curWorker.running_advance || 0;
-                  const salNum = parseFloat(salaryInputAmount) || 0;
+                  const wagesNum = parseFloat(hisaabTotalWages) || 0;
 
                   if (workerAdv === 0) {
                     return (
                       <div className="rounded-lg p-3 bg-slate-50 border border-slate-200 text-xs text-slate-600 flex items-center justify-between">
-                        <span>Worker has ₹0 advance owed. No deduction needed.</span>
+                        <span>Worker has ₹0 advance owed. No advance deduction needed.</span>
                         <span className="font-semibold text-emerald-700">Advance Settled</span>
                       </div>
                     );
                   }
 
-                  const maxPossibleDeduct = Math.min(workerAdv, salNum > 0 ? salNum : workerAdv);
+                  const maxPossibleDeduct = Math.min(workerAdv, wagesNum > 0 ? wagesNum : workerAdv);
 
                   return (
-                    <div className="rounded-lg p-3 bg-amber-50/60 border border-amber-200 space-y-2">
+                    <div className="rounded-lg p-3 bg-amber-50/70 border border-amber-200 space-y-2">
                       <div className="flex items-center justify-between">
                         <div>
-                          <label htmlFor="salaryDeductAmount" className="block text-xs font-bold text-amber-950 uppercase tracking-wider">
+                          <label htmlFor="hisaabAdvanceDeduct" className="block text-xs font-bold text-amber-950 uppercase tracking-wider">
                             Deduct from Advance
                           </label>
                           <span className="text-[11px] text-amber-800">
-                            Outstanding advance: <strong className="font-bold">{formatINR(workerAdv)}</strong>
+                            Current advance: <strong className="font-bold">{formatINR(workerAdv)}</strong>
                           </span>
                         </div>
                         <span className="text-[10px] bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded border border-amber-300">
@@ -2545,16 +2536,16 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
                       <div className="relative mt-1 rounded shadow-sm">
                         <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-                          <span className="text-slate-500 text-sm">₹</span>
+                          <span className="text-slate-500 text-sm font-bold">₹</span>
                         </div>
                         <input
-                          id="salaryDeductAmount"
-                          name="deductAmount"
+                          id="hisaabAdvanceDeduct"
+                          name="hisaabAdvanceDeduct"
                           type="number"
                           min="0"
                           max={maxPossibleDeduct}
-                          value={salaryDeductAmount}
-                          onChange={(e) => setSalaryDeductAmount(e.target.value)}
+                          value={hisaabAdvanceDeduct}
+                          onChange={(e) => setHisaabAdvanceDeduct(e.target.value)}
                           disabled={actionLoading}
                           placeholder="0"
                           className="block w-full rounded border border-amber-300 pl-7 pr-3 py-2 text-slate-950 text-sm font-bold bg-white focus:ring-2 focus:ring-amber-500 min-h-[44px]"
@@ -2565,25 +2556,25 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                       <div className="flex flex-wrap items-center gap-1.5 pt-1">
                         <button
                           type="button"
-                          onClick={() => setSalaryDeductAmount('0')}
-                          className="text-xs px-2 py-1 rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition-colors"
+                          onClick={() => setHisaabAdvanceDeduct('0')}
+                          className="text-xs px-2.5 py-1 rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition-colors font-medium"
                         >
                           Deduct ₹0
                         </button>
-                        {workerAdv > 0 && salNum > 0 && (
+                        {workerAdv > 0 && wagesNum > 0 && (
                           <>
                             <button
                               type="button"
-                              onClick={() => setSalaryDeductAmount(String(maxPossibleDeduct))}
-                              className="text-xs px-2 py-1 rounded border border-amber-300 bg-amber-100 text-amber-900 font-bold hover:bg-amber-200 transition-colors"
+                              onClick={() => setHisaabAdvanceDeduct(String(maxPossibleDeduct))}
+                              className="text-xs px-2.5 py-1 rounded border border-amber-300 bg-amber-100 text-amber-900 font-bold hover:bg-amber-200 transition-colors"
                             >
-                              Deduct Max ({formatINR(maxPossibleDeduct)})
+                              Deduct Full ({formatINR(maxPossibleDeduct)})
                             </button>
                             {maxPossibleDeduct > 1000 && (
                               <button
                                 type="button"
-                                onClick={() => setSalaryDeductAmount(String(Math.round(maxPossibleDeduct / 2)))}
-                                className="text-xs px-2 py-1 rounded border border-amber-200 bg-white text-amber-900 font-medium hover:bg-amber-50 transition-colors"
+                                onClick={() => setHisaabAdvanceDeduct(String(Math.round(maxPossibleDeduct / 2)))}
+                                className="text-xs px-2.5 py-1 rounded border border-amber-200 bg-white text-amber-900 font-medium hover:bg-amber-50 transition-colors"
                               >
                                 Deduct Half ({formatINR(Math.round(maxPossibleDeduct / 2))})
                               </button>
@@ -2595,79 +2586,57 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                   );
                 })()}
 
-                {/* LIVE CALCULATION SUMMARY */}
+                {/* LIVE HISAAB BREAKDOWN */}
                 {(() => {
-                  const curWorker = activeWorkers.find(w => w.worker_id === (salarySelectedWorkerId || selectedWorkerId));
-                  const salNum = parseFloat(salaryInputAmount) || 0;
-                  const deductNum = Math.max(0, parseFloat(salaryDeductAmount) || 0);
+                  const curWorker = activeWorkers.find(w => w.worker_id === hisaabWorkerId);
+                  const wagesNum = parseFloat(hisaabTotalWages) || 0;
+                  const deductNum = Math.max(0, parseFloat(hisaabAdvanceDeduct) || 0);
                   const curAdv = curWorker?.running_advance || 0;
 
-                  if (salNum <= 0) return null;
+                  if (wagesNum <= 0) return null;
 
-                  const netAdded = Math.max(0, salNum - deductNum);
+                  const netPayable = Math.max(0, wagesNum - deductNum);
                   const remainingAdv = Math.max(0, curAdv - deductNum);
 
                   return (
                     <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-1.5 text-xs">
                       <div className="flex justify-between items-center text-slate-700">
-                        <span>Gross Salary Added:</span>
-                        <span className="font-bold text-slate-900">+{formatINR(salNum)}</span>
+                        <span>Total Wages Made:</span>
+                        <span className="font-bold text-slate-900">{formatINR(wagesNum)}</span>
                       </div>
                       {curAdv > 0 && (
                         <div className="flex justify-between items-center text-amber-800">
-                          <span>Advance Deducted (Subtracted from Advance):</span>
+                          <span>Advance Deducted:</span>
                           <span className="font-bold">-{formatINR(deductNum)}</span>
                         </div>
                       )}
                       <div className="border-t border-slate-200 pt-1.5 flex justify-between items-center">
-                        <span className="font-semibold text-slate-800">Net Added to Unpaid Salary:</span>
-                        <span className="font-bold text-emerald-700">+{formatINR(netAdded)}</span>
+                        <span className="font-semibold text-slate-800">Net Wages Remaining for Worker:</span>
+                        <span className="font-bold text-emerald-700">{formatINR(netPayable)}</span>
                       </div>
-                      {curAdv > 0 && (
-                        <div className="flex justify-between items-center text-[11px] text-slate-600">
-                          <span>Remaining Worker Advance Owed:</span>
-                          <span className="font-bold text-slate-900">{formatINR(remainingAdv)}</span>
-                        </div>
-                      )}
-                      <p className="text-[10px] text-slate-400 pt-0.5">
-                        Physical Cash: ₹0 • Ledger balance adjustment only
-                      </p>
+                      <div className="flex justify-between items-center text-[11px] text-slate-600">
+                        <span>Total Outstanding Advance After Hisaab:</span>
+                        <span className="font-bold text-slate-900">{formatINR(remainingAdv)}</span>
+                      </div>
                     </div>
                   );
                 })()}
 
-                {/* Month / Period & Note */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label htmlFor="salaryMonth" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                      Period / Month
-                    </label>
-                    <input
-                      id="salaryMonth"
-                      name="salaryMonth"
-                      type="text"
-                      disabled={actionLoading}
-                      value={salaryInputMonth}
-                      onChange={(e) => setSalaryInputMonth(e.target.value)}
-                      placeholder="e.g. November 2026"
-                      className="block w-full rounded border border-slate-300 px-3 py-2 text-slate-950 text-xs min-h-[40px]"
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="salaryNote" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                      Notes (Optional)
-                    </label>
-                    <input
-                      id="salaryNote"
-                      name="salaryNote"
-                      type="text"
-                      disabled={actionLoading}
-                      value={salaryInputNote}
-                      onChange={(e) => setSalaryInputNote(e.target.value)}
-                      placeholder="e.g. Monthly wages"
-                      className="block w-full rounded border border-slate-300 px-3 py-2 text-slate-950 text-xs min-h-[40px]"
-                    />
-                  </div>
+                {/* Notes Input */}
+                <div>
+                  <label htmlFor="hisaabNote" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                    Notes / Remarks <span className="text-slate-400 font-normal">(Optional)</span>
+                  </label>
+                  <input
+                    id="hisaabNote"
+                    name="hisaabNote"
+                    type="text"
+                    disabled={actionLoading}
+                    value={hisaabNote}
+                    onChange={(e) => setHisaabNote(e.target.value)}
+                    placeholder="e.g. Weekly settlement, machine work, etc."
+                    className="block w-full rounded border border-slate-300 px-3 py-2 text-slate-950 text-xs min-h-[40px]"
+                  />
                 </div>
               </>
             )}
@@ -2822,7 +2791,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
             )}
 
             {/* Free SMS 1-Tap Mobile Dispatch Pill */}
-            {lastDisburseSms && activeTab === 'disburse' && (
+            {lastDisburseSms && activeTab === 'advance' && (
               <div className="rounded-lg p-3 bg-emerald-50 border border-emerald-300 flex items-center justify-between gap-2 shadow-xs animate-fadeIn">
                 <div className="flex items-center gap-2">
                   <MessageSquare className="h-4 w-4 text-emerald-600 shrink-0" />
@@ -2844,22 +2813,20 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
               type="submit"
               disabled={
                 actionLoading || 
-                (activeTab === 'disburse' && (!selectedWorkerId || !disburseAmount)) ||
-                (activeTab === 'salary' && (!(salarySelectedWorkerId || selectedWorkerId) || !salaryInputAmount || parseFloat(salaryInputAmount) <= 0))
+                (activeTab === 'advance' && (!selectedWorkerId || !disburseAmount)) ||
+                (activeTab === 'hisaab' && (!hisaabWorkerId || !hisaabTotalWages || parseFloat(hisaabTotalWages) <= 0))
               }
               className="w-full flex justify-center items-center rounded-md bg-slate-900 py-3 text-sm font-semibold text-white shadow hover:bg-slate-800 disabled:opacity-50 min-h-[46px] gap-2 transition-all"
             >
               {actionLoading ? (
                 <RefreshCw className="h-4 w-4 animate-spin" />
-              ) : activeTab === 'disburse' ? (
+              ) : activeTab === 'advance' ? (
                 <span>
-                  {disbursePaymentType === 'salary_payment' ? 'Pay Salary ' : 'Disburse Advance '}
-                  {disburseAmount ? formatINR(Number(disburseAmount)) : ''}
+                  Disburse Advance {disburseAmount ? formatINR(Number(disburseAmount)) : ''}
                 </span>
-              ) : activeTab === 'salary' ? (
+              ) : activeTab === 'hisaab' ? (
                 <span>
-                  Add {salaryInputAmount ? formatINR(Number(salaryInputAmount)) : ''} Salary
-                  {Number(salaryDeductAmount) > 0 ? ` & Deduct ${formatINR(Number(salaryDeductAmount))} Advance` : ''}
+                  Save Hisaab (Wages {hisaabTotalWages ? formatINR(Number(hisaabTotalWages)) : ''})
                 </span>
               ) : (
                 <span>Submit Entry</span>
@@ -3444,6 +3411,115 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                 )}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Advance Correction Request Modal (Supervisor -> Admin) */}
+      {showCorrectionModal && correctionWorker && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-sm w-full p-5 space-y-4 relative">
+            <button
+              type="button"
+              onClick={() => {
+                if (!correctionLoading) {
+                  setShowCorrectionModal(false);
+                  setCorrectionWorker(null);
+                  setCorrectionError('');
+                }
+              }}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <div className="flex items-start gap-3">
+              <div className="h-10 w-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0 text-amber-700">
+                <AlertCircle className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Request Advance Correction</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Submit a correction request to Admin for <strong>{correctionWorker.worker_name}</strong>.
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleExecuteAdvanceCorrection} className="space-y-3">
+              <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs space-y-1">
+                <div className="flex justify-between text-slate-600">
+                  <span>Current Recorded Advance:</span>
+                  <span className="font-bold text-slate-900">{formatINR(correctionWorker.running_advance || 0)}</span>
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="correctionRequestedAmount" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                  Correct Advance Amount (INR) <span className="text-red-500">*</span>
+                </label>
+                <div className="relative mt-1">
+                  <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 text-sm font-bold pointer-events-none">₹</span>
+                  <input
+                    id="correctionRequestedAmount"
+                    type="number"
+                    min="0"
+                    required
+                    disabled={correctionLoading}
+                    value={correctionRequestedAmount}
+                    onChange={(e) => setCorrectionRequestedAmount(e.target.value)}
+                    placeholder="0"
+                    className="block w-full rounded border border-slate-300 pl-8 pr-3 py-2 text-slate-950 text-sm font-bold focus:ring-2 focus:ring-slate-900 min-h-[44px]"
+                  />
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Enter what the advance balance should be (e.g. 0 if fully clear).
+                </p>
+              </div>
+
+              <div>
+                <label htmlFor="correctionReason" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                  Reason for Correction <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  id="correctionReason"
+                  required
+                  rows={2}
+                  disabled={correctionLoading}
+                  value={correctionReason}
+                  onChange={(e) => setCorrectionReason(e.target.value)}
+                  placeholder="e.g. Worker returned cash in person, or prior duplicate entry"
+                  className="mt-1 block w-full rounded border border-slate-300 px-3 py-2 text-slate-950 text-xs min-h-[60px]"
+                />
+              </div>
+
+              {correctionError && (
+                <div className="p-2.5 bg-red-50 border border-red-200 rounded text-xs text-red-700 font-medium">
+                  {correctionError}
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  disabled={correctionLoading}
+                  onClick={() => {
+                    setShowCorrectionModal(false);
+                    setCorrectionWorker(null);
+                    setCorrectionError('');
+                  }}
+                  className="flex-1 rounded border border-slate-300 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 min-h-[42px]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={correctionLoading || !correctionRequestedAmount || !correctionReason.trim()}
+                  className="flex-1 rounded bg-slate-900 py-2.5 text-xs font-bold text-white hover:bg-slate-800 disabled:opacity-50 min-h-[42px] flex items-center justify-center gap-1"
+                >
+                  {correctionLoading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <span>Send to Admin</span>}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

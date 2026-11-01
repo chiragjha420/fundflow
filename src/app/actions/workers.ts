@@ -420,6 +420,419 @@ export async function addWorkerSalaryWithDeductionAction(params: {
   }
 }
 
+export interface HisaabResult {
+  success: boolean;
+  hisaabId?: string;
+  previousAdvance?: number;
+  advanceDeducted?: number;
+  newAdvanceRemaining?: number;
+  netWages?: number;
+  error?: string;
+}
+
+/**
+ * Record a worker Hisaab (settlement).
+ * - Takes From & To date and Total Wages earned by the worker during that period.
+ * - Deducts a chosen amount from the worker's outstanding advance.
+ * - The advance balance is decreased by whatever deduction is made.
+ * - Zero physical cash movement unless payNetCashNow is selected.
+ */
+export async function recordWorkerHisaabAction(params: {
+  workerId: string;
+  factoryId?: string;
+  supervisorId?: string;
+  fromDate: string;
+  toDate: string;
+  totalWages: number;
+  advanceDeducted: number;
+  payNetCashNow?: boolean;
+  note?: string;
+}): Promise<HisaabResult> {
+  try {
+    const { workerId } = params;
+    let factoryId = params.factoryId || '';
+    const cleanWages = Math.max(0, Math.round(Number(params.totalWages) || 0));
+    const cleanDeduct = Math.max(0, Math.round(Number(params.advanceDeducted) || 0));
+
+    if (!workerId) {
+      return { success: false, error: 'Please select a worker for Hisaab.' };
+    }
+    if (!params.fromDate || !params.toDate) {
+      return { success: false, error: 'Please specify both From and To dates.' };
+    }
+    if (cleanWages <= 0) {
+      return { success: false, error: 'Please enter a valid total wage amount earned by the worker.' };
+    }
+
+    const admin = createAdminClient();
+    if (!factoryId) {
+      const { data: w } = await admin.from('workers').select('factory_id').eq('id', workerId).single();
+      factoryId = w?.factory_id || '';
+    }
+
+    const workers = await getAllWorkersWithSalaryBalancesAction(factoryId || undefined);
+    const currentWorker = workers.find(w => w.worker_id === workerId);
+    if (!currentWorker) {
+      return { success: false, error: 'Worker not found.' };
+    }
+
+    const currentAdv = currentWorker.running_advance || 0;
+    if (cleanDeduct > currentAdv) {
+      return {
+        success: false,
+        error: `Cannot deduct ₹${cleanDeduct.toLocaleString('en-IN')}. Outstanding advance is only ₹${currentAdv.toLocaleString('en-IN')}.`,
+      };
+    }
+    if (cleanDeduct > cleanWages) {
+      return {
+        success: false,
+        error: `Cannot deduct ₹${cleanDeduct.toLocaleString('en-IN')}. Total wages made is ₹${cleanWages.toLocaleString('en-IN')}.`,
+      };
+    }
+
+    const hisaabId = crypto.randomUUID();
+    const periodStr = `${params.fromDate} to ${params.toDate}`;
+    const hisaabNote = params.note?.trim() || `Hisaab settlement for ${periodStr}`;
+
+    // 1. Record Hisaab master entry in audit_log
+    const hisaabPayload = {
+      id: hisaabId,
+      worker_id: workerId,
+      factory_id: factoryId,
+      supervisor_id: params.supervisorId || null,
+      from_date: params.fromDate,
+      to_date: params.toDate,
+      total_wages: cleanWages,
+      advance_deducted: cleanDeduct,
+      net_wages: cleanWages - cleanDeduct,
+      previous_advance: currentAdv,
+      new_advance: Math.max(0, currentAdv - cleanDeduct),
+      note: hisaabNote,
+      created_at: new Date().toISOString(),
+    };
+
+    await admin.from('audit_log').insert({
+      table_name: 'worker_hisaab',
+      action: 'HISAAB',
+      row_id: hisaabId,
+      new_data: hisaabPayload,
+      changed_by: params.supervisorId || null,
+      changed_at: new Date().toISOString(),
+    });
+
+    // 2. If advance deduction > 0, record advance_recovery to reduce running_advance
+    if (cleanDeduct > 0) {
+      await insertSalaryLedgerEntry({
+        worker_id: workerId,
+        factory_id: factoryId,
+        type: 'advance_recovery',
+        amount: cleanDeduct,
+        period_month: periodStr,
+        note: `Advance deducted during Hisaab (${periodStr})`,
+        created_by: params.supervisorId || null,
+      });
+    }
+
+    // 3. If supervisor paid net wages in cash right now
+    const netWages = cleanWages - cleanDeduct;
+    if (params.payNetCashNow && netWages > 0 && params.supervisorId) {
+      await admin.from('cash_transactions').insert({
+        id: crypto.randomUUID(),
+        type: 'supervisor_to_worker',
+        from_supervisor_id: params.supervisorId,
+        to_worker_id: workerId,
+        amount: netWages,
+        status: 'confirmed',
+        confirmed_at: new Date().toISOString(),
+        note: `[HISAAB_CASH_PAID] Net Wages Handed Over (Hisaab: ${periodStr})`,
+        created_at: new Date().toISOString(),
+      });
+    }
+
+    revalidatePath('/admin');
+    revalidatePath('/supervisor');
+    revalidatePath('/supervisor/workers');
+
+    return {
+      success: true,
+      hisaabId,
+      previousAdvance: currentAdv,
+      advanceDeducted: cleanDeduct,
+      newAdvanceRemaining: Math.max(0, currentAdv - cleanDeduct),
+      netWages,
+    };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Failed to record Hisaab.' };
+  }
+}
+
+export async function getWorkerHisaabRecordsAction(factoryId?: string, workerId?: string) {
+  try {
+    const admin = createAdminClient();
+    const { data: rows } = await admin
+      .from('audit_log')
+      .select('*')
+      .eq('table_name', 'worker_hisaab')
+      .order('changed_at', { ascending: false });
+
+    return (rows || [])
+      .map(r => r.new_data as any)
+      .filter(item => {
+        if (!item) return false;
+        if (workerId && item.worker_id !== workerId) return false;
+        if (factoryId && factoryId !== 'all' && item.factory_id !== factoryId) return false;
+        return true;
+      });
+  } catch {
+    return [];
+  }
+}
+
+export interface AdvanceCorrectionRequest {
+  id: string;
+  worker_id: string;
+  worker_name?: string;
+  worker_phone?: string | null;
+  factory_id: string;
+  factory_name?: string;
+  supervisor_id: string;
+  supervisor_name?: string;
+  current_advance: number;
+  requested_advance: number;
+  difference: number;
+  reason: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  created_at: string;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  admin_note?: string | null;
+}
+
+/**
+ * Supervisor requests an advance correction from admin.
+ */
+export async function createAdvanceCorrectionRequestAction(params: {
+  workerId: string;
+  supervisorId: string;
+  currentAdvance: number;
+  requestedAdvance: number;
+  reason: string;
+}): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { workerId, supervisorId, reason } = params;
+    const currentAdv = Math.max(0, Math.round(Number(params.currentAdvance) || 0));
+    const requestedAdv = Math.max(0, Math.round(Number(params.requestedAdvance) || 0));
+
+    if (!workerId) return { success: false, error: 'Worker is required.' };
+    if (!reason?.trim()) return { success: false, error: 'Reason for correction is required.' };
+
+    const admin = createAdminClient();
+    const { data: worker } = await admin
+      .from('workers')
+      .select('id, name, factory_id')
+      .eq('id', workerId)
+      .single();
+
+    if (!worker) return { success: false, error: 'Worker not found.' };
+
+    const id = crypto.randomUUID();
+    const payload = {
+      id,
+      worker_id: workerId,
+      factory_id: worker.factory_id,
+      supervisor_id: supervisorId,
+      current_advance: currentAdv,
+      requested_advance: requestedAdv,
+      difference: requestedAdv - currentAdv,
+      reason: reason.trim(),
+      status: 'PENDING',
+      created_at: new Date().toISOString(),
+    };
+
+    const { error } = await admin.from('audit_log').insert({
+      table_name: 'advance_correction_requests',
+      action: 'PENDING',
+      row_id: id,
+      new_data: payload,
+      changed_by: supervisorId,
+      changed_at: new Date().toISOString(),
+    });
+
+    if (error) throw error;
+
+    revalidatePath('/admin');
+    revalidatePath('/supervisor');
+    revalidatePath('/supervisor/workers');
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Failed to submit correction request.' };
+  }
+}
+
+/**
+ * Fetch all advance correction requests for Admin Dashboard.
+ */
+export async function getAdvanceCorrectionRequestsAction(): Promise<AdvanceCorrectionRequest[]> {
+  try {
+    const admin = createAdminClient();
+    const [
+      { data: rows, error },
+      { data: workers },
+      { data: supervisors },
+      { data: factories },
+    ] = await Promise.all([
+      admin
+        .from('audit_log')
+        .select('*')
+        .eq('table_name', 'advance_correction_requests')
+        .order('changed_at', { ascending: false }),
+      admin.from('workers').select('id, name, phone'),
+      admin.from('supervisors').select('id, name'),
+      admin.from('factories').select('id, name'),
+    ]);
+
+    if (error || !rows) return [];
+
+    const workerMap = new Map((workers || []).map(w => [w.id, w]));
+    const supMap = new Map((supervisors || []).map(s => [s.id, s.name]));
+    const facMap = new Map((factories || []).map(f => [f.id, f.name]));
+
+    return rows.map(r => {
+      const payload = r.new_data as any;
+      const worker = workerMap.get(payload.worker_id);
+      return {
+        id: payload.id || r.row_id,
+        worker_id: payload.worker_id,
+        worker_name: worker?.name || 'Worker',
+        worker_phone: worker?.phone || null,
+        factory_id: payload.factory_id,
+        factory_name: facMap.get(payload.factory_id) || 'Factory',
+        supervisor_id: payload.supervisor_id,
+        supervisor_name: supMap.get(payload.supervisor_id) || 'Supervisor',
+        current_advance: Number(payload.current_advance || 0),
+        requested_advance: Number(payload.requested_advance || 0),
+        difference: Number(payload.difference !== undefined ? payload.difference : (Number(payload.requested_advance) - Number(payload.current_advance))),
+        reason: payload.reason || '',
+        status: (r.action as any) || payload.status || 'PENDING',
+        created_at: payload.created_at || r.changed_at,
+        reviewed_by: payload.reviewed_by || null,
+        reviewed_at: payload.reviewed_at || null,
+        admin_note: payload.admin_note || null,
+      };
+    });
+  } catch (err) {
+    console.error('getAdvanceCorrectionRequestsAction error:', err);
+    return [];
+  }
+}
+
+/**
+ * Admin reviews (Approve / Reject) an advance correction request.
+ * If approved, adjusts the worker advance to match the target figure.
+ */
+export async function reviewAdvanceCorrectionAction(params: {
+  requestId: string;
+  decision: 'approve' | 'reject';
+  adminId?: string;
+  adjustedAdvance?: number;
+  adminNote?: string;
+}): Promise<{ success: boolean; error?: string }> {
+  try {
+    const admin = createAdminClient();
+    const { requestId, decision } = params;
+
+    const { data: requestRow } = await admin
+      .from('audit_log')
+      .select('*')
+      .eq('table_name', 'advance_correction_requests')
+      .eq('row_id', requestId)
+      .single();
+
+    if (!requestRow) return { success: false, error: 'Request not found.' };
+
+    const payload = requestRow.new_data as any;
+    const workerId = payload.worker_id;
+    const factoryId = payload.factory_id;
+
+    if (decision === 'approve') {
+      const targetAdvance = params.adjustedAdvance !== undefined
+        ? Math.max(0, Math.round(Number(params.adjustedAdvance)))
+        : Number(payload.requested_advance);
+
+      const workers = await getAllWorkersWithSalaryBalancesAction(factoryId);
+      const currentWorker = workers.find(w => w.worker_id === workerId);
+      const currentAdvance = currentWorker ? currentWorker.running_advance : Number(payload.current_advance);
+
+      const diff = targetAdvance - currentAdvance;
+      if (diff !== 0) {
+        if (diff > 0) {
+          await admin.from('cash_transactions').insert({
+            id: crypto.randomUUID(),
+            type: 'supervisor_to_worker',
+            from_supervisor_id: payload.supervisor_id,
+            to_worker_id: workerId,
+            amount: diff,
+            status: 'confirmed',
+            confirmed_at: new Date().toISOString(),
+            note: `[ADVANCE_ADJUSTMENT:ADD] Admin corrected advance by +₹${diff.toLocaleString('en-IN')}: ${params.adminNote || payload.reason}`,
+            created_at: new Date().toISOString(),
+          });
+        } else {
+          const reduceAmount = Math.abs(diff);
+          await insertSalaryLedgerEntry({
+            worker_id: workerId,
+            factory_id: factoryId,
+            type: 'advance_recovery',
+            amount: reduceAmount,
+            period_month: 'Correction',
+            note: `Admin corrected advance by -₹${reduceAmount.toLocaleString('en-IN')}: ${params.adminNote || payload.reason}`,
+            created_by: params.adminId || null,
+          });
+        }
+      }
+
+      await admin
+        .from('audit_log')
+        .update({
+          action: 'APPROVED',
+          new_data: {
+            ...payload,
+            status: 'APPROVED',
+            approved_advance: targetAdvance,
+            reviewed_by: params.adminId || 'Admin',
+            reviewed_at: new Date().toISOString(),
+            admin_note: params.adminNote?.trim() || null,
+          },
+        })
+        .eq('table_name', 'advance_correction_requests')
+        .eq('row_id', requestId);
+    } else {
+      await admin
+        .from('audit_log')
+        .update({
+          action: 'REJECTED',
+          new_data: {
+            ...payload,
+            status: 'REJECTED',
+            reviewed_by: params.adminId || 'Admin',
+            reviewed_at: new Date().toISOString(),
+            admin_note: params.adminNote?.trim() || 'Rejected by Admin',
+          },
+        })
+        .eq('table_name', 'advance_correction_requests')
+        .eq('row_id', requestId);
+    }
+
+    revalidatePath('/admin');
+    revalidatePath('/supervisor');
+    revalidatePath('/supervisor/workers');
+
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Failed to review request.' };
+  }
+}
+
 /**
  * Recover an advance from a worker's accumulated salary balance.
  * Reduces both Outstanding Advance and Unpaid Salary with ZERO cash outflow.

@@ -14,7 +14,9 @@ import {
   deleteWorkerServer,
   creditWorkerSalaryAction,
   recoverWorkerAdvanceAction,
-  addWorkerSalaryWithDeductionAction
+  addWorkerSalaryWithDeductionAction,
+  recordWorkerHisaabAction,
+  createAdvanceCorrectionRequestAction
 } from '@/app/actions/workers';
 import { compressImage } from '@/lib/image-compressor';
 import { CameraCaptureModal } from '@/components/camera-capture-modal';
@@ -33,6 +35,7 @@ import {
   Upload,
   Phone,
   Coins,
+  Calculator,
   Plus
 } from 'lucide-react';
 
@@ -86,15 +89,27 @@ export function SupervisorWorkersClientPage() {
   const [actionMessage, setActionMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
-  // Credit Salary Modal States
-  const [showCreditSalaryModal, setShowCreditSalaryModal] = useState<boolean>(false);
-  const [creditSalaryWorker, setCreditSalaryWorker] = useState<Worker | null>(null);
-  const [creditSalaryAmount, setCreditSalaryAmount] = useState<string>('');
-  const [creditSalaryDeduction, setCreditSalaryDeduction] = useState<string>('0');
-  const [creditSalaryMonth, setCreditSalaryMonth] = useState<string>(() => new Date().toLocaleString('en-IN', { month: 'long', year: 'numeric' }));
-  const [creditSalaryNote, setCreditSalaryNote] = useState<string>('');
-  const [creditSalaryLoading, setCreditSalaryLoading] = useState<boolean>(false);
-  const [creditSalaryError, setCreditSalaryError] = useState<string>('');
+  // Hisaab Settlement Modal States
+  const [showHisaabModal, setShowHisaabModal] = useState<boolean>(false);
+  const [hisaabWorker, setHisaabWorker] = useState<Worker | null>(null);
+  const [hisaabFromDate, setHisaabFromDate] = useState<string>(() => {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split('T')[0];
+  });
+  const [hisaabToDate, setHisaabToDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  const [hisaabTotalWages, setHisaabTotalWages] = useState<string>('');
+  const [hisaabAdvanceDeduct, setHisaabAdvanceDeduct] = useState<string>('0');
+  const [hisaabNote, setHisaabNote] = useState<string>('');
+  const [hisaabLoading, setHisaabLoading] = useState<boolean>(false);
+  const [hisaabError, setHisaabError] = useState<string>('');
+
+  // Advance Correction Modal States (Supervisor -> Admin)
+  const [showCorrectionModal, setShowCorrectionModal] = useState<boolean>(false);
+  const [correctionWorker, setCorrectionWorker] = useState<Worker | null>(null);
+  const [correctionRequestedAmount, setCorrectionRequestedAmount] = useState<string>('');
+  const [correctionReason, setCorrectionReason] = useState<string>('');
+  const [correctionLoading, setCorrectionLoading] = useState<boolean>(false);
+  const [correctionError, setCorrectionError] = useState<string>('');
 
   // Settle Advance Modal States
   const [showSettleModal, setShowSettleModal] = useState<boolean>(false);
@@ -103,51 +118,98 @@ export function SupervisorWorkersClientPage() {
   const [settleLoading, setSettleLoading] = useState<boolean>(false);
   const [settleError, setSettleError] = useState<string>('');
 
-  const handleExecuteCreditSalary = async () => {
-    if (!creditSalaryWorker || !factoryId) return;
-    const amountNum = parseFloat(creditSalaryAmount);
-    const deductNum = Math.max(0, parseFloat(creditSalaryDeduction || '0'));
-    if (isNaN(amountNum) || amountNum <= 0) {
-      setCreditSalaryError('Please enter a valid positive salary amount.');
+  const handleExecuteHisaab = async () => {
+    if (!hisaabWorker || !factoryId) return;
+    const wagesNum = parseFloat(hisaabTotalWages);
+    const deductNum = Math.max(0, parseFloat(hisaabAdvanceDeduct || '0'));
+    if (isNaN(wagesNum) || wagesNum <= 0) {
+      setHisaabError('Please enter valid total wages earned.');
       return;
     }
-    if (deductNum > (creditSalaryWorker.running_advance || 0)) {
-      setCreditSalaryError(`Deduction cannot exceed worker advance of ${formatINR(creditSalaryWorker.running_advance || 0)}.`);
+    if (!hisaabFromDate || !hisaabToDate) {
+      setHisaabError('Please specify both From and To dates.');
       return;
     }
-    if (deductNum > amountNum) {
-      setCreditSalaryError(`Deduction cannot exceed salary amount of ${formatINR(amountNum)}.`);
+    const currentAdv = hisaabWorker.running_advance || 0;
+    if (deductNum > currentAdv) {
+      setHisaabError(`Deduction cannot exceed worker advance of ${formatINR(currentAdv)}.`);
+      return;
+    }
+    if (deductNum > wagesNum) {
+      setHisaabError(`Deduction cannot exceed wages earned of ${formatINR(wagesNum)}.`);
       return;
     }
 
-    setCreditSalaryLoading(true);
-    setCreditSalaryError('');
+    setHisaabLoading(true);
+    setHisaabError('');
     try {
-      const res = await addWorkerSalaryWithDeductionAction({
-        workerId: creditSalaryWorker.worker_id,
+      const res = await recordWorkerHisaabAction({
+        workerId: hisaabWorker.worker_id,
         factoryId,
-        salaryAmount: amountNum,
-        advanceDeductAmount: deductNum,
-        periodMonth: creditSalaryMonth || undefined,
-        note: creditSalaryNote || undefined,
+        supervisorId: supervisor?.id,
+        fromDate: hisaabFromDate,
+        toDate: hisaabToDate,
+        totalWages: wagesNum,
+        advanceDeducted: deductNum,
+        note: hisaabNote || undefined,
       });
 
       if (!res.success) {
-        setCreditSalaryError(res.error || 'Failed to process salary.');
+        setHisaabError(res.error || 'Failed to record Hisaab.');
         return;
       }
 
-      setShowCreditSalaryModal(false);
-      setCreditSalaryWorker(null);
-      setCreditSalaryAmount('');
-      setCreditSalaryDeduction('0');
-      setCreditSalaryMonth('');
-      setCreditSalaryNote('');
+      setShowHisaabModal(false);
+      setHisaabWorker(null);
+      setHisaabTotalWages('');
+      setHisaabAdvanceDeduct('0');
+      setHisaabNote('');
       queryClient.invalidateQueries();
     } catch (err: any) {
-      setCreditSalaryError(err.message || 'Error executing salary credit.');
+      setHisaabError(err.message || 'Error recording Hisaab.');
     } finally {
-      setCreditSalaryLoading(false);
+      setHisaabLoading(false);
+    }
+  };
+
+  const handleExecuteAdvanceCorrection = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!correctionWorker || !supervisor?.id) return;
+    const requestedNum = parseFloat(correctionRequestedAmount);
+    if (isNaN(requestedNum) || requestedNum < 0) {
+      setCorrectionError('Please enter a valid requested advance amount (0 or positive).');
+      return;
+    }
+    if (!correctionReason.trim()) {
+      setCorrectionError('Please provide a reason for the correction.');
+      return;
+    }
+
+    setCorrectionLoading(true);
+    setCorrectionError('');
+    try {
+      const res = await createAdvanceCorrectionRequestAction({
+        workerId: correctionWorker.worker_id,
+        supervisorId: supervisor.id,
+        currentAdvance: correctionWorker.running_advance || 0,
+        requestedAdvance: requestedNum,
+        reason: correctionReason.trim(),
+      });
+
+      if (!res.success) {
+        setCorrectionError(res.error || 'Failed to submit correction request.');
+        return;
+      }
+
+      setShowCorrectionModal(false);
+      setCorrectionWorker(null);
+      setCorrectionRequestedAmount('');
+      setCorrectionReason('');
+      queryClient.invalidateQueries();
+    } catch (err: any) {
+      setCorrectionError(err.message || 'Error submitting correction request.');
+    } finally {
+      setCorrectionLoading(false);
     }
   };
 
@@ -892,12 +954,29 @@ export function SupervisorWorkersClientPage() {
                             Salary: {formatINR(w.unpaid_salary || 0)}
                           </div>
                         ) : null}
-                        <div className={`text-[11px] font-bold px-2 py-0.5 rounded ${
+                        <div className={`text-[11px] font-bold px-2 py-0.5 rounded flex items-center gap-1.5 ${
                           (w.running_advance || 0) > 0 
                             ? 'text-amber-900 bg-amber-50 border border-amber-200' 
                             : 'text-slate-500 bg-slate-50 border border-slate-200'
                         }`}>
-                          Adv: {formatINR(w.running_advance || 0)}
+                          <span>Adv: {formatINR(w.running_advance || 0)}</span>
+                          {(w.running_advance || 0) > 0 && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setCorrectionWorker(w);
+                                setCorrectionRequestedAmount(String(w.running_advance || 0));
+                                setCorrectionReason('');
+                                setCorrectionError('');
+                                setShowCorrectionModal(true);
+                              }}
+                              className="text-[10px] text-amber-950 underline hover:text-black font-semibold ml-0.5"
+                              title="Request correction from Admin if wrong"
+                            >
+                              Report
+                            </button>
+                          )}
                         </div>
                       </div>
 
@@ -906,18 +985,21 @@ export function SupervisorWorkersClientPage() {
                         <button
                           type="button"
                           onClick={() => {
-                            setCreditSalaryWorker(w);
-                            setCreditSalaryAmount(w.monthly_salary ? String(w.monthly_salary) : '');
-                            setCreditSalaryDeduction(w.running_advance > 0 ? String(Math.min(w.monthly_salary || 0, w.running_advance)) : '0');
-                            setCreditSalaryMonth(new Date().toLocaleString('en-IN', { month: 'long', year: 'numeric' }));
-                            setCreditSalaryNote('');
-                            setShowCreditSalaryModal(true);
+                            setHisaabWorker(w);
+                            setHisaabTotalWages('');
+                            setHisaabAdvanceDeduct(w.running_advance > 0 ? String(w.running_advance) : '0');
+                            const d = new Date();
+                            setHisaabFromDate(new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split('T')[0]);
+                            setHisaabToDate(new Date().toISOString().split('T')[0]);
+                            setHisaabNote('');
+                            setHisaabError('');
+                            setShowHisaabModal(true);
                           }}
                           className="px-2.5 py-1.5 rounded bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-colors flex items-center gap-1 shadow-2xs"
-                          title="Add Salary & Deduct Advance"
+                          title="Record Hisaab Settlement"
                         >
-                          <Coins className="h-3 w-3" />
-                          <span>+ Salary</span>
+                          <Calculator className="h-3 w-3" />
+                          <span>Hisaab</span>
                         </button>
 
                         {(w.unpaid_salary || 0) > 0 && (w.running_advance || 0) > 0 && (
@@ -1042,214 +1124,215 @@ export function SupervisorWorkersClientPage() {
           </div>
         </div>
       )}
-      {/* Credit Salary Modal */}
-      {showCreditSalaryModal && creditSalaryWorker && (
+      {/* Hisaab Settlement Modal */}
+      {showHisaabModal && hisaabWorker && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs animate-in fade-in duration-200">
           <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-2xl border border-slate-200 space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
-                <div className="h-8 w-8 rounded-full bg-purple-100 flex items-center justify-center text-purple-700">
-                  <Coins className="h-4 w-4" />
+                <div className="h-8 w-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-800 border border-slate-200">
+                  <Calculator className="h-4 w-4" />
                 </div>
                 <div>
                   <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900">
-                    Credit Earned Salary
+                    Hisaab Settlement
                   </h3>
-                  <span className="text-[10px] text-slate-500">Accrue wages • ₹0 cash distributed</span>
+                  <span className="text-[10px] text-slate-500">Calculate wages & deduct advance</span>
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => { setShowCreditSalaryModal(false); setCreditSalaryWorker(null); setCreditSalaryError(''); }}
+                onClick={() => { setShowHisaabModal(false); setHisaabWorker(null); setHisaabError(''); }}
                 className="text-slate-400 hover:text-slate-600 p-1"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
 
-            <div className="bg-slate-50 border border-slate-100 rounded-lg p-3 text-xs space-y-1">
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs space-y-1.5">
               <div className="flex justify-between items-center">
                 <span className="text-slate-500 font-medium">Worker:</span>
-                <span className="font-bold text-slate-900">{creditSalaryWorker.worker_name}</span>
+                <span className="font-bold text-slate-900">{hisaabWorker.worker_name}</span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-slate-500 font-medium">Current Unpaid Salary:</span>
-                <span className="font-bold text-emerald-700">{formatINR(creditSalaryWorker.unpaid_salary || 0)}</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-slate-500 font-medium">Outstanding Advance Owed:</span>
-                <span className={`font-bold ${(creditSalaryWorker.running_advance || 0) > 0 ? 'text-amber-800 font-black' : 'text-slate-700'}`}>
-                  {formatINR(creditSalaryWorker.running_advance || 0)}
+                <span className="text-slate-500 font-medium">Current Advance:</span>
+                <span className={`font-bold ${(hisaabWorker.running_advance || 0) > 0 ? 'text-amber-800 font-black' : 'text-slate-700'}`}>
+                  {formatINR(hisaabWorker.running_advance || 0)}
                 </span>
+              </div>
+              <div className="flex justify-end pt-0.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const w = hisaabWorker;
+                    setShowHisaabModal(false);
+                    setCorrectionWorker(w);
+                    setCorrectionRequestedAmount(String(w.running_advance || 0));
+                    setCorrectionReason('');
+                    setCorrectionError('');
+                    setShowCorrectionModal(true);
+                  }}
+                  className="text-[10px] text-indigo-700 font-bold underline hover:text-indigo-900"
+                >
+                  Advance incorrect? Request correction
+                </button>
               </div>
             </div>
 
-            {creditSalaryError && (
+            {hisaabError && (
               <div className="rounded-lg bg-red-50 p-2.5 text-xs text-red-700 border border-red-200">
-                {creditSalaryError}
+                {hisaabError}
               </div>
             )}
 
             <div className="space-y-3">
+              {/* Date Range: From & To */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label htmlFor="hisaabFromDateModal" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                    From Date
+                  </label>
+                  <input
+                    id="hisaabFromDateModal"
+                    type="date"
+                    required
+                    disabled={hisaabLoading}
+                    value={hisaabFromDate}
+                    onChange={(e) => setHisaabFromDate(e.target.value)}
+                    className="block w-full rounded-lg border border-slate-300 px-2 py-1.5 text-slate-950 text-xs min-h-[38px] bg-white font-medium"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="hisaabToDateModal" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                    To Date
+                  </label>
+                  <input
+                    id="hisaabToDateModal"
+                    type="date"
+                    required
+                    disabled={hisaabLoading}
+                    value={hisaabToDate}
+                    onChange={(e) => setHisaabToDate(e.target.value)}
+                    className="block w-full rounded-lg border border-slate-300 px-2 py-1.5 text-slate-950 text-xs min-h-[38px] bg-white font-medium"
+                  />
+                </div>
+              </div>
+
+              {/* Total Wages Made */}
               <div>
-                <label htmlFor="creditSalaryAmount" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                  Salary Amount to Add (INR)
+                <label htmlFor="hisaabTotalWagesModal" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                  Total Wages Made (INR)
                 </label>
                 <div className="relative">
                   <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 text-sm font-bold pointer-events-none">₹</span>
                   <input
-                    id="creditSalaryAmount"
+                    id="hisaabTotalWagesModal"
                     type="number"
                     min="1"
-                    disabled={creditSalaryLoading}
-                    value={creditSalaryAmount}
+                    disabled={hisaabLoading}
+                    value={hisaabTotalWages}
                     onChange={(e) => {
                       const val = e.target.value;
-                      setCreditSalaryAmount(val);
-                      const salNum = parseFloat(val) || 0;
-                      const workerAdv = creditSalaryWorker.running_advance || 0;
-                      if (workerAdv > 0) {
-                        const curDeduct = parseFloat(creditSalaryDeduction) || 0;
-                        if (curDeduct > salNum) {
-                          setCreditSalaryDeduction(String(Math.min(salNum, workerAdv)));
+                      setHisaabTotalWages(val);
+                      if (hisaabWorker && hisaabWorker.running_advance > 0) {
+                        const wagesNum = parseFloat(val) || 0;
+                        const currentDeduct = parseFloat(hisaabAdvanceDeduct) || 0;
+                        if (currentDeduct > wagesNum) {
+                          setHisaabAdvanceDeduct(String(Math.min(wagesNum, hisaabWorker.running_advance)));
                         }
                       }
                     }}
-                    placeholder="e.g. 20000"
-                    className="block w-full rounded-lg border border-slate-300 pl-8 pr-3 py-2 text-slate-950 text-sm font-bold focus:ring-2 focus:ring-purple-600 min-h-[44px]"
+                    placeholder="e.g. 10000"
+                    className="block w-full rounded-lg border border-slate-300 pl-8 pr-3 py-2 text-slate-950 text-sm font-bold focus:ring-2 focus:ring-slate-900 min-h-[44px]"
                   />
-                </div>
-
-                {/* Quick Presets */}
-                <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                  {(creditSalaryWorker.monthly_salary || 0) > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCreditSalaryAmount(String(creditSalaryWorker.monthly_salary));
-                        if ((creditSalaryWorker.running_advance || 0) > 0) {
-                          setCreditSalaryDeduction(String(Math.min(creditSalaryWorker.monthly_salary || 0, creditSalaryWorker.running_advance || 0)));
-                        }
-                      }}
-                      className="text-xs px-2.5 py-1 rounded bg-slate-900 text-white font-bold hover:bg-slate-800 transition-colors"
-                    >
-                      Wage: {formatINR(creditSalaryWorker.monthly_salary || 0)}
-                    </button>
-                  )}
-                  {[5000, 10000, 15000, 20000].map(amt => (
-                    <button
-                      key={amt}
-                      type="button"
-                      onClick={() => {
-                        setCreditSalaryAmount(String(amt));
-                        if ((creditSalaryWorker.running_advance || 0) > 0) {
-                          setCreditSalaryDeduction(String(Math.min(amt, creditSalaryWorker.running_advance || 0)));
-                        }
-                      }}
-                      className="text-xs px-2.5 py-1 rounded border border-slate-300 bg-white text-slate-700 font-medium hover:bg-slate-50 transition-colors"
-                    >
-                      +{formatINR(amt)}
-                    </button>
-                  ))}
                 </div>
               </div>
 
-              {/* Advance Deduction Section */}
-              {(() => {
-                const workerAdv = creditSalaryWorker.running_advance || 0;
-                const salNum = parseFloat(creditSalaryAmount) || 0;
+              {/* Deduct from Advance */}
+              {(hisaabWorker.running_advance || 0) > 0 ? (
+                <div className="rounded-lg p-2.5 bg-amber-50/70 border border-amber-200 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label htmlFor="hisaabAdvanceDeductModal" className="block text-xs font-bold text-amber-950 uppercase tracking-wider">
+                      Deduct from Advance
+                    </label>
+                    <span className="text-[10px] text-amber-800 font-bold">
+                      Advance: {formatINR(hisaabWorker.running_advance || 0)}
+                    </span>
+                  </div>
 
-                if (workerAdv === 0) {
-                  return (
-                    <div className="rounded-lg p-2.5 bg-slate-50 border border-slate-200 text-xs text-slate-600 flex items-center justify-between">
-                      <span>Worker has ₹0 advance owed.</span>
-                      <span className="font-semibold text-emerald-700">Settled</span>
-                    </div>
-                  );
-                }
+                  <div className="relative">
+                    <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 text-sm font-bold pointer-events-none">₹</span>
+                    <input
+                      id="hisaabAdvanceDeductModal"
+                      type="number"
+                      min="0"
+                      max={Math.min(hisaabWorker.running_advance || 0, parseFloat(hisaabTotalWages) || 0)}
+                      disabled={hisaabLoading}
+                      value={hisaabAdvanceDeduct}
+                      onChange={(e) => setHisaabAdvanceDeduct(e.target.value)}
+                      placeholder="0"
+                      className="block w-full rounded border border-amber-300 pl-8 pr-3 py-1.5 text-slate-950 text-sm font-bold bg-white focus:ring-2 focus:ring-amber-500 min-h-[40px]"
+                    />
+                  </div>
 
-                const maxDeduct = Math.min(workerAdv, salNum > 0 ? salNum : workerAdv);
-
-                return (
-                  <div className="rounded-lg p-3 bg-amber-50/70 border border-amber-200 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <label htmlFor="modalDeductAmount" className="block text-xs font-bold text-amber-950 uppercase tracking-wider">
-                          Deduct from Advance
-                        </label>
-                        <span className="text-[11px] text-amber-800">
-                          Advance owed: <strong className="font-bold">{formatINR(workerAdv)}</strong>
-                        </span>
-                      </div>
-                      <span className="text-[10px] bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded border border-amber-300">
-                        Subtracted from Advance
-                      </span>
-                    </div>
-
-                    <div className="relative">
-                      <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 text-sm font-bold pointer-events-none">₹</span>
-                      <input
-                        id="modalDeductAmount"
-                        type="number"
-                        min="0"
-                        max={maxDeduct}
-                        disabled={creditSalaryLoading}
-                        value={creditSalaryDeduction}
-                        onChange={(e) => setCreditSalaryDeduction(e.target.value)}
-                        placeholder="0"
-                        className="block w-full rounded-lg border border-amber-300 pl-8 pr-3 py-2 text-slate-950 text-sm font-bold bg-white focus:ring-2 focus:ring-amber-500 min-h-[42px]"
-                      />
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-                      <button
-                        type="button"
-                        onClick={() => setCreditSalaryDeduction('0')}
-                        className="text-xs px-2 py-1 rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition-colors"
-                      >
-                        Deduct ₹0
-                      </button>
-                      {workerAdv > 0 && salNum > 0 && (
+                  <div className="flex flex-wrap items-center gap-1 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setHisaabAdvanceDeduct('0')}
+                      className="text-[11px] px-2 py-0.5 rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition-colors"
+                    >
+                      Deduct ₹0
+                    </button>
+                    {(() => {
+                      const wagesNum = parseFloat(hisaabTotalWages) || 0;
+                      const maxD = Math.min(hisaabWorker.running_advance || 0, wagesNum > 0 ? wagesNum : (hisaabWorker.running_advance || 0));
+                      if (maxD <= 0) return null;
+                      return (
                         <>
                           <button
                             type="button"
-                            onClick={() => setCreditSalaryDeduction(String(maxDeduct))}
-                            className="text-xs px-2 py-1 rounded border border-amber-300 bg-amber-100 text-amber-900 font-bold hover:bg-amber-200 transition-colors"
+                            onClick={() => setHisaabAdvanceDeduct(String(maxD))}
+                            className="text-[11px] px-2 py-0.5 rounded border border-amber-300 bg-amber-100 text-amber-900 font-bold hover:bg-amber-200 transition-colors"
                           >
-                            Deduct Max ({formatINR(maxDeduct)})
+                            Full ({formatINR(maxD)})
                           </button>
-                          {maxDeduct > 1000 && (
+                          {maxD > 1000 && (
                             <button
                               type="button"
-                              onClick={() => setCreditSalaryDeduction(String(Math.round(maxDeduct / 2)))}
-                              className="text-xs px-2 py-1 rounded border border-amber-200 bg-white text-amber-900 font-medium hover:bg-amber-50 transition-colors"
+                              onClick={() => setHisaabAdvanceDeduct(String(Math.round(maxD / 2)))}
+                              className="text-[11px] px-2 py-0.5 rounded border border-amber-200 bg-white text-amber-900 font-medium hover:bg-amber-50 transition-colors"
                             >
-                              Deduct Half ({formatINR(Math.round(maxDeduct / 2))})
+                              Half ({formatINR(Math.round(maxD / 2))})
                             </button>
                           )}
                         </>
-                      )}
-                    </div>
+                      );
+                    })()}
                   </div>
-                );
-              })()}
+                </div>
+              ) : (
+                <div className="rounded-lg p-2.5 bg-slate-50 border border-slate-200 text-xs text-slate-600 flex items-center justify-between">
+                  <span>Worker owes ₹0 advance. No advance deduction.</span>
+                  <span className="font-semibold text-emerald-700">Clear</span>
+                </div>
+              )}
 
-              {/* Live Preview Summary */}
+              {/* Live Hisaab Breakdown */}
               {(() => {
-                const salNum = parseFloat(creditSalaryAmount) || 0;
-                const deductNum = Math.max(0, parseFloat(creditSalaryDeduction) || 0);
-                const curAdv = creditSalaryWorker.running_advance || 0;
+                const wagesNum = parseFloat(hisaabTotalWages) || 0;
+                const deductNum = Math.max(0, parseFloat(hisaabAdvanceDeduct) || 0);
+                const curAdv = hisaabWorker.running_advance || 0;
 
-                if (salNum <= 0) return null;
+                if (wagesNum <= 0) return null;
 
-                const netAdded = Math.max(0, salNum - deductNum);
+                const netRemaining = Math.max(0, wagesNum - deductNum);
                 const remainingAdv = Math.max(0, curAdv - deductNum);
 
                 return (
                   <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 space-y-1 text-xs">
                     <div className="flex justify-between items-center text-slate-700">
-                      <span>Gross Salary Added:</span>
-                      <span className="font-bold text-slate-900">+{formatINR(salNum)}</span>
+                      <span>Total Wages Made:</span>
+                      <span className="font-bold text-slate-900">{formatINR(wagesNum)}</span>
                     </div>
                     {curAdv > 0 && (
                       <div className="flex justify-between items-center text-amber-800">
@@ -1258,45 +1341,28 @@ export function SupervisorWorkersClientPage() {
                       </div>
                     )}
                     <div className="border-t border-slate-200 pt-1 flex justify-between items-center">
-                      <span className="font-semibold text-slate-800">Net Added to Unpaid Salary:</span>
-                      <span className="font-bold text-emerald-700">+{formatINR(netAdded)}</span>
+                      <span className="font-semibold text-slate-800">Net Wages Remaining for Worker:</span>
+                      <span className="font-bold text-emerald-700">{formatINR(netRemaining)}</span>
                     </div>
-                    {curAdv > 0 && (
-                      <div className="flex justify-between items-center text-[11px] text-slate-600">
-                        <span>Remaining Advance Owed:</span>
-                        <span className="font-bold text-slate-900">{formatINR(remainingAdv)}</span>
-                      </div>
-                    )}
+                    <div className="flex justify-between items-center text-[11px] text-slate-600">
+                      <span>Advance Remaining After Hisaab:</span>
+                      <span className="font-bold text-slate-900">{formatINR(remainingAdv)}</span>
+                    </div>
                   </div>
                 );
               })()}
 
               <div>
-                <label htmlFor="creditSalaryMonth" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                  Period / Month (Optional)
-                </label>
-                <input
-                  id="creditSalaryMonth"
-                  type="text"
-                  disabled={creditSalaryLoading}
-                  value={creditSalaryMonth}
-                  onChange={(e) => setCreditSalaryMonth(e.target.value)}
-                  placeholder="e.g. October 2026"
-                  className="block w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-950 text-xs min-h-[40px]"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="creditSalaryNote" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                <label htmlFor="hisaabNoteModal" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
                   Notes / Remarks (Optional)
                 </label>
                 <input
-                  id="creditSalaryNote"
+                  id="hisaabNoteModal"
                   type="text"
-                  disabled={creditSalaryLoading}
-                  value={creditSalaryNote}
-                  onChange={(e) => setCreditSalaryNote(e.target.value)}
-                  placeholder="e.g. Monthly fixed wage"
+                  disabled={hisaabLoading}
+                  value={hisaabNote}
+                  onChange={(e) => setHisaabNote(e.target.value)}
+                  placeholder="e.g. Weekly settlement"
                   className="block w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-950 text-xs min-h-[40px]"
                 />
               </div>
@@ -1305,28 +1371,136 @@ export function SupervisorWorkersClientPage() {
             <div className="flex items-center gap-2 pt-1">
               <button
                 type="button"
-                disabled={creditSalaryLoading}
-                onClick={() => { setShowCreditSalaryModal(false); setCreditSalaryWorker(null); setCreditSalaryError(''); }}
+                disabled={hisaabLoading}
+                onClick={() => { setShowHisaabModal(false); setHisaabWorker(null); setHisaabError(''); }}
                 className="flex-1 py-2 px-3 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 min-h-[40px]"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                disabled={creditSalaryLoading || !creditSalaryAmount || parseFloat(creditSalaryAmount) <= 0}
-                onClick={handleExecuteCreditSalary}
+                disabled={hisaabLoading || !hisaabTotalWages || parseFloat(hisaabTotalWages) <= 0}
+                onClick={handleExecuteHisaab}
                 className="flex-1 py-2 px-3 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold min-h-[40px] flex items-center justify-center gap-1.5 shadow-sm disabled:opacity-50"
               >
-                {creditSalaryLoading ? (
+                {hisaabLoading ? (
                   <RefreshCw className="h-3.5 w-3.5 animate-spin" />
                 ) : (
                   <span>
-                    Add Salary
-                    {parseFloat(creditSalaryDeduction) > 0 ? ` & Deduct ${formatINR(parseFloat(creditSalaryDeduction))}` : ''}
+                    Save Hisaab
                   </span>
                 )}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Advance Correction Request Modal (Supervisor -> Admin) */}
+      {showCorrectionModal && correctionWorker && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-sm w-full p-5 space-y-4 relative">
+            <button
+              type="button"
+              onClick={() => {
+                if (!correctionLoading) {
+                  setShowCorrectionModal(false);
+                  setCorrectionWorker(null);
+                  setCorrectionError('');
+                }
+              }}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <div className="flex items-start gap-3">
+              <div className="h-10 w-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0 text-amber-700">
+                <AlertCircle className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Request Advance Correction</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Submit a correction request to Admin for <strong>{correctionWorker.worker_name}</strong>.
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleExecuteAdvanceCorrection} className="space-y-3">
+              <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs space-y-1">
+                <div className="flex justify-between text-slate-600">
+                  <span>Current Recorded Advance:</span>
+                  <span className="font-bold text-slate-900">{formatINR(correctionWorker.running_advance || 0)}</span>
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="modalCorrectionAmt" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                  Correct Advance Amount (INR) <span className="text-red-500">*</span>
+                </label>
+                <div className="relative mt-1">
+                  <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 text-sm font-bold pointer-events-none">₹</span>
+                  <input
+                    id="modalCorrectionAmt"
+                    type="number"
+                    min="0"
+                    required
+                    disabled={correctionLoading}
+                    value={correctionRequestedAmount}
+                    onChange={(e) => setCorrectionRequestedAmount(e.target.value)}
+                    placeholder="0"
+                    className="block w-full rounded border border-slate-300 pl-8 pr-3 py-2 text-slate-950 text-sm font-bold focus:ring-2 focus:ring-slate-900 min-h-[44px]"
+                  />
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Enter what the advance balance should be (e.g. 0 if fully clear).
+                </p>
+              </div>
+
+              <div>
+                <label htmlFor="modalCorrectionReason" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                  Reason for Correction <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  id="modalCorrectionReason"
+                  required
+                  rows={2}
+                  disabled={correctionLoading}
+                  value={correctionReason}
+                  onChange={(e) => setCorrectionReason(e.target.value)}
+                  placeholder="e.g. Worker returned cash in person, or prior duplicate entry"
+                  className="mt-1 block w-full rounded border border-slate-300 px-3 py-2 text-slate-950 text-xs min-h-[60px]"
+                />
+              </div>
+
+              {correctionError && (
+                <div className="p-2.5 bg-red-50 border border-red-200 rounded text-xs text-red-700 font-medium">
+                  {correctionError}
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  disabled={correctionLoading}
+                  onClick={() => {
+                    setShowCorrectionModal(false);
+                    setCorrectionWorker(null);
+                    setCorrectionError('');
+                  }}
+                  className="flex-1 rounded border border-slate-300 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 min-h-[42px]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={correctionLoading || !correctionRequestedAmount || !correctionReason.trim()}
+                  className="flex-1 rounded bg-slate-900 py-2.5 text-xs font-bold text-white hover:bg-slate-800 disabled:opacity-50 min-h-[42px] flex items-center justify-center gap-1"
+                >
+                  {correctionLoading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <span>Send to Admin</span>}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
