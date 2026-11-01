@@ -29,21 +29,28 @@ export async function disburseToWorkerAction(
   workerId: string,
   supervisorId: string,
   amount: number,
-  note?: string
+  note?: string,
+  paymentType: 'advance' | 'salary_payment' = 'advance'
 ) {
-  const cleanNote = note?.trim() || 'Cash Advance';
+  const defaultLabel = paymentType === 'salary_payment' ? 'Salary Payment' : 'Cash Advance';
+  const rawNote = note?.trim() || defaultLabel;
+  const cleanNote = rawNote.includes('[TYPE:') ? rawNote : `[TYPE:${paymentType}] ${rawNote}`;
 
   const payload = {
     p_worker_id: workerId,
     p_supervisor_id: supervisorId,
     p_amount: amount,
     p_note: cleanNote,
+    payment_type: paymentType,
   };
 
   if (isAppOnline()) {
     const userId = await getFastCurrentUserId();
     const { data, error } = await supabase.rpc('disburse_to_worker', {
-      ...payload,
+      p_worker_id: workerId,
+      p_supervisor_id: supervisorId,
+      p_amount: amount,
+      p_note: cleanNote,
       p_created_by: userId,
     });
     if (error) {
@@ -53,6 +60,16 @@ export async function disburseToWorkerAction(
         return { queued: true };
       }
       throw new Error(error.message);
+    }
+
+    // Try setting payment_type column if table column is active
+    if (data) {
+      supabase
+        .from('cash_transactions')
+        .update({ payment_type: paymentType })
+        .eq('id', data)
+        .then(() => {})
+        .catch(() => {});
     }
 
     return { success: true, id: data };

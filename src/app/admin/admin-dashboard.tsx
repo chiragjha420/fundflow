@@ -30,8 +30,22 @@ import {
   Clock,
   User,
   X,
-  RotateCcw
+  RotateCcw,
+  Wallet,
+  Zap,
+  Sparkles,
+  CheckCircle2
 } from 'lucide-react';
+import { 
+  FactoryWorkerBalance, 
+  WorkerSalaryLedgerEntry, 
+  creditWorkerSalaryAction, 
+  recoverWorkerAdvanceAction, 
+  batchCreditMonthlySalariesAction, 
+  batchReclassifyKharchaAction, 
+  getWorkerFullLedgerAction, 
+  FullWorkerLedgerEntry 
+} from '@/app/actions/workers';
 
 interface Factory {
   id: string;
@@ -80,26 +94,14 @@ interface Expense {
   factories?: { name: string } | null;
 }
 
-interface WorkerBalance {
-  worker_id: string;
-  worker_name: string;
-  worker_phone: string | null;
-  worker_photo_url: string | null;
-  factory_id: string;
-  supervisor_id: string;
-  opening_advance: number;
-  total_cash_disbursed: number;
-  running_advance: number;
-  active: boolean;
-}
-
 interface AdminDashboardProps {
   factories: Factory[];
   supervisors: Supervisor[];
   transactions: Transaction[];
   expenses: Expense[];
-  workers: WorkerBalance[];
+  workers: FactoryWorkerBalance[];
   refundedTransactions?: Record<string, { refundedAt: string; reason: string; amount: number; workerName: string }>;
+  salaryLedgerEntries?: WorkerSalaryLedgerEntry[];
 }
 
 export function AdminDashboard({
@@ -109,6 +111,7 @@ export function AdminDashboard({
   expenses,
   workers,
   refundedTransactions = {},
+  salaryLedgerEntries = [],
 }: AdminDashboardProps) {
   const [formError, setFormError] = useState<string | null>(null);
   const [formSuccess, setFormSuccess] = useState(false);
@@ -349,6 +352,225 @@ export function AdminDashboard({
   const [workerSearchQuery, setWorkerSearchQuery] = useState<string>('');
   const [expandedWorkerId, setExpandedWorkerId] = useState<string | null>(null);
   const [isWorkerAdvancesCollapsed, setIsWorkerAdvancesCollapsed] = useState<boolean>(true);
+
+  // Local Workers state for instantaneous optimistic updates
+  const [localWorkers, setLocalWorkers] = useState<FactoryWorkerBalance[]>(workers);
+  useEffect(() => {
+    setLocalWorkers(workers);
+  }, [workers]);
+
+  // Modals for Worker Accounts & Payroll
+  const [showCreditSalaryModal, setShowCreditSalaryModal] = useState(false);
+  const [creditSalaryWorker, setCreditSalaryWorker] = useState<FactoryWorkerBalance | null>(null);
+  const [creditSalaryWorkerId, setCreditSalaryWorkerId] = useState<string>('');
+  const [creditSalaryAmount, setCreditSalaryAmount] = useState('');
+  const [creditSalaryMonth, setCreditSalaryMonth] = useState('');
+  const [creditSalaryNote, setCreditSalaryNote] = useState('');
+  const [creditSalaryLoading, setCreditSalaryLoading] = useState(false);
+  const [creditSalaryError, setCreditSalaryError] = useState('');
+
+  // Batch Monthly Salary Accrual Modal
+  const [showBatchSalaryModal, setShowBatchSalaryModal] = useState(false);
+  const [batchSalaryFactoryId, setBatchSalaryFactoryId] = useState('all');
+  const [batchSalaryMonth, setBatchSalaryMonth] = useState('');
+  const [batchSalaryNote, setBatchSalaryNote] = useState('');
+  const [batchSalaryLoading, setBatchSalaryLoading] = useState(false);
+  const [batchSalaryError, setBatchSalaryError] = useState('');
+  const [batchSalarySuccess, setBatchSalarySuccess] = useState('');
+
+  // Settle Advance from Salary Modal
+  const [showSettleAdvanceModal, setShowSettleAdvanceModal] = useState(false);
+  const [settleAdvanceWorker, setSettleAdvanceWorker] = useState<FactoryWorkerBalance | null>(null);
+  const [settleAdvanceAmount, setSettleAdvanceAmount] = useState('');
+  const [settleAdvanceNote, setSettleAdvanceNote] = useState('');
+  const [settleAdvanceLoading, setSettleAdvanceLoading] = useState(false);
+  const [settleAdvanceError, setSettleAdvanceError] = useState('');
+
+  // Reclassify Kharcha Modal
+  const [showReclassifyModal, setShowReclassifyModal] = useState(false);
+  const [reclassifyLoading, setReclassifyLoading] = useState(false);
+  const [reclassifySuccess, setReclassifySuccess] = useState<{ count: number; totalAmount: number } | null>(null);
+
+  // Worker Full Ledger Drawer
+  const [expandedLedgerWorkerId, setExpandedLedgerWorkerId] = useState<string | null>(null);
+  const [workerFullLedgerData, setWorkerFullLedgerData] = useState<Record<string, FullWorkerLedgerEntry[]>>({});
+  const [loadingLedgerWorkerId, setLoadingLedgerWorkerId] = useState<string | null>(null);
+
+  const toggleWorkerFullLedger = async (workerId: string) => {
+    if (expandedLedgerWorkerId === workerId) {
+      setExpandedLedgerWorkerId(null);
+      return;
+    }
+    setExpandedLedgerWorkerId(workerId);
+    if (!workerFullLedgerData[workerId]) {
+      setLoadingLedgerWorkerId(workerId);
+      try {
+        const res = await getWorkerFullLedgerAction(workerId);
+        setWorkerFullLedgerData(prev => ({ ...prev, [workerId]: res.ledgerEntries || [] }));
+      } catch (err) {
+        console.error('Error fetching worker ledger:', err);
+      } finally {
+        setLoadingLedgerWorkerId(null);
+      }
+    }
+  };
+
+  const handleExecuteCreditSalary = async () => {
+    const targetWorker = creditSalaryWorker || localWorkers.find(w => w.worker_id === creditSalaryWorkerId);
+    if (!targetWorker) {
+      setCreditSalaryError('Please select a worker.');
+      return;
+    }
+    const amt = parseFloat(creditSalaryAmount);
+    if (!amt || amt <= 0) {
+      setCreditSalaryError('Please enter a valid salary amount.');
+      return;
+    }
+    setCreditSalaryLoading(true);
+    setCreditSalaryError('');
+    try {
+      const res = await creditWorkerSalaryAction(
+        targetWorker.worker_id,
+        amt,
+        creditSalaryMonth || undefined,
+        creditSalaryNote || undefined
+      );
+      if (!res.success) {
+        setCreditSalaryError(res.error || 'Failed to credit salary.');
+        return;
+      }
+      setLocalWorkers(prev => prev.map(w => {
+        if (w.worker_id === targetWorker.worker_id) {
+          const newEarned = (w.total_salary_earned || 0) + amt;
+          const newUnpaid = (w.unpaid_salary || 0) + amt;
+          return {
+            ...w,
+            total_salary_earned: newEarned,
+            unpaid_salary: newUnpaid,
+            net_payable: newUnpaid - (w.running_advance || 0),
+          };
+        }
+        return w;
+      }));
+      setWorkerFullLedgerData(prev => {
+        const copy = { ...prev };
+        delete copy[targetWorker.worker_id];
+        return copy;
+      });
+      setShowCreditSalaryModal(false);
+      setCreditSalaryWorker(null);
+      setCreditSalaryWorkerId('');
+      setCreditSalaryAmount('');
+      setCreditSalaryMonth('');
+      setCreditSalaryNote('');
+      alert(`₹${amt.toLocaleString('en-IN')} earned salary credited successfully to ${targetWorker.worker_name}.`);
+    } catch (err: any) {
+      setCreditSalaryError(err.message || 'Error executing salary credit.');
+    } finally {
+      setCreditSalaryLoading(false);
+    }
+  };
+
+  const handleExecuteBatchSalary = async () => {
+    setBatchSalaryLoading(true);
+    setBatchSalaryError('');
+    setBatchSalarySuccess('');
+    try {
+      const factoryId = batchSalaryFactoryId === 'all' ? undefined : batchSalaryFactoryId;
+      const res = await batchCreditMonthlySalariesAction(
+        factoryId,
+        batchSalaryMonth || undefined,
+        batchSalaryNote || undefined
+      );
+      if (!res.success) {
+        setBatchSalaryError(res.error || 'Failed to execute batch monthly credit.');
+        return;
+      }
+      setBatchSalarySuccess(`Successfully credited monthly salaries to ${res.creditedCount} workers (Total: ₹${(res.totalCredited || 0).toLocaleString('en-IN')})!`);
+      setTimeout(() => {
+        window.location.reload();
+      }, 1500);
+    } catch (err: any) {
+      setBatchSalaryError(err.message || 'Error processing batch credit.');
+    } finally {
+      setBatchSalaryLoading(false);
+    }
+  };
+
+  const handleExecuteSettleAdvance = async () => {
+    if (!settleAdvanceWorker) return;
+    const amt = parseFloat(settleAdvanceAmount);
+    if (!amt || amt <= 0) {
+      setSettleAdvanceError('Please enter a valid adjustment amount.');
+      return;
+    }
+    const maxAllowed = Math.min(settleAdvanceWorker.unpaid_salary || 0, settleAdvanceWorker.running_advance || 0);
+    if (amt > maxAllowed) {
+      setSettleAdvanceError(`Amount exceeds allowable deduction limit (₹${maxAllowed.toLocaleString('en-IN')}).`);
+      return;
+    }
+    setSettleAdvanceLoading(true);
+    setSettleAdvanceError('');
+    try {
+      const res = await recoverWorkerAdvanceAction(
+        settleAdvanceWorker.worker_id,
+        amt,
+        settleAdvanceNote || undefined
+      );
+      if (!res.success) {
+        setSettleAdvanceError(res.error || 'Failed to settle advance.');
+        return;
+      }
+      setLocalWorkers(prev => prev.map(w => {
+        if (w.worker_id === settleAdvanceWorker.worker_id) {
+          const newUnpaid = Math.max(0, (w.unpaid_salary || 0) - amt);
+          const newAdvance = Math.max(0, (w.running_advance || 0) - amt);
+          const newRecovered = (w.total_advance_recovered || 0) + amt;
+          return {
+            ...w,
+            unpaid_salary: newUnpaid,
+            running_advance: newAdvance,
+            total_advance_recovered: newRecovered,
+            net_payable: newUnpaid - newAdvance,
+          };
+        }
+        return w;
+      }));
+      setWorkerFullLedgerData(prev => {
+        const copy = { ...prev };
+        delete copy[settleAdvanceWorker.worker_id];
+        return copy;
+      });
+      setShowSettleAdvanceModal(false);
+      setSettleAdvanceWorker(null);
+      setSettleAdvanceAmount('');
+      setSettleAdvanceNote('');
+      alert(`₹${amt.toLocaleString('en-IN')} settled from salary for ${settleAdvanceWorker.worker_name}. No physical cash moved.`);
+    } catch (err: any) {
+      setSettleAdvanceError(err.message || 'Error executing advance settlement.');
+    } finally {
+      setSettleAdvanceLoading(false);
+    }
+  };
+
+  const handleExecuteReclassifyKharcha = async () => {
+    setReclassifyLoading(true);
+    try {
+      const res = await batchReclassifyKharchaAction();
+      if (!res.success) {
+        alert(res.error || 'Failed to reclassify Kharcha disbursements.');
+        return;
+      }
+      setReclassifySuccess({ count: res.convertedCount, totalAmount: res.totalConvertedAmount });
+      setTimeout(() => {
+        window.location.reload();
+      }, 1800);
+    } catch (err: any) {
+      alert(err.message || 'Error executing reclassification.');
+    } finally {
+      setReclassifyLoading(false);
+    }
+  };
 
   // Handle office disbursement submission
   const handleDisbursementSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -678,7 +900,7 @@ export function AdminDashboard({
     }
   };
 
-  const activeWorkers = workers.filter(w => w.active !== false && w.worker_name !== 'Deleted Worker');
+  const activeWorkers = localWorkers.filter(w => w.active !== false && w.worker_name !== 'Deleted Worker');
 
   const workerReports = activeWorkers.map(w => {
     // Total refunded for this worker
@@ -688,6 +910,8 @@ export function AdminDashboard({
 
     const adjustedRunningAdvance = Math.max(0, Number(w.running_advance || 0) - workerRefundedAmt);
     const adjustedTotalDisbursed = Math.max(0, Number(w.total_cash_disbursed || 0) - workerRefundedAmt);
+    const adjustedUnpaidSalary = Math.max(0, Number(w.unpaid_salary || 0));
+    const adjustedNetPayable = adjustedUnpaidSalary - adjustedRunningAdvance;
 
     const allDisbursements = transactions.filter(
       t => t.type === 'supervisor_to_worker' && t.to_worker_id === w.worker_id && t.status === 'confirmed'
@@ -695,11 +919,18 @@ export function AdminDashboard({
     const periodDisbursements = allDisbursements.filter(t => 
       isWithinDateRange(t.created_at, workerFromDate, workerToDate)
     );
-    // Only count non-refunded disbursements in totals
-    const periodAdvance = periodDisbursements
-      .filter(t => !localRefundedMap[t.id])
+    const validPeriodDisbursements = periodDisbursements.filter(t => !localRefundedMap[t.id]);
+    
+    // Split period disbursements
+    const periodSalaryPaid = validPeriodDisbursements
+      .filter(t => (t as any).payment_type === 'salary_payment' || t.note?.includes('[TYPE:salary_payment]'))
       .reduce((sum, t) => sum + Number(t.amount), 0);
-    const periodCount = periodDisbursements.filter(t => !localRefundedMap[t.id]).length;
+    const periodAdvanceGiven = validPeriodDisbursements
+      .filter(t => (t as any).payment_type !== 'salary_payment' && !t.note?.includes('[TYPE:salary_payment]'))
+      .reduce((sum, t) => sum + Number(t.amount), 0);
+    const periodAdvance = validPeriodDisbursements.reduce((sum, t) => sum + Number(t.amount), 0);
+    const periodCount = validPeriodDisbursements.length;
+
     const factoryName = factories.find(f => f.id === w.factory_id)?.name || 'Unknown Factory';
     const supervisorName = supervisors.find(s => s.id === w.supervisor_id)?.name || 'Unknown Supervisor';
     const effectivePhone = localWorkerPhoneOverrides[w.worker_id] !== undefined
@@ -712,8 +943,12 @@ export function AdminDashboard({
         worker_phone: effectivePhone,
         running_advance: adjustedRunningAdvance,
         total_cash_disbursed: adjustedTotalDisbursed,
+        unpaid_salary: adjustedUnpaidSalary,
+        net_payable: adjustedNetPayable,
       },
       periodAdvance,
+      periodSalaryPaid,
+      periodAdvanceGiven,
       periodCount,
       periodDisbursements,
       allDisbursements,
@@ -743,15 +978,26 @@ export function AdminDashboard({
   const workersWithPeriodAdvance = filteredWorkerReports.filter(item => item.periodAdvance > 0).length;
   const totalWorkerPeriodTxCount = filteredWorkerReports.reduce((sum, item) => sum + item.periodCount, 0);
 
+  const totalUnpaidSalaryAll = filteredWorkerReports.reduce((sum, item) => sum + Number(item.worker.unpaid_salary || 0), 0);
+  const totalAdvancesOwedAll = filteredWorkerReports.reduce((sum, item) => sum + Number(item.worker.running_advance || 0), 0);
+  const netWorkerPositionAll = totalUnpaidSalaryAll - totalAdvancesOwedAll;
+
   const exportWorkerAdvancesToCSV = () => {
     const headers = [
       'Worker Name',
       'Phone',
       'Factory',
       'Supervisor',
-      'Advances in Period (Count)',
-      'Advance in Selected Period (INR)',
-      'Total Running Advance (INR)',
+      'Monthly Salary (Wage)',
+      'Total Salary Earned (INR)',
+      'Total Salary Paid (INR)',
+      'Current Unpaid Salary (INR)',
+      'Total Advance Given (INR)',
+      'Advance Recovered (INR)',
+      'Current Advance Owed (INR)',
+      'Net Payable to Worker (INR)',
+      'Period Cash Disbursed (INR)',
+      'Period Disbursements Count',
       'Period From',
       'Period To',
     ];
@@ -760,9 +1006,16 @@ export function AdminDashboard({
       item.worker.worker_phone || 'N/A',
       item.factoryName,
       item.supervisorName,
-      item.periodCount,
+      item.worker.monthly_salary || 0,
+      item.worker.total_salary_earned || 0,
+      item.worker.total_salary_paid || 0,
+      item.worker.unpaid_salary || 0,
+      item.worker.total_advance_given || 0,
+      item.worker.total_advance_recovered || 0,
+      item.worker.running_advance || 0,
+      item.worker.net_payable || 0,
       item.periodAdvance,
-      item.worker.running_advance,
+      item.periodCount,
       workerFromDate || 'All Time',
       workerToDate || 'All Time',
     ]);
@@ -775,7 +1028,7 @@ export function AdminDashboard({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    link.setAttribute('download', `fundflow_worker_advances_${workerFromDate || 'all'}_to_${workerToDate || 'all'}.csv`);
+    link.setAttribute('download', `fundflow_worker_payroll_statement_${workerFromDate || 'all'}_to_${workerToDate || 'all'}.csv`);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
@@ -1142,7 +1395,7 @@ export function AdminDashboard({
         {/* Header */}
         <div 
           onClick={() => setIsWorkerAdvancesCollapsed(!isWorkerAdvancesCollapsed)}
-          className="px-4 sm:px-5 py-3.5 sm:py-4 border-b border-slate-200 bg-slate-50 flex flex-col md:flex-row md:items-center justify-between gap-3 cursor-pointer hover:bg-slate-100/70 transition-colors select-none"
+          className="px-4 sm:px-5 py-3.5 sm:py-4 border-b border-slate-200 bg-slate-50 flex flex-col xl:flex-row xl:items-center justify-between gap-3 cursor-pointer hover:bg-slate-100/70 transition-colors select-none"
         >
           <div className="flex items-center gap-2.5">
             <div className="h-9 w-9 rounded-lg bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-700 shrink-0">
@@ -1151,7 +1404,7 @@ export function AdminDashboard({
             <div>
               <div className="flex items-center gap-2 flex-wrap">
                 <h2 className="text-sm sm:text-base font-bold text-slate-900 tracking-tight">
-                  Worker Advances Statement
+                  Worker Accounts &amp; Payroll Statement
                 </h2>
                 {(workerFromDate || workerToDate) && (
                   <span className="text-[10px] bg-indigo-100 text-indigo-800 font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
@@ -1160,25 +1413,89 @@ export function AdminDashboard({
                 )}
                 {isWorkerAdvancesCollapsed && (
                   <span className="text-[11px] bg-slate-200 text-slate-700 font-semibold px-2 py-0.5 rounded-full">
-                    {filteredWorkerReports.length} workers • {formatINR(filteredWorkerReports.reduce((sum, item) => sum + Number(item.worker.running_advance), 0))} total
+                    {filteredWorkerReports.length} workers • Unpaid: {formatINR(totalUnpaidSalaryAll)} • Advance Owed: {formatINR(totalAdvancesOwedAll)}
                   </span>
                 )}
               </div>
               <p className="text-xs text-slate-500">
                 {isWorkerAdvancesCollapsed 
-                  ? 'Tap to expand statement & filter date ranges' 
-                  : 'Audit cash advances disbursed to every worker across any timeframe'}
+                  ? 'Tap to expand statement, credit wages & settle advances from salary' 
+                  : 'Track earned wages, cash disbursements, accumulated unpaid salary, and advance recoveries'}
               </p>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 self-start md:self-auto" onClick={(e) => e.stopPropagation()}>
+          <div className="flex flex-wrap items-center gap-2 self-start xl:self-auto" onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              onClick={() => {
+                setCreditSalaryWorker(null);
+                setCreditSalaryWorkerId(filteredWorkerReports[0]?.worker.worker_id || '');
+                setCreditSalaryAmount('');
+                setCreditSalaryMonth('');
+                setCreditSalaryNote('');
+                setCreditSalaryError('');
+                setShowCreditSalaryModal(true);
+              }}
+              className="inline-flex items-center gap-1.5 rounded-md border border-purple-600 bg-purple-600 px-3 py-1.5 sm:py-2 text-xs font-bold text-white shadow-xs hover:bg-purple-700 transition-colors min-h-[36px]"
+              title="Credit earned salary/wages to a worker"
+            >
+              <Coins className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+              <span>+ Credit Salary</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setBatchSalaryMonth('');
+                setBatchSalaryNote('');
+                setBatchSalaryError('');
+                setBatchSalarySuccess('');
+                setShowBatchSalaryModal(true);
+              }}
+              className="inline-flex items-center gap-1.5 rounded-md border border-indigo-600 bg-indigo-50 px-3 py-1.5 sm:py-2 text-xs font-bold text-indigo-700 shadow-xs hover:bg-indigo-100 transition-colors min-h-[36px]"
+              title="Accrue monthly wages for all workers in 1-click"
+            >
+              <Building2 className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+              <span>👥 Batch Monthly</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                const candidates = filteredWorkerReports.filter(w => (w.worker.unpaid_salary || 0) > 0 && (w.worker.running_advance || 0) > 0);
+                if (candidates.length === 0) {
+                  alert('No workers currently have both unpaid salary and outstanding advance.');
+                  return;
+                }
+                const first = candidates[0].worker;
+                setSettleAdvanceWorker(first);
+                setSettleAdvanceAmount(String(Math.min(first.unpaid_salary || 0, first.running_advance || 0)));
+                setSettleAdvanceError('');
+                setShowSettleAdvanceModal(true);
+              }}
+              className="inline-flex items-center gap-1.5 rounded-md border border-blue-600 bg-blue-50 px-3 py-1.5 sm:py-2 text-xs font-bold text-blue-700 shadow-xs hover:bg-blue-100 transition-colors min-h-[36px]"
+              title="Deduct advance from accumulated salary with ₹0 cash movement"
+            >
+              <RotateCcw className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+              <span>⇄ Settle Advance</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowReclassifyModal(true)}
+              className="inline-flex items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 sm:py-2 text-xs font-bold text-amber-800 shadow-xs hover:bg-amber-100 transition-colors min-h-[36px]"
+              title="Audit and reclassify legacy Kharcha/weekly advance entries"
+            >
+              <Zap className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-amber-600" />
+              <span>⚡ Fix Kharcha</span>
+            </button>
+
             <Link
               href={workerFactoryId !== 'all' ? `/admin/opening-advances?factory=${workerFactoryId}` : '/admin/opening-advances'}
               className="inline-flex items-center gap-1.5 rounded-md border border-emerald-600 bg-emerald-600 px-3 py-1.5 sm:py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 transition-colors min-h-[36px]"
             >
-              <Coins className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-              <span>Edit Opening Advances</span>
+              <span>Opening Balances</span>
             </Link>
 
             {!isWorkerAdvancesCollapsed && (
@@ -1248,8 +1565,8 @@ export function AdminDashboard({
                     type="button"
                     onClick={() => setWorkerDatePreset('all')}
                     className={`px-3 py-1.5 rounded text-xs font-semibold border transition-colors ${
-                      !workerFromDate && !workerToDate
-                        ? 'bg-slate-900 text-white border-slate-900'
+                      !workerFromDate && !workerToDate 
+                        ? 'bg-slate-900 text-white border-slate-900' 
                         : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
                     }`}
                   >
@@ -1340,41 +1657,57 @@ export function AdminDashboard({
                 </div>
               </div>
 
-              {/* Metric Summary Banner */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+              {/* Metric Summary Banner (4 Cards) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2">
+                <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-lg p-3">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 block">
+                    Accumulated Unpaid Salary
+                  </span>
+                  <span className="text-xl font-black text-emerald-700">
+                    {formatINR(totalUnpaidSalaryAll)}
+                  </span>
+                  <span className="text-[10px] text-emerald-600 block mt-0.5">
+                    Owed by factory across workers
+                  </span>
+                </div>
+
+                <div className="bg-amber-50/60 border border-amber-200/80 rounded-lg p-3">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 block">
+                    Outstanding Advances
+                  </span>
+                  <span className="text-xl font-black text-amber-700">
+                    {formatINR(totalAdvancesOwedAll)}
+                  </span>
+                  <span className="text-[10px] text-amber-600 block mt-0.5">
+                    Owed by workers back to factory
+                  </span>
+                </div>
+
+                <div className={`border rounded-lg p-3 ${
+                  netWorkerPositionAll >= 0 
+                    ? 'bg-blue-50/60 border-blue-200 text-blue-900' 
+                    : 'bg-orange-50/60 border-orange-200 text-orange-900'
+                }`}>
+                  <span className="text-[10px] font-bold uppercase tracking-wider block opacity-80">
+                    Net Worker Position
+                  </span>
+                  <span className="text-xl font-black">
+                    {netWorkerPositionAll >= 0 ? '+' : '-'}{formatINR(Math.abs(netWorkerPositionAll))}
+                  </span>
+                  <span className="text-[10px] block mt-0.5 opacity-75">
+                    {netWorkerPositionAll >= 0 ? 'Factory owes workers net' : 'Workers owe factory net'}
+                  </span>
+                </div>
+
                 <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-3">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
-                    {workerFromDate || workerToDate ? 'Period Advances Total' : 'All-Time Total Disbursed'}
+                    {workerFromDate || workerToDate ? 'Period Cash Disbursed' : 'Total Cash Disbursed'}
                   </span>
-                  <span className="text-lg font-black text-slate-900">
+                  <span className="text-xl font-black text-slate-900">
                     {formatINR(totalWorkerPeriodAdvance)}
                   </span>
                   <span className="text-[10px] text-slate-400 block mt-0.5">
-                    Across {workersWithPeriodAdvance} workers with advances
-                  </span>
-                </div>
-
-                <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-3">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
-                    Advances in Period
-                  </span>
-                  <span className="text-lg font-black text-indigo-700">
-                    {totalWorkerPeriodTxCount}
-                  </span>
-                  <span className="text-[10px] text-slate-400 block mt-0.5">
-                    Disbursements recorded in timeframe
-                  </span>
-                </div>
-
-                <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-3">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
-                    Total Outstanding Balance
-                  </span>
-                  <span className="text-lg font-black text-red-600">
-                    {formatINR(filteredWorkerReports.reduce((sum, item) => sum + Number(item.worker.running_advance), 0))}
-                  </span>
-                  <span className="text-[10px] text-slate-400 block mt-0.5">
-                    Cumulative across {filteredWorkerReports.length} listed workers
+                    {totalWorkerPeriodTxCount} cash transactions in timeframe
                   </span>
                 </div>
               </div>
@@ -1390,22 +1723,29 @@ export function AdminDashboard({
                 {/* Mobile Worker Cards (Zero Horizontal Scroll) */}
                 <div className="md:hidden divide-y divide-slate-100 bg-white">
                   {filteredWorkerReports.map((item) => {
-                    const isExpanded = expandedWorkerId === item.worker.worker_id;
+                    const isLedgerOpen = expandedLedgerWorkerId === item.worker.worker_id;
+                    const ledgerEntries = workerFullLedgerData[item.worker.worker_id] || [];
+                    const isLedgerLoading = loadingLedgerWorkerId === item.worker.worker_id;
 
                     return (
-                      <div key={item.worker.worker_id} className={`p-3.5 space-y-2.5 ${item.periodAdvance > 0 && (workerFromDate || workerToDate) ? 'bg-indigo-50/20' : ''}`}>
+                      <div key={item.worker.worker_id} className="p-3.5 space-y-3">
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex items-center gap-2.5">
-                            <div className="h-9 w-9 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
+                            <div className="h-10 w-10 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
                               {item.worker.worker_photo_url ? (
                                 <img src={item.worker.worker_photo_url} alt="" className="h-full w-full object-cover" />
                               ) : (
-                                <User className="h-4 w-4 text-slate-400" />
+                                <User className="h-5 w-5 text-slate-400" />
                               )}
                             </div>
                             <div>
                               <h4 className="text-xs font-bold text-slate-900">{item.worker.worker_name}</h4>
                               <p className="text-[11px] text-slate-500">{item.factoryName} • {item.supervisorName}</p>
+                              {item.worker.monthly_salary && item.worker.monthly_salary > 0 && (
+                                <span className="text-[10px] text-purple-700 font-semibold bg-purple-50 px-1.5 py-0.2 rounded border border-purple-200 inline-block mt-0.5">
+                                  Wage: {formatINR(item.worker.monthly_salary)}/mo
+                                </span>
+                              )}
                               <div className="flex items-center gap-1.5 mt-0.5">
                                 <p className="text-[10px] text-slate-500 font-medium">
                                   {item.worker.worker_phone || 'No phone'}
@@ -1431,88 +1771,158 @@ export function AdminDashboard({
                           </div>
 
                           <div className="text-right">
-                            <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">All-Time</span>
-                            <span className="text-xs font-black text-slate-900">{formatINR(item.worker.running_advance)}</span>
+                            <span className="text-[9px] uppercase font-bold text-slate-400 block tracking-wider">Net Position</span>
+                            <span className={`text-xs font-black ${
+                              (item.worker.net_payable || 0) >= 0 ? 'text-emerald-700' : 'text-amber-700'
+                            }`}>
+                              {(item.worker.net_payable || 0) >= 0 ? '+' : ''}{formatINR(item.worker.net_payable || 0)}
+                            </span>
+                            <span className="text-[9px] text-slate-400 block">
+                              {(item.worker.net_payable || 0) >= 0 ? 'Payable' : 'Advance Owed'}
+                            </span>
                           </div>
                         </div>
 
-                        <div className="flex items-center justify-between text-xs bg-slate-50 px-2.5 py-1.5 rounded-md border border-slate-100">
-                          <div>
-                            <span className="text-slate-500 text-[11px]">
-                              {workerFromDate || workerToDate ? 'In Period:' : 'Disbursed:'}
-                            </span>
-                            <span className={`ml-1 font-bold ${item.periodAdvance > 0 ? 'text-red-600' : 'text-slate-400'}`}>
-                              {formatINR(item.periodAdvance)}
-                            </span>
+                        {/* 3-stat pill row */}
+                        <div className="grid grid-cols-3 gap-1.5 text-center bg-slate-50 p-2 rounded-lg border border-slate-100">
+                          <div className="bg-white p-1.5 rounded border border-slate-100">
+                            <span className="text-[9px] uppercase font-bold text-slate-400 block">Unpaid Salary</span>
+                            <span className="text-xs font-black text-emerald-700">{formatINR(item.worker.unpaid_salary || 0)}</span>
                           </div>
-                          <div>
-                            <span className="text-slate-500 text-[11px]">Count:</span>
-                            <span className="ml-1 font-semibold text-slate-700">{item.periodCount} tx</span>
+                          <div className="bg-white p-1.5 rounded border border-slate-100">
+                            <span className="text-[9px] uppercase font-bold text-slate-400 block">Advance Owed</span>
+                            <span className="text-xs font-black text-amber-700">{formatINR(item.worker.running_advance || 0)}</span>
                           </div>
+                          <div className="bg-white p-1.5 rounded border border-slate-100">
+                            <span className="text-[9px] uppercase font-bold text-slate-400 block">Cash Given</span>
+                            <span className="text-xs font-bold text-slate-700">{formatINR(item.periodAdvance)}</span>
+                          </div>
+                        </div>
+
+                        {/* Actions Row */}
+                        <div className="flex items-center gap-1.5 pt-0.5">
                           <button
                             type="button"
-                            onClick={() => setExpandedWorkerId(isExpanded ? null : item.worker.worker_id)}
-                            className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-0.5"
+                            onClick={() => {
+                              setCreditSalaryWorker(item.worker);
+                              setCreditSalaryWorkerId(item.worker.worker_id);
+                              setCreditSalaryAmount(item.worker.monthly_salary ? String(item.worker.monthly_salary) : '');
+                              setCreditSalaryMonth('');
+                              setCreditSalaryNote('');
+                              setCreditSalaryError('');
+                              setShowCreditSalaryModal(true);
+                            }}
+                            className="flex-1 py-1.5 px-2 rounded bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-700 text-xs font-bold flex items-center justify-center gap-1 min-h-[34px]"
                           >
-                            <span>{isExpanded ? 'Hide' : 'History'}</span>
-                            {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                            <Coins className="h-3 w-3" />
+                            <span>+ Salary</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={(item.worker.unpaid_salary || 0) <= 0 || (item.worker.running_advance || 0) <= 0}
+                            onClick={() => {
+                              setSettleAdvanceWorker(item.worker);
+                              const maxSettle = Math.min(item.worker.unpaid_salary || 0, item.worker.running_advance || 0);
+                              setSettleAdvanceAmount(String(maxSettle));
+                              setSettleAdvanceNote('');
+                              setSettleAdvanceError('');
+                              setShowSettleAdvanceModal(true);
+                            }}
+                            className="flex-1 py-1.5 px-2 rounded bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 text-xs font-bold flex items-center justify-center gap-1 min-h-[34px] disabled:opacity-40"
+                          >
+                            <RotateCcw className="h-3 w-3" />
+                            <span>⇄ Settle</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => toggleWorkerFullLedger(item.worker.worker_id)}
+                            className="py-1.5 px-2.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1 min-h-[34px]"
+                          >
+                            <span>{isLedgerOpen ? 'Close' : 'Statement'}</span>
+                            {isLedgerOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
                           </button>
                         </div>
 
-                        {/* Expanded Itemized Disbursement List on Mobile */}
-                        {isExpanded && (
-                          <div className="p-2.5 bg-indigo-50/50 rounded-lg border border-indigo-100 text-xs space-y-2">
+                        {/* Full Itemized Chronological Ledger Drawer on Mobile */}
+                        {isLedgerOpen && (
+                          <div className="p-3 bg-slate-50/80 rounded-lg border border-slate-200 text-xs space-y-2">
                             <div className="flex justify-between items-center text-[11px] font-bold text-slate-800">
-                              <span>Disbursements:</span>
-                              <span className="text-red-600">{formatINR(item.periodAdvance)}</span>
+                              <span>Full Ledger Statement</span>
+                              <span className="text-slate-500 font-normal">All chronological records</span>
                             </div>
-                            {item.periodDisbursements.length === 0 ? (
-                              <p className="text-slate-500 text-[11px] py-1 text-center bg-white rounded border border-slate-100">
-                                No disbursements in this period.
+
+                            {isLedgerLoading ? (
+                              <div className="py-4 text-center">
+                                <RefreshCw className="h-4 w-4 animate-spin text-slate-400 mx-auto" />
+                                <span className="text-slate-400 text-[10px] mt-1 block">Loading statement...</span>
+                              </div>
+                            ) : ledgerEntries.length === 0 ? (
+                              <p className="text-slate-500 text-[11px] py-2 text-center bg-white rounded border border-slate-200">
+                                No statement records logged for this worker.
                               </p>
                             ) : (
-                              <div className="space-y-1.5">
-                                {item.periodDisbursements.map((tx: any) => {
-                                  const parsed = parseHandoverNote(tx.note);
-                                  const isRefunded = !!localRefundedMap[tx.id];
-                                  const supName = tx.from?.name || supervisors.find(s => s.id === tx.from_supervisor_id)?.name || 'Supervisor';
-
+                              <div className="space-y-2">
+                                {ledgerEntries.map((entry) => {
+                                  const isRefunded = !!localRefundedMap[entry.id];
                                   return (
-                                    <div key={tx.id} className={`p-2.5 bg-white rounded border space-y-1.5 text-[11px] ${isRefunded ? 'border-amber-200 bg-amber-50/40' : 'border-slate-100'}`}>
+                                    <div key={entry.id} className={`p-2.5 bg-white rounded border space-y-1 text-[11px] ${
+                                      entry.type === 'salary_earned' ? 'border-purple-200 bg-purple-50/20' :
+                                      entry.type === 'advance_recovery' ? 'border-blue-200 bg-blue-50/20' :
+                                      entry.type === 'salary_payment' ? 'border-emerald-200 bg-emerald-50/20' :
+                                      'border-slate-200'
+                                    }`}>
                                       <div className="flex justify-between items-center">
                                         <div className="flex items-center gap-1.5 flex-wrap">
-                                          <span className={`font-extrabold ${isRefunded ? 'line-through text-slate-400' : 'text-slate-900'}`}>{formatINR(tx.amount)}</span>
+                                          <span className={`font-black ${isRefunded ? 'line-through text-slate-400' : 'text-slate-900'}`}>
+                                            {formatINR(entry.amount)}
+                                          </span>
+                                          <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold uppercase tracking-wider ${
+                                            entry.type === 'salary_earned' ? 'bg-purple-100 text-purple-800' :
+                                            entry.type === 'advance_recovery' ? 'bg-blue-100 text-blue-800' :
+                                            entry.type === 'salary_payment' ? 'bg-emerald-100 text-emerald-800' :
+                                            'bg-amber-100 text-amber-800'
+                                          }`}>
+                                            {entry.label}
+                                          </span>
+                                          {!entry.isCash && (
+                                            <span className="text-[8px] bg-slate-100 text-slate-600 px-1 py-0.2 rounded font-semibold">
+                                              No Cash Outflow
+                                            </span>
+                                          )}
                                           {isRefunded && (
-                                            <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-300">
+                                            <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase bg-amber-100 text-amber-800 border border-amber-300">
                                               Refunded
                                             </span>
                                           )}
                                         </div>
                                         <span className="text-[10px] text-slate-400">
-                                          {new Date(tx.created_at).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}
+                                          {new Date(entry.date).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}
                                         </span>
                                       </div>
-                                      <div className="flex justify-between items-center text-[10px] text-slate-500">
-                                        <span>By {supName}</span>
+
+                                      <div className="flex justify-between items-center text-[10px] text-slate-500 pt-0.5">
+                                        <span>By {entry.supervisorName || 'Supervisor'}</span>
                                         <div className="flex items-center gap-2">
-                                          {parsed.photoUrl && (
+                                          {entry.photoUrl && (
                                             <button
                                               type="button"
-                                              onClick={() => setAdminViewingPhotoUrl(parsed.photoUrl)}
+                                              onClick={() => setAdminViewingPhotoUrl(entry.photoUrl || null)}
                                               className="text-emerald-700 font-semibold underline flex items-center gap-0.5"
                                             >
                                               <Camera className="h-2.5 w-2.5" />
                                               <span>Photo</span>
                                             </button>
                                           )}
-                                          {!isRefunded && (
+                                          {entry.isCash && !isRefunded && (
                                             <button
                                               type="button"
                                               onClick={() => setRefundTargetTx({
-                                                id: tx.id,
-                                                amount: Number(tx.amount),
+                                                id: entry.id,
+                                                amount: Number(entry.amount),
                                                 workerName: item.worker.worker_name,
-                                                supervisorName: supName,
+                                                supervisorName: entry.supervisorName || 'Supervisor',
                                               })}
                                               className="text-red-600 hover:text-red-800 font-bold flex items-center gap-0.5 bg-red-50 hover:bg-red-100 px-1.5 py-0.5 rounded border border-red-200 transition-colors"
                                               title="Refund money back to supervisor balance"
@@ -1523,9 +1933,14 @@ export function AdminDashboard({
                                           )}
                                         </div>
                                       </div>
-                                      {parsed.note && (
-                                        <p className="text-[10px] text-slate-600 italic">"{parsed.note}"</p>
+                                      {entry.note && (
+                                        <p className="text-[10px] text-slate-600 italic">"{entry.note}"</p>
                                       )}
+                                      <div className="flex justify-between items-center pt-1 border-t border-slate-100 text-[9px] text-slate-400 font-medium">
+                                        <span>Running Unpaid: {formatINR(entry.runningUnpaidSalary || 0)}</span>
+                                        <span>Advance Owed: {formatINR(entry.runningAdvance || 0)}</span>
+                                        <span className="font-bold text-slate-600">Net: {formatINR(entry.runningNetPayable || 0)}</span>
+                                      </div>
                                     </div>
                                   );
                                 })}
@@ -1540,38 +1955,43 @@ export function AdminDashboard({
 
                 {/* Desktop Table View */}
                 <div className="hidden md:block overflow-x-auto">
-                  <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
-                    <thead className="bg-slate-50 text-slate-700 font-semibold text-xs uppercase tracking-wider">
+                  <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-700 font-semibold uppercase tracking-wider">
                       <tr>
-                        <th className="px-5 py-3">Worker</th>
-                        <th className="px-5 py-3">Factory / Supervisor</th>
-                        <th className="px-5 py-3 text-right">
-                          {workerFromDate || workerToDate ? 'Advance in Period' : 'Advance Disbursed'}
-                        </th>
-                        <th className="px-5 py-3 text-center">Advances Count</th>
-                        <th className="px-5 py-3 text-right">All-Time Outstanding</th>
-                        <th className="px-5 py-3 text-center">Action</th>
+                        <th className="px-4 py-3">Worker</th>
+                        <th className="px-4 py-3">Factory / Sup</th>
+                        <th className="px-3 py-3 text-right">Monthly Wage</th>
+                        <th className="px-3 py-3 text-right">Salary Earned</th>
+                        <th className="px-3 py-3 text-right">Salary Paid</th>
+                        <th className="px-3 py-3 text-right">Unpaid Salary</th>
+                        <th className="px-3 py-3 text-right">Advance Given</th>
+                        <th className="px-3 py-3 text-right">Advance Settled</th>
+                        <th className="px-3 py-3 text-right">Advance Owed</th>
+                        <th className="px-4 py-3 text-right">Net Payable</th>
+                        <th className="px-4 py-3 text-center">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 bg-white">
                       {filteredWorkerReports.map((item) => {
-                        const isExpanded = expandedWorkerId === item.worker.worker_id;
+                        const isLedgerOpen = expandedLedgerWorkerId === item.worker.worker_id;
+                        const ledgerEntries = workerFullLedgerData[item.worker.worker_id] || [];
+                        const isLedgerLoading = loadingLedgerWorkerId === item.worker.worker_id;
 
                         return (
                           <React.Fragment key={item.worker.worker_id}>
-                            <tr className={`hover:bg-slate-50/80 transition-colors ${item.periodAdvance > 0 && (workerFromDate || workerToDate) ? 'bg-indigo-50/20' : ''}`}>
-                              <td className="px-5 py-3.5">
-                                <div className="flex items-center gap-3">
-                                  <div className="h-9 w-9 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
+                            <tr className="hover:bg-slate-50/80 transition-colors">
+                              <td className="px-4 py-3">
+                                <div className="flex items-center gap-2.5">
+                                  <div className="h-8 w-8 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
                                     {item.worker.worker_photo_url ? (
-                                      <img src={item.worker.worker_photo_url} alt={item.worker.worker_name} loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                                      <img src={item.worker.worker_photo_url} alt="" className="h-full w-full object-cover" />
                                     ) : (
                                       <User className="h-4 w-4 text-slate-400" />
                                     )}
                                   </div>
                                   <div>
                                     <div className="font-bold text-slate-900">{item.worker.worker_name}</div>
-                                    <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                                    <div className="flex items-center gap-1 text-[11px] text-slate-500">
                                       <span>{item.worker.worker_phone || 'No phone'}</span>
                                       <button
                                         type="button"
@@ -1584,159 +2004,227 @@ export function AdminDashboard({
                                           setPhoneEditInput(item.worker.worker_phone || '');
                                           setPhoneEditError('');
                                         }}
-                                        className="inline-flex items-center text-slate-400 hover:text-indigo-600 transition-colors p-0.5 rounded hover:bg-slate-100"
+                                        className="text-slate-400 hover:text-indigo-600 transition-colors p-0.5 rounded"
                                         title="Edit Worker Phone (Admin)"
                                       >
-                                        <Edit2 className="h-3 w-3" />
+                                        <Edit2 className="h-2.5 w-2.5" />
                                       </button>
                                     </div>
                                   </div>
                                 </div>
                               </td>
 
-                              <td className="px-5 py-3.5">
+                              <td className="px-4 py-3">
                                 <div>
-                                  <div className="font-semibold text-slate-800 text-xs">{item.factoryName}</div>
-                                  <div className="text-[11px] text-slate-500">{item.supervisorName}</div>
+                                  <div className="font-semibold text-slate-800">{item.factoryName}</div>
+                                  <div className="text-[10px] text-slate-500">{item.supervisorName}</div>
                                 </div>
                               </td>
 
-                              <td className="px-5 py-3.5 text-right font-bold">
-                                {item.periodAdvance > 0 ? (
-                                  <span className="text-red-600 bg-red-50 border border-red-200/60 px-2 py-0.5 rounded text-xs font-black">
-                                    {formatINR(item.periodAdvance)}
-                                  </span>
-                                ) : (
-                                  <span className="text-slate-400 text-xs font-normal">₹0</span>
-                                )}
+                              <td className="px-3 py-3 text-right font-medium text-slate-600">
+                                {item.worker.monthly_salary ? formatINR(item.worker.monthly_salary) : '-'}
                               </td>
 
-                              <td className="px-5 py-3.5 text-center">
-                                {item.periodCount > 0 ? (
-                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                                    {item.periodCount} payment{item.periodCount > 1 ? 's' : ''}
-                                  </span>
-                                ) : (
-                                  <span className="text-slate-400 text-xs">-</span>
-                                )}
+                              <td className="px-3 py-3 text-right font-semibold text-purple-700">
+                                {formatINR(item.worker.total_salary_earned || 0)}
                               </td>
 
-                              <td className="px-5 py-3.5 text-right font-black text-slate-900 text-xs">
-                                {formatINR(item.worker.running_advance)}
+                              <td className="px-3 py-3 text-right font-medium text-slate-700">
+                                {formatINR(item.worker.total_salary_paid || 0)}
                               </td>
 
-                              <td className="px-5 py-3.5 text-center">
-                                <button
-                                  type="button"
-                                  onClick={() => setExpandedWorkerId(isExpanded ? null : item.worker.worker_id)}
-                                  className="inline-flex items-center gap-1 rounded border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100 transition-colors"
-                                >
-                                  <span>{isExpanded ? 'Hide' : 'Details'}</span>
-                                  {isExpanded ? (
-                                    <ChevronUp className="h-3.5 w-3.5" />
-                                  ) : (
-                                    <ChevronDown className="h-3.5 w-3.5" />
-                                  )}
-                                </button>
+                              <td className="px-3 py-3 text-right font-black">
+                                <span className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded border border-emerald-200">
+                                  {formatINR(item.worker.unpaid_salary || 0)}
+                                </span>
+                              </td>
+
+                              <td className="px-3 py-3 text-right font-medium text-slate-700">
+                                {formatINR(item.worker.total_advance_given || 0)}
+                              </td>
+
+                              <td className="px-3 py-3 text-right font-medium text-blue-700">
+                                {formatINR(item.worker.total_advance_recovered || 0)}
+                              </td>
+
+                              <td className="px-3 py-3 text-right font-black">
+                                <span className="bg-amber-50 text-amber-700 px-2 py-0.5 rounded border border-amber-200">
+                                  {formatINR(item.worker.running_advance || 0)}
+                                </span>
+                              </td>
+
+                              <td className="px-4 py-3 text-right">
+                                <span className={`text-xs font-black px-2 py-1 rounded ${
+                                  (item.worker.net_payable || 0) >= 0 
+                                    ? 'bg-slate-900 text-white' 
+                                    : 'bg-red-100 text-red-800 border border-red-300'
+                                }`}>
+                                  {(item.worker.net_payable || 0) >= 0 ? '+' : ''}{formatINR(item.worker.net_payable || 0)}
+                                </span>
+                              </td>
+
+                              <td className="px-4 py-3 text-center">
+                                <div className="flex items-center justify-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setCreditSalaryWorker(item.worker);
+                                      setCreditSalaryWorkerId(item.worker.worker_id);
+                                      setCreditSalaryAmount(item.worker.monthly_salary ? String(item.worker.monthly_salary) : '');
+                                      setCreditSalaryMonth('');
+                                      setCreditSalaryNote('');
+                                      setCreditSalaryError('');
+                                      setShowCreditSalaryModal(true);
+                                    }}
+                                    className="p-1 rounded bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200"
+                                    title="Credit Earned Salary"
+                                  >
+                                    <Coins className="h-3.5 w-3.5" />
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    disabled={(item.worker.unpaid_salary || 0) <= 0 || (item.worker.running_advance || 0) <= 0}
+                                    onClick={() => {
+                                      setSettleAdvanceWorker(item.worker);
+                                      const maxSettle = Math.min(item.worker.unpaid_salary || 0, item.worker.running_advance || 0);
+                                      setSettleAdvanceAmount(String(maxSettle));
+                                      setSettleAdvanceNote('');
+                                      setSettleAdvanceError('');
+                                      setShowSettleAdvanceModal(true);
+                                    }}
+                                    className="p-1 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 disabled:opacity-30"
+                                    title="Settle Advance from Salary"
+                                  >
+                                    <RotateCcw className="h-3.5 w-3.5" />
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleWorkerFullLedger(item.worker.worker_id)}
+                                    className="px-2 py-1 rounded border border-slate-200 text-slate-600 hover:bg-slate-100 flex items-center gap-1 font-semibold text-[11px]"
+                                  >
+                                    <span>{isLedgerOpen ? 'Hide' : 'Ledger'}</span>
+                                    {isLedgerOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                                  </button>
+                                </div>
                               </td>
                             </tr>
 
-                            {/* Expanded Itemized Disbursement List */}
-                            {isExpanded && (
+                            {/* Full Chronological Ledger Drawer */}
+                            {isLedgerOpen && (
                               <tr>
-                                <td colSpan={6} className="bg-slate-50/70 p-4 border-t border-b border-slate-200">
+                                <td colSpan={11} className="bg-slate-50/80 p-4 border-t border-b border-slate-200">
                                   <div className="space-y-3">
                                     <div className="flex justify-between items-center">
                                       <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
                                         <Clock className="h-3.5 w-3.5 text-slate-500" />
-                                        <span>
-                                          Disbursements to {item.worker.worker_name}
-                                          {(workerFromDate || workerToDate) ? ` (${workerFromDate || 'Start'} to ${workerToDate || 'Today'})` : ' (All-Time)'}
-                                        </span>
+                                        <span>Complete Chronological Statement • {item.worker.worker_name}</span>
                                       </h4>
-                                      <span className="text-xs font-bold text-slate-600">
-                                        Total in period: <strong className="text-red-600">{formatINR(item.periodAdvance)}</strong> ({item.periodDisbursements.length} payments)
+                                      <span className="text-xs font-semibold text-slate-600">
+                                        Unpaid: <strong className="text-emerald-700">{formatINR(item.worker.unpaid_salary || 0)}</strong> • Advance Owed: <strong className="text-amber-700">{formatINR(item.worker.running_advance || 0)}</strong> • Net Payable: <strong className="text-slate-900">{formatINR(item.worker.net_payable || 0)}</strong>
                                       </span>
                                     </div>
 
-                                    {item.periodDisbursements.length === 0 ? (
+                                    {isLedgerLoading ? (
+                                      <div className="py-6 text-center bg-white rounded border border-slate-200">
+                                        <RefreshCw className="h-4 w-4 animate-spin text-slate-400 mx-auto" />
+                                        <span className="text-xs text-slate-500 mt-1 block">Loading statement ledger...</span>
+                                      </div>
+                                    ) : ledgerEntries.length === 0 ? (
                                       <p className="text-xs text-slate-500 py-3 text-center bg-white rounded border border-slate-200">
-                                        No disbursements recorded for this worker within the selected timeframe.
+                                        No financial entries found for this worker.
                                       </p>
                                     ) : (
                                       <div className="divide-y divide-slate-100 rounded-md border border-slate-200 bg-white overflow-hidden shadow-sm">
-                                        {item.periodDisbursements.map((tx) => {
-                                          const isRefunded = !!localRefundedMap[tx.id];
-                                          const supName = tx.from?.name || supervisors.find(s => s.id === tx.from_supervisor_id)?.name || 'Supervisor';
+                                        <div className="grid grid-cols-12 gap-2 px-3 py-2 bg-slate-100 text-[10px] font-bold text-slate-600 uppercase tracking-wider">
+                                          <div className="col-span-2">Date</div>
+                                          <div className="col-span-3">Type &amp; Purpose</div>
+                                          <div className="col-span-2 text-right">Amount</div>
+                                          <div className="col-span-2">Recorded By</div>
+                                          <div className="col-span-2 text-right">Running Net</div>
+                                          <div className="col-span-1 text-center">Action</div>
+                                        </div>
+
+                                        {ledgerEntries.map((entry) => {
+                                          const isRefunded = !!localRefundedMap[entry.id];
                                           return (
-                                            <div key={tx.id} className={`p-3 text-xs flex justify-between items-center hover:bg-slate-50 ${isRefunded ? 'bg-amber-50/20' : ''}`}>
-                                              <div>
-                                                <div className="flex items-center gap-2">
-                                                  <span className={`font-extrabold text-sm ${isRefunded ? 'line-through text-slate-400' : 'text-slate-900'}`}>
-                                                    {formatINR(tx.amount)}
+                                            <div key={entry.id} className={`grid grid-cols-12 gap-2 px-3 py-2.5 items-center text-xs hover:bg-slate-50 transition-colors ${
+                                              entry.type === 'salary_earned' ? 'bg-purple-50/10' :
+                                              entry.type === 'advance_recovery' ? 'bg-blue-50/10' :
+                                              entry.type === 'salary_payment' ? 'bg-emerald-50/10' :
+                                              ''
+                                            }`}>
+                                              <div className="col-span-2 text-[11px] text-slate-600">
+                                                {new Date(entry.date).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}
+                                              </div>
+
+                                              <div className="col-span-3 space-y-0.5">
+                                                <div className="flex items-center gap-1.5 flex-wrap">
+                                                  <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold uppercase tracking-wider ${
+                                                    entry.type === 'salary_earned' ? 'bg-purple-100 text-purple-800' :
+                                                    entry.type === 'advance_recovery' ? 'bg-blue-100 text-blue-800' :
+                                                    entry.type === 'salary_payment' ? 'bg-emerald-100 text-emerald-800' :
+                                                    'bg-amber-100 text-amber-800'
+                                                  }`}>
+                                                    {entry.label}
                                                   </span>
+                                                  {!entry.isCash && (
+                                                    <span className="text-[8px] bg-slate-100 text-slate-500 px-1 py-0.2 rounded">
+                                                      ₹0 Cash
+                                                    </span>
+                                                  )}
                                                   {isRefunded && (
-                                                    <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
-                                                      REFUNDED
+                                                    <span className="px-1.5 py-0.2 rounded text-[8px] font-black uppercase bg-amber-100 text-amber-800 border border-amber-300">
+                                                      Refunded
                                                     </span>
                                                   )}
                                                 </div>
-                                                <div className="text-[10px] text-slate-500 mt-0.5">
-                                                  {new Date(tx.created_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
-                                                </div>
-                                                {tx.note && (() => {
-                                                  const parsed = parseHandoverNote(tx.note);
-                                                  return (
-                                                    <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                                                      {parsed.note && (
-                                                        <div className="text-[11px] text-slate-600 italic bg-slate-50 border border-slate-100 rounded px-1.5 py-0.5 w-fit">
-                                                          "{parsed.note}"
-                                                        </div>
-                                                      )}
-                                                      {parsed.photoUrl && (
-                                                        <button
-                                                          type="button"
-                                                          onClick={() => setAdminViewingPhotoUrl(parsed.photoUrl)}
-                                                          className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-1.5 py-0.5 rounded cursor-pointer transition-colors"
-                                                          title="View Cash Handover Proof"
-                                                        >
-                                                          <Camera className="h-3 w-3" />
-                                                          <span>Handover Photo</span>
-                                                        </button>
-                                                      )}
-                                                    </div>
-                                                  );
-                                                })()}
-                                              </div>
-                                              <div className="text-right flex flex-col items-end gap-1.5">
-                                                {isRefunded ? (
-                                                  <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded">
-                                                    Refunded to {supName}
-                                                  </span>
-                                                ) : (
-                                                  <div className="flex items-center gap-2">
-                                                    <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                                      {tx.status.toUpperCase()}
-                                                    </span>
-                                                    <button
-                                                      type="button"
-                                                      onClick={() => setRefundTargetTx({
-                                                        id: tx.id,
-                                                        amount: Number(tx.amount),
-                                                        workerName: item.worker.worker_name,
-                                                        supervisorName: supName,
-                                                      })}
-                                                      className="text-red-600 hover:text-red-800 font-bold text-xs flex items-center gap-1 bg-red-50 hover:bg-red-100 px-2 py-1 rounded border border-red-200 transition-colors shadow-2xs"
-                                                      title="Refund advance back to supervisor account"
-                                                    >
-                                                      <RotateCcw className="h-3 w-3" />
-                                                      <span>Refund / Delete</span>
-                                                    </button>
-                                                  </div>
+                                                {entry.note && (
+                                                  <p className="text-[10px] text-slate-500 italic truncate max-w-xs">"{entry.note}"</p>
                                                 )}
-                                                <span className="text-[10px] text-slate-500 block">
-                                                  Disbursed by {supName}
+                                              </div>
+
+                                              <div className="col-span-2 text-right">
+                                                <span className={`font-black text-xs ${isRefunded ? 'line-through text-slate-400' : 'text-slate-900'}`}>
+                                                  {formatINR(entry.amount)}
                                                 </span>
+                                              </div>
+
+                                              <div className="col-span-2 text-[11px] text-slate-600 truncate">
+                                                {entry.supervisorName || 'Supervisor'}
+                                              </div>
+
+                                              <div className="col-span-2 text-right text-[11px] font-bold text-slate-700">
+                                                {formatINR(entry.runningNetPayable || 0)}
+                                              </div>
+
+                                              <div className="col-span-1 text-center flex items-center justify-center gap-1">
+                                                {entry.photoUrl && (
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => setAdminViewingPhotoUrl(entry.photoUrl || null)}
+                                                    className="text-emerald-700 hover:text-emerald-800 p-1"
+                                                    title="View Handover Photo"
+                                                  >
+                                                    <Camera className="h-3.5 w-3.5" />
+                                                  </button>
+                                                )}
+                                                {entry.isCash && !isRefunded && (
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => setRefundTargetTx({
+                                                      id: entry.id,
+                                                      amount: Number(entry.amount),
+                                                      workerName: item.worker.worker_name,
+                                                      supervisorName: entry.supervisorName || 'Supervisor',
+                                                    })}
+                                                    className="text-red-600 hover:text-red-800 p-1"
+                                                    title="Refund transaction"
+                                                  >
+                                                    <RotateCcw className="h-3.5 w-3.5" />
+                                                  </button>
+                                                )}
                                               </div>
                                             </div>
                                           );
@@ -2284,6 +2772,460 @@ export function AdminDashboard({
                   <span>Save Phone</span>
                 )}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Credit Salary Modal */}
+      {showCreditSalaryModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="h-8 w-8 rounded-full bg-purple-100 flex items-center justify-center text-purple-700">
+                  <Coins className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900">
+                    Credit Earned Salary
+                  </h3>
+                  <span className="text-[10px] text-slate-500">Accrue wages • ₹0 physical cash movement</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setShowCreditSalaryModal(false); setCreditSalaryWorker(null); setCreditSalaryError(''); }}
+                className="text-slate-400 hover:text-slate-600 p-1"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Worker Selector if not preselected */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                Select Worker
+              </label>
+              {creditSalaryWorker ? (
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs space-y-1">
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-500 font-medium">Worker:</span>
+                    <span className="font-bold text-slate-900">{creditSalaryWorker.worker_name}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-500 font-medium">Current Unpaid:</span>
+                    <span className="font-bold text-emerald-700">{formatINR(creditSalaryWorker.unpaid_salary || 0)}</span>
+                  </div>
+                  {creditSalaryWorker.monthly_salary && (
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-500 font-medium">Monthly Wage:</span>
+                      <span className="font-bold text-purple-700">{formatINR(creditSalaryWorker.monthly_salary)}</span>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <select
+                  value={creditSalaryWorkerId}
+                  onChange={(e) => {
+                    setCreditSalaryWorkerId(e.target.value);
+                    const w = localWorkers.find(x => x.worker_id === e.target.value);
+                    if (w && w.monthly_salary) {
+                      setCreditSalaryAmount(String(w.monthly_salary));
+                    }
+                  }}
+                  className="block w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 text-xs min-h-[40px] bg-white"
+                >
+                  <option value="">-- Choose Worker --</option>
+                  {localWorkers.filter(w => w.active !== false).map(w => (
+                    <option key={w.worker_id} value={w.worker_id}>
+                      {w.worker_name} (Unpaid: {formatINR(w.unpaid_salary || 0)})
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+
+            {creditSalaryError && (
+              <div className="rounded-lg bg-red-50 p-2.5 text-xs text-red-700 border border-red-200">
+                {creditSalaryError}
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <div>
+                <label htmlFor="adminCreditSalaryAmount" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                  Salary / Wage Amount (INR) <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 text-sm font-bold pointer-events-none">₹</span>
+                  <input
+                    id="adminCreditSalaryAmount"
+                    type="number"
+                    min="1"
+                    disabled={creditSalaryLoading}
+                    value={creditSalaryAmount}
+                    onChange={(e) => setCreditSalaryAmount(e.target.value)}
+                    placeholder="e.g. 20000"
+                    className="block w-full rounded-lg border border-slate-300 pl-8 pr-3 py-2 text-slate-950 text-sm font-bold focus:ring-2 focus:ring-purple-600 min-h-[44px]"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="adminCreditSalaryMonth" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                  Period / Month (Optional)
+                </label>
+                <input
+                  id="adminCreditSalaryMonth"
+                  type="text"
+                  disabled={creditSalaryLoading}
+                  value={creditSalaryMonth}
+                  onChange={(e) => setCreditSalaryMonth(e.target.value)}
+                  placeholder="e.g. October 2026"
+                  className="block w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-950 text-xs min-h-[40px]"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="adminCreditSalaryNote" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                  Notes / Remarks (Optional)
+                </label>
+                <input
+                  id="adminCreditSalaryNote"
+                  type="text"
+                  disabled={creditSalaryLoading}
+                  value={creditSalaryNote}
+                  onChange={(e) => setCreditSalaryNote(e.target.value)}
+                  placeholder="e.g. Monthly wage accrual"
+                  className="block w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-950 text-xs min-h-[40px]"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                disabled={creditSalaryLoading}
+                onClick={() => { setShowCreditSalaryModal(false); setCreditSalaryWorker(null); setCreditSalaryError(''); }}
+                className="flex-1 py-2 px-3 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 min-h-[40px]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={creditSalaryLoading || !creditSalaryAmount || parseFloat(creditSalaryAmount) <= 0}
+                onClick={handleExecuteCreditSalary}
+                className="flex-1 py-2 px-3 rounded-lg bg-purple-700 hover:bg-purple-800 text-white text-xs font-bold min-h-[40px] flex items-center justify-center gap-1.5 shadow-sm disabled:opacity-50"
+              >
+                {creditSalaryLoading ? (
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <span>Credit Salary</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Batch Monthly Salary Accrual Modal */}
+      {showBatchSalaryModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="h-8 w-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700">
+                  <Building2 className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900">
+                    Batch Credit Monthly Wages
+                  </h3>
+                  <span className="text-[10px] text-slate-500">Accrues fixed monthly wage for all active workers</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setShowBatchSalaryModal(false); setBatchSalaryError(''); setBatchSalarySuccess(''); }}
+                className="text-slate-400 hover:text-slate-600 p-1"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {batchSalarySuccess && (
+              <div className="rounded-lg bg-emerald-50 p-2.5 text-xs text-emerald-800 border border-emerald-200">
+                {batchSalarySuccess}
+              </div>
+            )}
+
+            {batchSalaryError && (
+              <div className="rounded-lg bg-red-50 p-2.5 text-xs text-red-700 border border-red-200">
+                {batchSalaryError}
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                  Target Factory
+                </label>
+                <select
+                  value={batchSalaryFactoryId}
+                  onChange={(e) => setBatchSalaryFactoryId(e.target.value)}
+                  className="block w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 text-xs min-h-[40px] bg-white"
+                >
+                  <option value="all">All Factories (All Workers with Monthly Wage)</option>
+                  {factories.map(f => (
+                    <option key={f.id} value={f.id}>{f.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label htmlFor="batchSalaryMonth" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                  Payroll Month / Period
+                </label>
+                <input
+                  id="batchSalaryMonth"
+                  type="text"
+                  disabled={batchSalaryLoading}
+                  value={batchSalaryMonth}
+                  onChange={(e) => setBatchSalaryMonth(e.target.value)}
+                  placeholder="e.g. October 2026"
+                  className="block w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-950 text-xs min-h-[40px]"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="batchSalaryNote" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                  Remarks / Note
+                </label>
+                <input
+                  id="batchSalaryNote"
+                  type="text"
+                  disabled={batchSalaryLoading}
+                  value={batchSalaryNote}
+                  onChange={(e) => setBatchSalaryNote(e.target.value)}
+                  placeholder="e.g. Regular monthly wages accrual"
+                  className="block w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-950 text-xs min-h-[40px]"
+                />
+              </div>
+            </div>
+
+            <p className="text-[10px] text-slate-500 bg-slate-50 p-2 rounded border border-slate-100">
+              Only workers who have a registered monthly wage rate (&gt; ₹0) will receive an accrual. Workers with ₹0 rate will be skipped safely.
+            </p>
+
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                disabled={batchSalaryLoading}
+                onClick={() => { setShowBatchSalaryModal(false); setBatchSalaryError(''); }}
+                className="flex-1 py-2 px-3 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 min-h-[40px]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={batchSalaryLoading}
+                onClick={handleExecuteBatchSalary}
+                className="flex-1 py-2 px-3 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold min-h-[40px] flex items-center justify-center gap-1.5 shadow-sm disabled:opacity-50"
+              >
+                {batchSalaryLoading ? (
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <span>Run Accrual</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Settle Advance from Salary Modal */}
+      {showSettleAdvanceModal && settleAdvanceWorker && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="h-8 w-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-700">
+                  <Coins className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900">
+                    Settle Advance from Salary
+                  </h3>
+                  <span className="text-[10px] text-slate-500">Internal adjustment • ₹0 physical cash movement</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setShowSettleAdvanceModal(false); setSettleAdvanceWorker(null); setSettleAdvanceError(''); }}
+                className="text-slate-400 hover:text-slate-600 p-1"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-100 rounded-lg p-3 text-xs space-y-1.5">
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Worker:</span>
+                <span className="font-bold text-slate-900">{settleAdvanceWorker.worker_name}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Accumulated Unpaid Salary:</span>
+                <span className="font-bold text-emerald-700">{formatINR(settleAdvanceWorker.unpaid_salary || 0)}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Outstanding Advance Owed:</span>
+                <span className="font-bold text-amber-700">{formatINR(settleAdvanceWorker.running_advance || 0)}</span>
+              </div>
+            </div>
+
+            {settleAdvanceError && (
+              <div className="rounded-lg bg-red-50 p-2.5 text-xs text-red-700 border border-red-200">
+                {settleAdvanceError}
+              </div>
+            )}
+
+            <div>
+              <label htmlFor="adminSettleAmount" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                Amount to Deduct from Salary (INR) <span className="text-red-500">*</span>
+              </label>
+              <div className="relative">
+                <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 text-sm font-bold pointer-events-none">₹</span>
+                <input
+                  id="adminSettleAmount"
+                  type="number"
+                  min="1"
+                  max={Math.min(settleAdvanceWorker.unpaid_salary || 0, settleAdvanceWorker.running_advance || 0)}
+                  disabled={settleAdvanceLoading}
+                  value={settleAdvanceAmount}
+                  onChange={(e) => setSettleAdvanceAmount(e.target.value)}
+                  placeholder="0"
+                  className="block w-full rounded-lg border border-slate-300 pl-8 pr-3 py-2 text-slate-950 text-sm font-bold focus:ring-2 focus:ring-blue-600 min-h-[44px]"
+                />
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">
+                Max allowable deduction: {formatINR(Math.min(settleAdvanceWorker.unpaid_salary || 0, settleAdvanceWorker.running_advance || 0))}
+              </p>
+            </div>
+
+            <div>
+              <label htmlFor="adminSettleNote" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                Note / Remarks (Optional)
+              </label>
+              <input
+                id="adminSettleNote"
+                type="text"
+                disabled={settleAdvanceLoading}
+                value={settleAdvanceNote}
+                onChange={(e) => setSettleAdvanceNote(e.target.value)}
+                placeholder="e.g. Salary advance recovery deduction"
+                className="block w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-950 text-xs min-h-[40px]"
+              />
+            </div>
+
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                disabled={settleAdvanceLoading}
+                onClick={() => { setShowSettleAdvanceModal(false); setSettleAdvanceWorker(null); setSettleAdvanceError(''); }}
+                className="flex-1 py-2 px-3 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 min-h-[40px]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={settleAdvanceLoading || !settleAdvanceAmount || parseFloat(settleAdvanceAmount) <= 0}
+                onClick={handleExecuteSettleAdvance}
+                className="flex-1 py-2 px-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold min-h-[40px] flex items-center justify-center gap-1.5 shadow-sm disabled:opacity-50"
+              >
+                {settleAdvanceLoading ? (
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <span>Settle Advance</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reclassify Kharcha Modal */}
+      {showReclassifyModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="h-8 w-8 rounded-full bg-amber-100 flex items-center justify-center text-amber-700">
+                  <Zap className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900">
+                    Fix Legacy Kharcha Records
+                  </h3>
+                  <span className="text-[10px] text-slate-500">1-Click Historical Reclassification</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setShowReclassifyModal(false); setReclassifySuccess(null); }}
+                className="text-slate-400 hover:text-slate-600 p-1"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {reclassifySuccess ? (
+              <div className="rounded-lg bg-emerald-50 p-3 text-xs text-emerald-800 border border-emerald-200 space-y-1">
+                <div className="flex items-center gap-1.5 font-bold">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                  <span>Reclassification Complete!</span>
+                </div>
+                <p>Converted {reclassifySuccess.count} disbursements (Total: {formatINR(reclassifySuccess.totalAmount)}) from advances to salary payments.</p>
+              </div>
+            ) : (
+              <div className="space-y-3 text-xs text-slate-600">
+                <p>
+                  In the past, regular weekly wages or living allowances entered with notes like <strong>"Kharcha"</strong>, <strong>"Hafta"</strong>, or <strong>"Weekly"</strong> were mistakenly recorded as worker advances.
+                </p>
+                <div className="bg-amber-50 p-3 rounded-lg border border-amber-200 space-y-1 text-amber-900 text-[11px]">
+                  <p className="font-bold">What this tool does:</p>
+                  <ul className="list-disc pl-4 space-y-0.5">
+                    <li>Finds all past transactions with wage keywords.</li>
+                    <li>Reclassifies them as <strong>Salary Payments</strong> instead of Advances.</li>
+                    <li>Instantly removes the artificial advance debt from workers.</li>
+                  </ul>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                disabled={reclassifyLoading}
+                onClick={() => { setShowReclassifyModal(false); setReclassifySuccess(null); }}
+                className="flex-1 py-2 px-3 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 min-h-[40px]"
+              >
+                Close
+              </button>
+              {!reclassifySuccess && (
+                <button
+                  type="button"
+                  disabled={reclassifyLoading}
+                  onClick={handleExecuteReclassifyKharcha}
+                  className="flex-1 py-2 px-3 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold min-h-[40px] flex items-center justify-center gap-1.5 shadow-sm"
+                >
+                  {reclassifyLoading ? (
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <span>Convert Now</span>
+                  )}
+                </button>
+              )}
             </div>
           </div>
         </div>

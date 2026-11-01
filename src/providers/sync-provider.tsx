@@ -91,16 +91,22 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
 
         switch (item.type) {
           case 'disburse_to_worker': {
-            const { p_worker_id, p_supervisor_id, p_amount, p_note } = item.payload;
-            const { error } = await supabase.rpc('disburse_to_worker', {
+            const { p_worker_id, p_supervisor_id, p_amount, p_note, payment_type } = item.payload;
+            const { data, error } = await supabase.rpc('disburse_to_worker', {
               p_worker_id,
               p_supervisor_id,
               p_amount,
               p_note,
               p_created_by: user?.id,
             });
-            if (!error) success = true;
-            else errorMessage = error.message;
+            if (!error) {
+              success = true;
+              if (data && payment_type) {
+                await supabase.from('cash_transactions').update({ payment_type }).eq('id', data).catch(() => {});
+              }
+            } else {
+              errorMessage = error.message;
+            }
             break;
           }
           case 'transfer_to_supervisor': {

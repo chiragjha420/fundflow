@@ -40,7 +40,8 @@ import {
   ArrowUpRight,
   ArrowDownLeft,
   RotateCcw,
-  Building2
+  Building2,
+  Coins
 } from 'lucide-react';
 import { sendWorkerDisbursementSms } from '@/lib/sms';
 import { createCashRequest } from '@/app/actions/cash-requests';
@@ -50,7 +51,7 @@ import { NotificationBanner } from '@/components/notification-banner';
 import { compressImage } from '@/lib/image-compressor';
 import { CameraCaptureModal } from '@/components/camera-capture-modal';
 import { uploadHandoverPhotoAction, uploadWorkerPhotoAction, uploadExpensePhotoAction } from '@/app/actions/upload-actions';
-import { getFactoryWorkersAction, getSupervisorAllTransactionsAction } from '@/app/actions/workers';
+import { getFactoryWorkersAction, getSupervisorAllTransactionsAction, recoverWorkerAdvanceAction } from '@/app/actions/workers';
 import { getFactoryExpensesAction, FactoryExpense } from '@/app/actions/expenses';
 
 interface Worker {
@@ -63,6 +64,12 @@ interface Worker {
   opening_advance: number;
   total_cash_disbursed?: number;
   running_advance: number;
+  unpaid_salary?: number;
+  total_salary_earned?: number;
+  total_salary_paid?: number;
+  net_payable?: number;
+  total_advance_given?: number;
+  total_advance_recovered?: number;
   active: boolean;
 }
 
@@ -122,13 +129,24 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     amount: number;
     note: string;
     overridePhone?: string;
+    paymentType?: 'advance' | 'salary_payment';
   } | null>(null);
   const [viewingPhotoUrl, setViewingPhotoUrl] = useState<string | null>(null);
   const [viewingPhotoTitle, setViewingPhotoTitle] = useState<string>('Proof of Handover');
 
+  // Disburse Payment Type (Advance vs Salary Payment)
+  const [disbursePaymentType, setDisbursePaymentType] = useState<'advance' | 'salary_payment'>('salary_payment');
+
+  // Settle Advance from Salary Modal States
+  const [showSettleModal, setShowSettleModal] = useState<boolean>(false);
+  const [settleWorker, setSettleWorker] = useState<Worker | null>(null);
+  const [settleAmount, setSettleAmount] = useState<string>('');
+  const [settleLoading, setSettleLoading] = useState<boolean>(false);
+  const [settleError, setSettleError] = useState<string>('');
+
   // Unified Transaction History States (All Transactions: Advances, Transfers, Expenses, Refunds)
   const [historySearchQuery, setHistorySearchQuery] = useState<string>('');
-  const [historyTypeFilter, setHistoryTypeFilter] = useState<'all' | 'advances' | 'transfers' | 'expenses' | 'refunds'>('all');
+  const [historyTypeFilter, setHistoryTypeFilter] = useState<'all' | 'salary' | 'advances' | 'transfers' | 'expenses' | 'refunds'>('all');
   const [historySupervisorFilter, setHistorySupervisorFilter] = useState<'all' | 'my'>('all');
   const [isHistoryExpanded, setIsHistoryExpanded] = useState<boolean>(false);
 
@@ -567,7 +585,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
     const list: Array<{
       id: string;
-      kind: 'expense' | 'advance' | 'transfer_sent' | 'transfer_received' | 'office_cash' | 'advance_refund';
+      kind: 'expense' | 'advance' | 'salary_payment' | 'transfer_sent' | 'transfer_received' | 'office_cash' | 'advance_refund' | 'advance_recovery' | 'salary_earned';
       direction: 'inflow' | 'outflow';
       amount: number;
       title: string;
@@ -616,31 +634,36 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
     // 2. Map all transactions from activeAllTxs
     (activeAllTxs?.transactions || []).forEach((tx: any) => {
-      // (a) Worker Advance (supervisor_to_worker)
+      // (a) Worker Cash Disbursal (Advance vs Salary Payment)
       if (tx.type === 'supervisor_to_worker') {
         const { note: cleanNote, photoUrl } = parseHandoverNote(tx.note);
         const workerName = tx.to_work?.name || 'Worker';
         const supName = tx.from?.name || getSupervisorDisplayName(tx.from_supervisor_id);
         const isRefunded = refundedSet.has(tx.id);
+        const isSalary = tx.worker_payment_type === 'salary_payment';
 
         list.push({
-          id: `adv-${tx.id}`,
-          kind: 'advance',
+          id: `${isSalary ? 'sal' : 'adv'}-${tx.id}`,
+          kind: isSalary ? 'salary_payment' : 'advance',
           direction: 'outflow',
           amount: Number(tx.amount || 0),
           isRefunded,
           title: workerName,
           subtitle: isRefunded 
             ? 'Refunded by Admin (money credited back)' 
-            : (cleanNote || 'Cash Advance'),
-          categoryKey: isRefunded ? 'refund' : 'advance',
-          categoryLabel: isRefunded ? 'Advance Refunded' : 'Worker Advance',
+            : (cleanNote || (isSalary ? 'Salary Payment / Kharcha' : 'Cash Advance')),
+          categoryKey: isRefunded ? 'refund' : (isSalary ? 'salary' : 'advance'),
+          categoryLabel: isRefunded 
+            ? 'Advance Refunded' 
+            : (isSalary ? 'Salary Payment' : 'Worker Advance'),
           badgeClass: isRefunded 
             ? 'bg-amber-100 text-amber-800 border-amber-300' 
-            : 'bg-emerald-50 text-emerald-800 border-emerald-200',
+            : isSalary 
+              ? 'bg-emerald-50 text-emerald-800 border-emerald-200' 
+              : 'bg-amber-50 text-amber-900 border-amber-200',
           badgeIcon: isRefunded 
             ? <RotateCcw className="h-3 w-3 text-amber-700" />
-            : <HandCoins className="h-3 w-3 text-emerald-600" />,
+            : <HandCoins className={`h-3 w-3 ${isSalary ? 'text-emerald-600' : 'text-amber-600'}`} />,
           note: cleanNote || '',
           photoUrl: photoUrl || null,
           photoTitle: `Handover Proof: ${workerName}`,
@@ -649,6 +672,36 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           supervisorId: tx.from_supervisor_id,
           supervisorName: supName,
           isOwn: tx.from_supervisor_id === supervisorId,
+        });
+      }
+
+      // (b) Non-Cash Salary Ledger Events (Salary Earned / Advance Recovery)
+      if (tx.type === 'salary_ledger_entry') {
+        const isEarned = tx.worker_payment_type === 'salary_earned';
+        const targetWorker = activeWorkers.find(w => w.worker_id === tx.to_worker_id);
+        const workerName = targetWorker?.worker_name || 'Worker';
+
+        list.push({
+          id: `ledger-${tx.id}`,
+          kind: isEarned ? 'salary_earned' : 'advance_recovery',
+          direction: 'inflow',
+          amount: Number(tx.amount || 0),
+          title: workerName,
+          subtitle: tx.note || (isEarned ? 'Salary Accrued' : 'Advance Settled from Salary'),
+          categoryKey: isEarned ? 'salary' : 'recovery',
+          categoryLabel: isEarned ? 'Salary Earned' : 'Advance Recovered',
+          badgeClass: isEarned 
+            ? 'bg-purple-50 text-purple-800 border-purple-200' 
+            : 'bg-blue-50 text-blue-800 border-blue-200',
+          badgeIcon: isEarned ? <Coins className="h-3 w-3 text-purple-600" /> : <RotateCcw className="h-3 w-3 text-blue-600" />,
+          note: tx.note || '',
+          photoUrl: null,
+          photoTitle: '',
+          photoButtonLabel: '',
+          created_at: tx.created_at,
+          supervisorId: '',
+          supervisorName: 'Factory Ledger',
+          isOwn: false,
         });
       }
       // (b) Supervisor Transfer (Sent by this supervisor)
@@ -804,7 +857,10 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       if (historySupervisorFilter === 'my' && !tx.isOwn) {
         return false;
       }
-      if (historyTypeFilter === 'advances' && tx.kind !== 'advance') {
+      if (historyTypeFilter === 'salary' && tx.kind !== 'salary_payment' && tx.kind !== 'salary_earned') {
+        return false;
+      }
+      if (historyTypeFilter === 'advances' && tx.kind !== 'advance' && tx.kind !== 'advance_recovery') {
         return false;
       }
       if (historyTypeFilter === 'transfers' && tx.kind !== 'transfer_sent' && tx.kind !== 'transfer_received') {
@@ -926,6 +982,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const handleHandoverCapture = async (file: File | null) => {
     if (!pendingDisburse) return;
     const { targetWorker, amount, note, overridePhone } = pendingDisburse;
+    const activePaymentType = pendingDisburse.paymentType || disbursePaymentType;
     
     // 1. Immediately close modal, unblock UI, and reset form inputs (0ms)
     setShowHandoverModal(false);
@@ -943,19 +1000,37 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       return old;
     });
 
-    // 4. OPTIMISTIC CACHE UPDATE: Update worker running advance
+    // 4. OPTIMISTIC CACHE UPDATE: Update worker running advance or unpaid salary
     queryClient.setQueryData(['workers', factoryId], (old: Worker[] | undefined) => {
       if (!old) return old;
-      return old.map(w => w.worker_id === targetWorker.worker_id ? {
-        ...w,
-        running_advance: Number(w.running_advance) + amount,
-        total_cash_disbursed: (Number(w.total_cash_disbursed) || 0) + amount,
-      } : w);
+      return old.map(w => {
+        if (w.worker_id !== targetWorker.worker_id) return w;
+        if (activePaymentType === 'salary_payment') {
+          const newUnpaid = Math.max(0, (w.unpaid_salary || 0) - amount);
+          return {
+            ...w,
+            unpaid_salary: newUnpaid,
+            total_salary_paid: (w.total_salary_paid || 0) + amount,
+            net_payable: newUnpaid - (w.running_advance || 0),
+            total_cash_disbursed: (Number(w.total_cash_disbursed) || 0) + amount,
+          };
+        } else {
+          const newAdv = Number(w.running_advance) + amount;
+          return {
+            ...w,
+            running_advance: newAdv,
+            total_advance_given: (w.total_advance_given || 0) + amount,
+            net_payable: (w.unpaid_salary || 0) - newAdv,
+            total_cash_disbursed: (Number(w.total_cash_disbursed) || 0) + amount,
+          };
+        }
+      });
     });
 
     // 5. OPTIMISTIC CACHE UPDATE: Prepend to recent disbursements
     const tempTxId = `temp-${Date.now()}`;
-    const cleanNoteBase = note?.trim() || 'Cash Advance';
+    const defaultLabel = activePaymentType === 'salary_payment' ? 'Salary Payment' : 'Cash Advance';
+    const cleanNoteBase = note?.trim() || defaultLabel;
     queryClient.setQueryData(['recent-disbursements', factoryId], (old: any[] | undefined) => {
       const optimisticTx = {
         id: tempTxId,
@@ -971,7 +1046,8 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
     // 6. INSTANT AUDIO & TOAST CONFIRMATION (0ms)
     playAlertSound('cash_in');
-    showToast('success', `₹${amount.toLocaleString('en-IN')} paid to ${targetWorker.worker_name}!`);
+    const paymentLabel = activePaymentType === 'salary_payment' ? 'Salary payment' : 'Advance';
+    showToast('success', `₹${amount.toLocaleString('en-IN')} ${paymentLabel} paid to ${targetWorker.worker_name}!`);
 
     // 7. ASYNCHRONOUS BACKGROUND WORK (Photo Upload + RPC + SMS + Silent Invalidation)
     (async () => {
@@ -993,7 +1069,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         }
 
         // Background Ledger RPC
-        await disburseToWorkerAction(targetWorker.worker_id, supervisorId!, amount, finalNote);
+        await disburseToWorkerAction(targetWorker.worker_id, supervisorId!, amount, finalNote, activePaymentType);
 
         // Background Free SMS Dispatch (Fire-and-forget)
         const phoneToUse = overridePhone || targetWorker.worker_phone;
@@ -1006,6 +1082,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
             supervisorName: supervisor?.name,
             factoryName: (supervisor?.factories as any)?.name,
             note: cleanNoteOnly,
+            paymentType: activePaymentType,
           }).then((smsRes) => {
             if (smsRes.sentViaGateway) {
               showToast('success', `Free SMS receipt sent to ${targetWorker.worker_name}!`);
@@ -1034,6 +1111,55 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         queryClient.invalidateQueries({ queryKey: ['recent-disbursements', factoryId] });
       }
     })();
+  };
+
+  const handleExecuteSettleAdvance = async () => {
+    if (!settleWorker || !factoryId) return;
+    const amountNum = parseFloat(settleAmount);
+    if (isNaN(amountNum) || amountNum <= 0) {
+      setSettleError('Please enter a valid amount.');
+      return;
+    }
+    setSettleLoading(true);
+    setSettleError('');
+    try {
+      const res = await recoverWorkerAdvanceAction(
+        settleWorker.worker_id,
+        factoryId,
+        amountNum,
+        `Advance settled from ${settleWorker.worker_name} salary`
+      );
+      if (!res.success) {
+        setSettleError(res.error || 'Failed to settle advance.');
+        return;
+      }
+
+      queryClient.setQueryData(['workers', factoryId], (old: Worker[] | undefined) => {
+        if (!old) return old;
+        return old.map(w => {
+          if (w.worker_id !== settleWorker.worker_id) return w;
+          const newAdv = Math.max(0, (w.running_advance || 0) - amountNum);
+          const newSal = Math.max(0, (w.unpaid_salary || 0) - amountNum);
+          return {
+            ...w,
+            running_advance: newAdv,
+            unpaid_salary: newSal,
+            total_advance_recovered: (w.total_advance_recovered || 0) + amountNum,
+            net_payable: newSal - newAdv,
+          };
+        });
+      });
+
+      showToast('success', `₹${amountNum.toLocaleString('en-IN')} advance successfully settled from ${settleWorker.worker_name}'s salary!`);
+      setShowSettleModal(false);
+      setSettleWorker(null);
+      setSettleAmount('');
+      queryClient.invalidateQueries();
+    } catch (err: any) {
+      setSettleError(err.message || 'Failed to settle advance.');
+    } finally {
+      setSettleLoading(false);
+    }
   };
 
   // Handler for Missing Phone Modal (Save phone & disburse, or skip)
@@ -1076,6 +1202,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           amount: phoneModalDisburseDetails.amount,
           note: phoneModalDisburseDetails.note,
           overridePhone: savedPhone,
+          paymentType: disbursePaymentType,
         });
         setShowHandoverModal(true);
         setDisburseAmount('');
@@ -1142,6 +1269,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           targetWorker,
           amount,
           note,
+          paymentType: disbursePaymentType,
         });
         setShowHandoverModal(true);
         setActionLoading(false);
@@ -1818,6 +1946,11 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                                 onClick={() => {
                                   setSelectedWorkerId(w.worker_id);
                                   setWorkerSearchTerm('');
+                                  if ((w.unpaid_salary || 0) > 0) {
+                                    setDisbursePaymentType('salary_payment');
+                                  } else {
+                                    setDisbursePaymentType('advance');
+                                  }
                                 }}
                                 className="w-full p-2.5 text-left flex items-center justify-between hover:bg-slate-50 active:bg-slate-100 transition-colors"
                               >
@@ -1831,15 +1964,16 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                                   </div>
                                   <div>
                                     <p className="text-xs font-bold text-slate-900">{w.worker_name}</p>
-                                    {w.worker_phone && (
-                                      <p className="text-[11px] text-slate-500">
-                                        {w.worker_phone}
-                                      </p>
-                                    )}
+                                    <div className="flex items-center gap-1.5 text-[10px]">
+                                      {(w.unpaid_salary || 0) > 0 && (
+                                        <span className="text-emerald-700 font-semibold">Sal: {formatINR(w.unpaid_salary || 0)}</span>
+                                      )}
+                                      <span className="text-red-600 font-semibold">Adv: {formatINR(w.running_advance)}</span>
+                                    </div>
                                   </div>
                                 </div>
-                                <span className="text-xs font-bold text-red-600">
-                                  {formatINR(w.running_advance)} adv
+                                <span className="text-xs font-bold text-slate-600">
+                                  Select →
                                 </span>
                               </button>
                             ))
@@ -1848,31 +1982,106 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                       )}
                     </div>
                   ) : (
-                    /* Selected Worker Card */
-                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-between">
-                      <div className="flex items-center gap-2.5">
-                        <div className="h-9 w-9 rounded-full bg-white border border-slate-200 overflow-hidden flex items-center justify-center shrink-0">
-                          {selectedWorker?.worker_photo_url ? (
-                            <img src={selectedWorker.worker_photo_url} alt="" className="h-full w-full object-cover" />
-                          ) : (
-                            <User className="h-5 w-5 text-slate-400" />
-                          )}
+                    /* Selected Worker Card with Balances & Payment Type Selector */
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <div className="h-9 w-9 rounded-full bg-white border border-slate-200 overflow-hidden flex items-center justify-center shrink-0">
+                            {selectedWorker?.worker_photo_url ? (
+                              <img src={selectedWorker.worker_photo_url} alt="" className="h-full w-full object-cover" />
+                            ) : (
+                              <User className="h-5 w-5 text-slate-400" />
+                            )}
+                          </div>
+                          <div>
+                            <p className="text-sm font-bold text-slate-900">{selectedWorker?.worker_name}</p>
+                            <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                              <span className={`text-[11px] font-bold px-2 py-0.5 rounded border ${
+                                (selectedWorker?.unpaid_salary || 0) > 0
+                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                  : 'bg-white text-slate-500 border-slate-200'
+                              }`}>
+                                Unpaid Salary: {formatINR(selectedWorker?.unpaid_salary || 0)}
+                              </span>
+                              <span className={`text-[11px] font-bold px-2 py-0.5 rounded border ${
+                                (selectedWorker?.running_advance || 0) > 0
+                                  ? 'bg-amber-50 text-amber-900 border-amber-200'
+                                  : 'bg-white text-slate-500 border-slate-200'
+                              }`}>
+                                Advance Owed: {formatINR(selectedWorker?.running_advance || 0)}
+                              </span>
+                            </div>
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-sm font-bold text-slate-900">{selectedWorker?.worker_name}</p>
-                          <p className="text-xs text-slate-500">
-                            Current Advance: <span className="font-bold text-red-600">{formatINR(selectedWorker?.running_advance || 0)}</span>
-                            {selectedWorker?.worker_phone && <span className="ml-1.5 text-emerald-600 font-semibold">✓ SMS Active</span>}
-                          </p>
+                        <button
+                          type="button"
+                          onClick={() => { setSelectedWorkerId(''); setWorkerSearchTerm(''); }}
+                          className="px-2.5 py-1 text-xs font-bold text-slate-600 bg-white border border-slate-200 rounded hover:bg-slate-100 transition-colors"
+                        >
+                          Change
+                        </button>
+                      </div>
+
+                      {/* Payment Type 2-Button Toggle */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1">
+                          Payment Classification
+                        </label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setDisbursePaymentType('salary_payment')}
+                            className={`py-2 px-3 rounded-lg border text-xs font-bold transition-all text-left flex flex-col ${
+                              disbursePaymentType === 'salary_payment'
+                                ? 'bg-emerald-600 text-white border-emerald-700 shadow-sm'
+                                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                            }`}
+                          >
+                            <span className="flex items-center gap-1.5">
+                              <span>💵</span>
+                              <span>Salary Payment</span>
+                            </span>
+                            <span className={`text-[10px] font-normal mt-0.5 ${disbursePaymentType === 'salary_payment' ? 'text-emerald-100' : 'text-slate-400'}`}>
+                              Wages / Kharcha withdrawal
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setDisbursePaymentType('advance')}
+                            className={`py-2 px-3 rounded-lg border text-xs font-bold transition-all text-left flex flex-col ${
+                              disbursePaymentType === 'advance'
+                                ? 'bg-slate-900 text-white border-slate-950 shadow-sm'
+                                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                            }`}
+                          >
+                            <span className="flex items-center gap-1.5">
+                              <span>💸</span>
+                              <span>Cash Advance</span>
+                            </span>
+                            <span className={`text-[10px] font-normal mt-0.5 ${disbursePaymentType === 'advance' ? 'text-slate-300' : 'text-slate-400'}`}>
+                              Advance on future salary
+                            </span>
+                          </button>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => { setSelectedWorkerId(''); setWorkerSearchTerm(''); }}
-                        className="px-2.5 py-1 text-xs font-bold text-slate-600 bg-white border border-slate-200 rounded hover:bg-slate-100 transition-colors"
-                      >
-                        Change
-                      </button>
+
+                      {/* 1-Tap Advance Settle Shortcut (if worker has both unpaid salary and advance) */}
+                      {Boolean(selectedWorker && (selectedWorker.unpaid_salary || 0) > 0 && (selectedWorker.running_advance || 0) > 0) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!selectedWorker) return;
+                            setSettleWorker(selectedWorker);
+                            const maxSettle = Math.min(selectedWorker.unpaid_salary || 0, selectedWorker.running_advance || 0);
+                            setSettleAmount(String(maxSettle));
+                            setShowSettleModal(true);
+                          }}
+                          className="w-full py-1.5 px-2.5 rounded bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-900 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                        >
+                          <span>⇄ Settle Advance from Salary (No Cash Outflow)</span>
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -2146,7 +2355,10 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
               {actionLoading ? (
                 <RefreshCw className="h-4 w-4 animate-spin" />
               ) : activeTab === 'disburse' ? (
-                <span>Disburse {disburseAmount ? formatINR(Number(disburseAmount)) : 'Cash'}</span>
+                <span>
+                  {disbursePaymentType === 'salary_payment' ? 'Pay Salary ' : 'Disburse Advance '}
+                  {disburseAmount ? formatINR(Number(disburseAmount)) : ''}
+                </span>
               ) : (
                 <span>Submit Entry</span>
               )}
@@ -2221,11 +2433,12 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
             />
           </div>
 
-          {/* Type Filter Pills: All, Worker Advances, Transfers, Cash Expenses, Refunds */}
+          {/* Type Filter Pills: All, Salary Payments, Advances, Transfers, Expenses, Refunds */}
           <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
             {[
               { id: 'all', label: `All (${combinedTransactions.length})` },
-              { id: 'advances', label: `Advances (${combinedTransactions.filter(t => t.kind === 'advance').length})` },
+              { id: 'salary', label: `Salary (${combinedTransactions.filter(t => t.kind === 'salary_payment' || t.kind === 'salary_earned').length})` },
+              { id: 'advances', label: `Advances (${combinedTransactions.filter(t => t.kind === 'advance' || t.kind === 'advance_recovery').length})` },
               { id: 'transfers', label: `Transfers (${combinedTransactions.filter(t => t.kind === 'transfer_sent' || t.kind === 'transfer_received').length})` },
               { id: 'expenses', label: `Expenses (${combinedTransactions.filter(t => t.kind === 'expense').length})` },
               { id: 'refunds', label: `Refunds (${combinedTransactions.filter(t => t.kind === 'advance_refund' || t.isRefunded).length})` },
@@ -2633,6 +2846,100 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                 className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold rounded-lg"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Settle Advance from Salary Modal */}
+      {showSettleModal && settleWorker && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="h-8 w-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-700">
+                  <Coins className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900">
+                    Settle Advance from Salary
+                  </h3>
+                  <span className="text-[10px] text-slate-500">Internal adjustment • ₹0 cash moves</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setShowSettleModal(false); setSettleWorker(null); setSettleError(''); }}
+                className="text-slate-400 hover:text-slate-600 p-1"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-100 rounded-lg p-3 text-xs space-y-1.5">
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Worker:</span>
+                <span className="font-bold text-slate-900">{settleWorker.worker_name}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Unpaid Salary Balance:</span>
+                <span className="font-bold text-emerald-700">{formatINR(settleWorker.unpaid_salary || 0)}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Outstanding Advance Owed:</span>
+                <span className="font-bold text-amber-700">{formatINR(settleWorker.running_advance || 0)}</span>
+              </div>
+            </div>
+
+            {settleError && (
+              <div className="rounded-lg bg-red-50 p-2.5 text-xs text-red-700 border border-red-200">
+                {settleError}
+              </div>
+            )}
+
+            <div>
+              <label htmlFor="settleAmount" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                Amount to Deduct from Salary (INR)
+              </label>
+              <div className="relative">
+                <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 text-sm font-bold pointer-events-none">₹</span>
+                <input
+                  id="settleAmount"
+                  type="number"
+                  min="1"
+                  max={Math.min(settleWorker.unpaid_salary || 0, settleWorker.running_advance || 0)}
+                  disabled={settleLoading}
+                  value={settleAmount}
+                  onChange={(e) => setSettleAmount(e.target.value)}
+                  placeholder="0"
+                  className="block w-full rounded-lg border border-slate-300 pl-8 pr-3 py-2 text-slate-950 text-sm font-bold focus:ring-2 focus:ring-blue-600 min-h-[44px]"
+                />
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">
+                Max available: {formatINR(Math.min(settleWorker.unpaid_salary || 0, settleWorker.running_advance || 0))}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                disabled={settleLoading}
+                onClick={() => { setShowSettleModal(false); setSettleWorker(null); setSettleError(''); }}
+                className="flex-1 py-2 px-3 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 min-h-[40px]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={settleLoading || !settleAmount || parseFloat(settleAmount) <= 0}
+                onClick={handleExecuteSettleAdvance}
+                className="flex-1 py-2 px-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold min-h-[40px] flex items-center justify-center gap-1.5 shadow-sm disabled:opacity-50"
+              >
+                {settleLoading ? (
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <span>Settle Advance</span>
+                )}
               </button>
             </div>
           </div>

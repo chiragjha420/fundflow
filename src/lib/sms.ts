@@ -23,6 +23,7 @@ export interface WorkerSmsPayload {
   supervisorName?: string;
   factoryName?: string;
   note?: string;
+  paymentType?: 'advance' | 'salary_payment';
 }
 
 /**
@@ -108,7 +109,8 @@ export async function sendWorkerDisbursementSms(payload: WorkerSmsPayload): Prom
     });
 
     const senderIdentifier = payload.factoryName || payload.supervisorName || 'JBB FundFlow';
-    const messageText = `Received ₹${payload.amount.toLocaleString('en-IN')} on ${today} from ${senderIdentifier}.`;
+    const paymentLabel = payload.paymentType === 'salary_payment' ? 'Salary Payment' : 'Cash Advance';
+    const messageText = `Received ₹${payload.amount.toLocaleString('en-IN')} (${paymentLabel}) on ${today} from ${senderIdentifier}.`;
 
     // 1. Check if Free Android SIM Gateway is configured (Primary & Fallback)
     const gatewayUrl = process.env.SMS_GATEWAY_URL?.trim() || DEFAULT_GATEWAY_URL;

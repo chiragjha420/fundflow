@@ -1,7 +1,7 @@
 import React from 'react';
 import { createServerClient } from '@/lib/supabase/server-client';
 import { createAdminClient } from '@/lib/supabase/admin-client';
-import { getSupervisorAllTransactionsAction } from '@/app/actions/workers';
+import { getSupervisorAllTransactionsAction, getAllWorkersWithSalaryBalancesAction } from '@/app/actions/workers';
 import { SupervisorClientPage } from './supervisor-client';
 
 export const revalidate = 0; // Live real-time dashboard data on navigation
@@ -32,13 +32,9 @@ export default async function SupervisorDashboardPage() {
       if (sup) {
         initialSupervisor = sup;
 
-        // 2. Fetch Workers (via Admin to unify co-supervisors), Pending Receipts, Other Supervisors, Expenses, and All Transactions
-        const [workersRes, pendingRes, otherSupsRes, expensesRes, allTxsRes] = await Promise.all([
-          adminSupabase
-            .from('worker_balances')
-            .select('*')
-            .eq('factory_id', sup.factory_id)
-            .eq('active', true),
+        // 2. Fetch Workers (with live salary & advance balances), Pending Receipts, Other Supervisors, Expenses, and All Transactions
+        const [workersData, pendingRes, otherSupsRes, expensesRes, allTxsRes] = await Promise.all([
+          getAllWorkersWithSalaryBalancesAction(sup.factory_id),
           supabase
             .from('cash_transactions')
             .select('id, type, amount, note, created_at, from:from_supervisor_id(name)')
@@ -57,7 +53,7 @@ export default async function SupervisorDashboardPage() {
           getSupervisorAllTransactionsAction(sup.id, sup.factory_id),
         ]);
 
-        initialWorkers = (workersRes.data || []).filter((w: any) => w.active && w.worker_name !== 'Deleted Worker');
+        initialWorkers = (workersData || []).filter((w: any) => w.active && w.worker_name !== 'Deleted Worker');
         initialPendingTxs = pendingRes.data || [];
         initialOtherSupervisors = otherSupsRes.data || [];
         initialExpenses = expensesRes.data || [];

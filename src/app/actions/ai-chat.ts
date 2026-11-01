@@ -253,9 +253,14 @@ Your mission is to answer ANY questions about the factory database in clear, pre
    - Supervisors disburse advances/wages to Workers ('supervisor_to_worker').
    - Supervisors can transfer cash to peer supervisors ('supervisor_to_supervisor').
    - Supervisors pay for factory operational expenses ('expenses' table: materials, transport, maintenance, other).
-2. Balance Formulas:
-   - Supervisor Cash On Hand = (Confirmed Office Cash + Confirmed Inbound Transfers) - Outbound Transfers - Worker Disbursements - Expenses.
-   - Worker Running Advance = Opening Advance + Confirmed Disbursements.
+2. Balance Formulas & Worker Payroll Classification:
+   - Supervisor Cash On Hand = (Confirmed Office Cash + Confirmed Inbound Transfers) - Outbound Transfers - Worker Disbursements (Advances & Salary Payments) - Expenses.
+   - Factory Expenses: Tracked separately from worker payments (materials, transportation, food, repairs, etc.).
+   - Worker Advances: Money given to a worker before earned as salary. Remains as an outstanding advance owed by the worker.
+   - Worker Salary Earned: Wages accrued (monthly or piece rate). Workers can accumulate unpaid salary across multiple months without taking it immediately.
+   - Worker Salary Payment: Physical cash given to worker against their earned salary. Does NOT create an advance.
+   - Advance Recovery from Salary: Internal accounting adjustment where a worker repays an outstanding advance using their accumulated unpaid salary balance. ZERO physical cash is distributed.
+   - Net Payable to Worker = Unpaid Salary - Outstanding Advance. Positive means factory owes worker; negative means worker owes advance back to factory.
 3. Auditing & Red Flag Criteria:
    - Stale/Pending Transactions: Transactions pending for more than 24 hours without confirmation.
    - Disputed Transactions: Transactions marked as 'disputed'.

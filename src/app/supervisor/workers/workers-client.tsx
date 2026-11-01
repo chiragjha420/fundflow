@@ -11,7 +11,9 @@ import {
   getFactoryWorkersAction, 
   getFactoryWorkerDisbursementsAction,
   getWorkerDisbursementsAction, 
-  deleteWorkerServer 
+  deleteWorkerServer,
+  creditWorkerSalaryAction,
+  recoverWorkerAdvanceAction
 } from '@/app/actions/workers';
 import { compressImage } from '@/lib/image-compressor';
 import { CameraCaptureModal } from '@/components/camera-capture-modal';
@@ -28,7 +30,9 @@ import {
   CalendarDays,
   Clock,
   Upload,
-  Phone
+  Phone,
+  Coins,
+  Plus
 } from 'lucide-react';
 
 interface Worker {
@@ -40,6 +44,12 @@ interface Worker {
   supervisor_id: string;
   opening_advance: number;
   running_advance: number;
+  unpaid_salary?: number;
+  total_salary_earned?: number;
+  total_salary_paid?: number;
+  net_payable?: number;
+  total_advance_given?: number;
+  total_advance_recovered?: number;
   active: boolean;
 }
 
@@ -73,6 +83,119 @@ export function SupervisorWorkersClientPage() {
   const [actionLoading, setActionLoading] = useState(false);
   const [actionMessage, setActionMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // Credit Salary Modal States
+  const [showCreditSalaryModal, setShowCreditSalaryModal] = useState<boolean>(false);
+  const [creditSalaryWorker, setCreditSalaryWorker] = useState<Worker | null>(null);
+  const [creditSalaryAmount, setCreditSalaryAmount] = useState<string>('');
+  const [creditSalaryMonth, setCreditSalaryMonth] = useState<string>('');
+  const [creditSalaryNote, setCreditSalaryNote] = useState<string>('');
+  const [creditSalaryLoading, setCreditSalaryLoading] = useState<boolean>(false);
+  const [creditSalaryError, setCreditSalaryError] = useState<string>('');
+
+  // Settle Advance Modal States
+  const [showSettleModal, setShowSettleModal] = useState<boolean>(false);
+  const [settleWorker, setSettleWorker] = useState<Worker | null>(null);
+  const [settleAmount, setSettleAmount] = useState<string>('');
+  const [settleLoading, setSettleLoading] = useState<boolean>(false);
+  const [settleError, setSettleError] = useState<string>('');
+
+  const handleExecuteCreditSalary = async () => {
+    if (!creditSalaryWorker || !factoryId) return;
+    const amountNum = parseFloat(creditSalaryAmount);
+    if (isNaN(amountNum) || amountNum <= 0) {
+      setCreditSalaryError('Please enter a valid positive salary amount.');
+      return;
+    }
+    setCreditSalaryLoading(true);
+    setCreditSalaryError('');
+    try {
+      const res = await creditWorkerSalaryAction(
+        creditSalaryWorker.worker_id,
+        factoryId,
+        amountNum,
+        creditSalaryMonth,
+        creditSalaryNote
+      );
+      if (!res.success) {
+        setCreditSalaryError(res.error || 'Failed to credit salary.');
+        return;
+      }
+
+      queryClient.setQueryData(['workers', factoryId], (old: Worker[] | undefined) => {
+        if (!old) return old;
+        return old.map(w => {
+          if (w.worker_id !== creditSalaryWorker.worker_id) return w;
+          const newUnpaid = (w.unpaid_salary || 0) + amountNum;
+          return {
+            ...w,
+            unpaid_salary: newUnpaid,
+            total_salary_earned: (w.total_salary_earned || 0) + amountNum,
+            net_payable: newUnpaid - (w.running_advance || 0),
+          };
+        });
+      });
+
+      setShowCreditSalaryModal(false);
+      setCreditSalaryWorker(null);
+      setCreditSalaryAmount('');
+      setCreditSalaryMonth('');
+      setCreditSalaryNote('');
+      queryClient.invalidateQueries();
+    } catch (err: any) {
+      setCreditSalaryError(err.message || 'Failed to credit salary.');
+    } finally {
+      setCreditSalaryLoading(false);
+    }
+  };
+
+  const handleExecuteSettleAdvance = async () => {
+    if (!settleWorker || !factoryId) return;
+    const amountNum = parseFloat(settleAmount);
+    if (isNaN(amountNum) || amountNum <= 0) {
+      setSettleError('Please enter a valid amount.');
+      return;
+    }
+    setSettleLoading(true);
+    setSettleError('');
+    try {
+      const res = await recoverWorkerAdvanceAction(
+        settleWorker.worker_id,
+        factoryId,
+        amountNum,
+        `Advance settled from ${settleWorker.worker_name} salary`
+      );
+      if (!res.success) {
+        setSettleError(res.error || 'Failed to settle advance.');
+        return;
+      }
+
+      queryClient.setQueryData(['workers', factoryId], (old: Worker[] | undefined) => {
+        if (!old) return old;
+        return old.map(w => {
+          if (w.worker_id !== settleWorker.worker_id) return w;
+          const newAdv = Math.max(0, (w.running_advance || 0) - amountNum);
+          const newSal = Math.max(0, (w.unpaid_salary || 0) - amountNum);
+          return {
+            ...w,
+            running_advance: newAdv,
+            unpaid_salary: newSal,
+            total_advance_recovered: (w.total_advance_recovered || 0) + amountNum,
+            net_payable: newSal - newAdv,
+          };
+        });
+      });
+
+      setShowSettleModal(false);
+      setSettleWorker(null);
+      setSettleAmount('');
+      queryClient.invalidateQueries();
+    } catch (err: any) {
+      setSettleError(err.message || 'Failed to settle advance.');
+    } finally {
+      setSettleLoading(false);
+    }
+  };
 
   const handleDeleteWorker = async () => {
     if (!editingWorker) return;
@@ -760,37 +883,63 @@ export function SupervisorWorkersClientPage() {
                         ) : null}
                       </div>
                     </div>
-                    <div className="flex items-center gap-4">
-                      <div className="text-right">
-                        {fromDate || toDate ? (
-                          <>
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 block">
-                              Period Advance
-                            </span>
-                            <span className={`text-sm font-black ${periodAdvance > 0 ? 'text-red-600' : 'text-slate-400'}`}>
-                              {formatINR(periodAdvance)}
-                            </span>
-                            <span className="text-[10px] text-slate-400 block">
-                              All-Time: {formatINR(w.running_advance)}
-                            </span>
-                          </>
-                        ) : (
-                          <>
-                            <span className="text-xs text-slate-400 block">Advance</span>
-                            <span className="text-sm font-black text-red-600">{formatINR(w.running_advance)}</span>
-                          </>
-                        )}
+                    <div className="flex items-center gap-3">
+                      <div className="text-right space-y-1">
+                        {(w.unpaid_salary || 0) > 0 ? (
+                          <div className="text-[11px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded">
+                            Salary: {formatINR(w.unpaid_salary || 0)}
+                          </div>
+                        ) : null}
+                        <div className={`text-[11px] font-bold px-2 py-0.5 rounded ${
+                          (w.running_advance || 0) > 0 
+                            ? 'text-amber-900 bg-amber-50 border border-amber-200' 
+                            : 'text-slate-500 bg-slate-50 border border-slate-200'
+                        }`}>
+                          Adv: {formatINR(w.running_advance || 0)}
+                        </div>
                       </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation(); // Avoid expanding/collapsing row when edit is clicked
-                          handleEditClick(w);
-                        }}
-                        className="flex h-11 w-11 items-center justify-center rounded border border-slate-200 text-slate-500 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 min-h-[44px] min-w-[44px]"
-                        title="Edit Profile"
-                      >
-                        <Edit2 className="h-4 w-4" />
-                      </button>
+
+                      {/* Quick Actions Menu */}
+                      <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCreditSalaryWorker(w);
+                            setCreditSalaryAmount('');
+                            setCreditSalaryMonth('');
+                            setCreditSalaryNote('');
+                            setShowCreditSalaryModal(true);
+                          }}
+                          className="px-2 py-1.5 rounded bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-700 text-xs font-bold transition-colors"
+                          title="Credit Salary"
+                        >
+                          + Sal
+                        </button>
+
+                        {(w.unpaid_salary || 0) > 0 && (w.running_advance || 0) > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSettleWorker(w);
+                              const maxS = Math.min(w.unpaid_salary || 0, w.running_advance || 0);
+                              setSettleAmount(String(maxS));
+                              setShowSettleModal(true);
+                            }}
+                            className="px-2 py-1.5 rounded bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 text-xs font-bold transition-colors"
+                            title="Settle Advance from Salary"
+                          >
+                            ⇄ Settle
+                          </button>
+                        )}
+
+                        <button
+                          onClick={() => handleEditClick(w)}
+                          className="flex h-9 w-9 items-center justify-center rounded border border-slate-200 text-slate-500 hover:text-slate-900 bg-white hover:bg-slate-50"
+                          title="Edit Profile"
+                        >
+                          <Edit2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     </div>
                   </div>
 
@@ -884,6 +1033,219 @@ export function SupervisorWorkersClientPage() {
                 className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold rounded-lg"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Credit Salary Modal */}
+      {showCreditSalaryModal && creditSalaryWorker && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="h-8 w-8 rounded-full bg-purple-100 flex items-center justify-center text-purple-700">
+                  <Coins className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900">
+                    Credit Earned Salary
+                  </h3>
+                  <span className="text-[10px] text-slate-500">Accrue wages • ₹0 cash distributed</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setShowCreditSalaryModal(false); setCreditSalaryWorker(null); setCreditSalaryError(''); }}
+                className="text-slate-400 hover:text-slate-600 p-1"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-100 rounded-lg p-3 text-xs space-y-1">
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Worker:</span>
+                <span className="font-bold text-slate-900">{creditSalaryWorker.worker_name}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Current Unpaid Salary:</span>
+                <span className="font-bold text-emerald-700">{formatINR(creditSalaryWorker.unpaid_salary || 0)}</span>
+              </div>
+            </div>
+
+            {creditSalaryError && (
+              <div className="rounded-lg bg-red-50 p-2.5 text-xs text-red-700 border border-red-200">
+                {creditSalaryError}
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <div>
+                <label htmlFor="creditSalaryAmount" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                  Salary Amount to Credit (INR)
+                </label>
+                <div className="relative">
+                  <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 text-sm font-bold pointer-events-none">₹</span>
+                  <input
+                    id="creditSalaryAmount"
+                    type="number"
+                    min="1"
+                    disabled={creditSalaryLoading}
+                    value={creditSalaryAmount}
+                    onChange={(e) => setCreditSalaryAmount(e.target.value)}
+                    placeholder="e.g. 20000"
+                    className="block w-full rounded-lg border border-slate-300 pl-8 pr-3 py-2 text-slate-950 text-sm font-bold focus:ring-2 focus:ring-purple-600 min-h-[44px]"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="creditSalaryMonth" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                  Period / Month (Optional)
+                </label>
+                <input
+                  id="creditSalaryMonth"
+                  type="text"
+                  disabled={creditSalaryLoading}
+                  value={creditSalaryMonth}
+                  onChange={(e) => setCreditSalaryMonth(e.target.value)}
+                  placeholder="e.g. October 2026"
+                  className="block w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-950 text-xs min-h-[40px]"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="creditSalaryNote" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                  Notes / Remarks (Optional)
+                </label>
+                <input
+                  id="creditSalaryNote"
+                  type="text"
+                  disabled={creditSalaryLoading}
+                  value={creditSalaryNote}
+                  onChange={(e) => setCreditSalaryNote(e.target.value)}
+                  placeholder="e.g. Monthly fixed wage"
+                  className="block w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-950 text-xs min-h-[40px]"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                disabled={creditSalaryLoading}
+                onClick={() => { setShowCreditSalaryModal(false); setCreditSalaryWorker(null); setCreditSalaryError(''); }}
+                className="flex-1 py-2 px-3 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 min-h-[40px]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={creditSalaryLoading || !creditSalaryAmount || parseFloat(creditSalaryAmount) <= 0}
+                onClick={handleExecuteCreditSalary}
+                className="flex-1 py-2 px-3 rounded-lg bg-purple-700 hover:bg-purple-800 text-white text-xs font-bold min-h-[40px] flex items-center justify-center gap-1.5 shadow-sm disabled:opacity-50"
+              >
+                {creditSalaryLoading ? (
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <span>Credit Salary</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Settle Advance from Salary Modal */}
+      {showSettleModal && settleWorker && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="h-8 w-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-700">
+                  <Coins className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900">
+                    Settle Advance from Salary
+                  </h3>
+                  <span className="text-[10px] text-slate-500">Internal adjustment • ₹0 cash moves</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setShowSettleModal(false); setSettleWorker(null); setSettleError(''); }}
+                className="text-slate-400 hover:text-slate-600 p-1"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-100 rounded-lg p-3 text-xs space-y-1.5">
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Worker:</span>
+                <span className="font-bold text-slate-900">{settleWorker.worker_name}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Unpaid Salary Balance:</span>
+                <span className="font-bold text-emerald-700">{formatINR(settleWorker.unpaid_salary || 0)}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Outstanding Advance Owed:</span>
+                <span className="font-bold text-amber-700">{formatINR(settleWorker.running_advance || 0)}</span>
+              </div>
+            </div>
+
+            {settleError && (
+              <div className="rounded-lg bg-red-50 p-2.5 text-xs text-red-700 border border-red-200">
+                {settleError}
+              </div>
+            )}
+
+            <div>
+              <label htmlFor="settleAmount" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                Amount to Deduct from Salary (INR)
+              </label>
+              <div className="relative">
+                <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 text-sm font-bold pointer-events-none">₹</span>
+                <input
+                  id="settleAmount"
+                  type="number"
+                  min="1"
+                  max={Math.min(settleWorker.unpaid_salary || 0, settleWorker.running_advance || 0)}
+                  disabled={settleLoading}
+                  value={settleAmount}
+                  onChange={(e) => setSettleAmount(e.target.value)}
+                  placeholder="0"
+                  className="block w-full rounded-lg border border-slate-300 pl-8 pr-3 py-2 text-slate-950 text-sm font-bold focus:ring-2 focus:ring-blue-600 min-h-[44px]"
+                />
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">
+                Max available: {formatINR(Math.min(settleWorker.unpaid_salary || 0, settleWorker.running_advance || 0))}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                disabled={settleLoading}
+                onClick={() => { setShowSettleModal(false); setSettleWorker(null); setSettleError(''); }}
+                className="flex-1 py-2 px-3 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 min-h-[40px]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={settleLoading || !settleAmount || parseFloat(settleAmount) <= 0}
+                onClick={handleExecuteSettleAdvance}
+                className="flex-1 py-2 px-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold min-h-[40px] flex items-center justify-center gap-1.5 shadow-sm disabled:opacity-50"
+              >
+                {settleLoading ? (
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <span>Settle Advance</span>
+                )}
               </button>
             </div>
           </div>
