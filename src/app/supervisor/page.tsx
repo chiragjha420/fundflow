@@ -2,6 +2,7 @@ import React from 'react';
 import { createServerClient } from '@/lib/supabase/server-client';
 import { createAdminClient } from '@/lib/supabase/admin-client';
 import { getSupervisorAllTransactionsAction, getAllWorkersWithSalaryBalancesAction } from '@/app/actions/workers';
+import { getFactoryExpensesAction } from '@/app/actions/expenses';
 import { SupervisorClientPage } from './supervisor-client';
 
 export const revalidate = 0; // Live real-time dashboard data on navigation
@@ -33,7 +34,7 @@ export default async function SupervisorDashboardPage() {
         initialSupervisor = sup;
 
         // 2. Fetch Workers (with live salary & advance balances), Pending Receipts, Other Supervisors, Expenses, and All Transactions
-        const [workersData, pendingRes, otherSupsRes, expensesRes, allTxsRes] = await Promise.all([
+        const [workersData, pendingRes, otherSupsRes, expensesData, allTxsRes] = await Promise.all([
           getAllWorkersWithSalaryBalancesAction(sup.factory_id),
           supabase
             .from('cash_transactions')
@@ -44,19 +45,14 @@ export default async function SupervisorDashboardPage() {
             .from('supervisors')
             .select('id, name, factory_id, active, factories(name)')
             .eq('active', true),
-          adminSupabase
-            .from('expenses')
-            .select('*, supervisors(name)')
-            .eq('factory_id', sup.factory_id)
-            .order('created_at', { ascending: false })
-            .limit(50),
+          getFactoryExpensesAction(sup.factory_id),
           getSupervisorAllTransactionsAction(sup.id, sup.factory_id),
         ]);
 
         initialWorkers = (workersData || []).filter((w: any) => w.active && w.worker_name !== 'Deleted Worker');
         initialPendingTxs = pendingRes.data || [];
         initialOtherSupervisors = otherSupsRes.data || [];
-        initialExpenses = expensesRes.data || [];
+        initialExpenses = expensesData || [];
         initialAllTransactions = allTxsRes || { transactions: [], refundedTxIds: [] };
       }
     }

@@ -738,12 +738,12 @@ export function AdminDashboard({
         .filter(t => t.type === 'supervisor_to_worker' && t.from_supervisor_id === supId && t.status === 'confirmed' && t.to_work?.active !== false && t.to_work?.name !== 'Deleted Worker')
         .reduce((sum, t) => sum + Number(t.amount), 0);
 
-      // Expenses by this supervisor
-      const supExpenses = expenses
-        .filter(e => e.supervisor_id === supId)
+      // Only physical cash expenses reduce supervisor's physical cash balance
+      const supCashExpenses = expenses
+        .filter(e => e.supervisor_id === supId && (e as any).payment_method !== 'online' && !e.note?.includes('[ONLINE_EXPENSE]'))
         .reduce((sum, e) => sum + Number(e.amount), 0);
 
-      remaining += (incOffice + incSup - outSup - outWorker - supExpenses);
+      remaining += (incOffice + incSup - outSup - outWorker - supCashExpenses);
     });
 
     const factoryExpenses = expenses
@@ -851,24 +851,27 @@ export function AdminDashboard({
         factoryId,
         supervisorId: tx.from_supervisor_id || tx.to_supervisor_id,
         isFlagged: tx.status === 'pending' && isOlderThan24Hours(tx.created_at),
+        isOnline: false,
         isRefunded,
         refundInfo,
       };
     }),
     ...expenses.map(exp => {
+      const isOnline = (exp as any).payment_method === 'online' || exp.note?.includes('[ONLINE_EXPENSE]');
       return {
         id: exp.id,
         created_at: exp.created_at,
         amount: Number(exp.amount),
         status: 'confirmed',
         note: `${exp.category}${exp.note ? `: ${exp.note}` : ''}`,
-        type: 'expense',
+        type: isOnline ? 'online_expense' : 'expense',
         purpose: 'Expenses' as const,
-        fromLabel: exp.supervisors?.name || 'Supervisor',
-        toLabel: 'Vendor / Shop',
+        fromLabel: exp.supervisors?.name ? (isOnline ? `${exp.supervisors.name} (Online)` : exp.supervisors.name) : 'Supervisor',
+        toLabel: isOnline ? 'Vendor (Bank/UPI)' : 'Vendor / Shop',
         factoryId: exp.factory_id,
         supervisorId: exp.supervisor_id,
         isFlagged: false,
+        isOnline,
         isRefunded: false,
         refundInfo: undefined,
       };
@@ -2605,6 +2608,12 @@ export function AdminDashboard({
                             <span>Online QR</span>
                           </span>
                         )}
+                        {entry.type === 'online_expense' && (
+                          <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                            <QrCode className="h-3 w-3" />
+                            <span>Online Expense</span>
+                          </span>
+                        )}
                         {entry.isFlagged && (
                           <span className="flex items-center gap-0.5 text-[9px] font-bold text-red-600 uppercase">
                             <AlertTriangle className="h-2.5 w-2.5" />
@@ -2702,6 +2711,11 @@ export function AdminDashboard({
                               <QrCode className="h-3.5 w-3.5" />
                               <span>Online QR Payout</span>
                             </span>
+                          ) : entry.type === 'online_expense' ? (
+                            <span className="inline-flex items-center gap-1 text-indigo-700 normal-case font-bold">
+                              <QrCode className="h-3.5 w-3.5" />
+                              <span>Online Expense</span>
+                            </span>
                           ) : (
                             entry.type.replace(/_/g, ' ')
                           )}
@@ -2733,6 +2747,12 @@ export function AdminDashboard({
                           <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
                             <QrCode className="h-3 w-3" />
                             <span>Online QR</span>
+                          </span>
+                        )}
+                        {entry.type === 'online_expense' && (
+                          <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                            <QrCode className="h-3 w-3" />
+                            <span>Online Expense</span>
                           </span>
                         )}
                         {entry.isFlagged && (

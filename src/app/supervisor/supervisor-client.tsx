@@ -63,7 +63,7 @@ import {
   recordWorkerHisaabAction,
   createAdvanceCorrectionRequestAction
 } from '@/app/actions/workers';
-import { getFactoryExpensesAction, FactoryExpense } from '@/app/actions/expenses';
+import { getFactoryExpensesAction, logOnlineExpenseAction, FactoryExpense } from '@/app/actions/expenses';
 
 interface Worker {
   worker_id: string;
@@ -122,6 +122,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
   // Active Tab for Quick Actions
   const [activeTab, setActiveTab] = useState<'advance' | 'hisaab' | 'expense' | 'transfer'>('advance');
+  const [expensePaymentMethod, setExpensePaymentMethod] = useState<'cash' | 'online'>('cash');
 
   // Hisaab States
   const [hisaabWorkerId, setHisaabWorkerId] = useState<string>('');
@@ -180,6 +181,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
   // Unified Transaction History States (All Transactions: Advances, Transfers, Expenses, Refunds)
   const [historySearchQuery, setHistorySearchQuery] = useState<string>('');
+  const [historyChannelFilter, setHistoryChannelFilter] = useState<'all' | 'offline' | 'online'>('all');
   const [historyTypeFilter, setHistoryTypeFilter] = useState<'all' | 'salary' | 'advances' | 'transfers' | 'expenses' | 'refunds'>('all');
   const [historySupervisorFilter, setHistorySupervisorFilter] = useState<'all' | 'my'>('all');
   const [isHistoryExpanded, setIsHistoryExpanded] = useState<boolean>(false);
@@ -687,6 +689,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
     // 1. Map expenses
     (activeExpenses || []).forEach((exp) => {
+      const isOnline = exp.payment_method === 'online' || exp.note?.includes('[ONLINE_EXPENSE]');
       const badge = getCategoryBadge(exp.category);
       const supName = exp.supervisors?.name || getSupervisorDisplayName(exp.supervisor_id);
       list.push({
@@ -695,11 +698,13 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         direction: 'outflow',
         amount: Number(exp.amount || 0),
         title: exp.note || badge.label,
-        subtitle: exp.note ? badge.label : undefined,
+        subtitle: isOnline
+          ? (exp.note ? `${badge.label} • Online (Bank/UPI)` : 'Online (Bank/UPI)')
+          : (exp.note ? `${badge.label} • Cash in Hand` : 'Cash in Hand'),
         categoryKey: (exp.category || 'other').toLowerCase(),
-        categoryLabel: `Expense: ${badge.label}`,
-        badgeClass: badge.className,
-        badgeIcon: badge.icon,
+        categoryLabel: isOnline ? `Online: ${badge.label}` : `Expense: ${badge.label}`,
+        badgeClass: isOnline ? 'bg-indigo-50 text-indigo-800 border-indigo-200' : badge.className,
+        badgeIcon: isOnline ? <QrCode className="h-3 w-3 text-indigo-600" /> : badge.icon,
         note: exp.note || '',
         photoUrl: exp.photo_url || null,
         photoTitle: `Receipt: ${exp.note || badge.label}`,
@@ -708,6 +713,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         supervisorId: exp.supervisor_id,
         supervisorName: supName,
         isOwn: exp.supervisor_id === supervisorId,
+        isOnline,
       });
     });
 
@@ -751,6 +757,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           supervisorId: tx.from_supervisor_id,
           supervisorName: supName,
           isOwn: tx.from_supervisor_id === supervisorId,
+          isOnline: false,
         });
       }
 
@@ -781,6 +788,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           supervisorId: '',
           supervisorName: 'Factory Ledger',
           isOwn: false,
+          isOnline: true,
         });
       }
       // (c) Online QR Payments from Hisaab
@@ -841,6 +849,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           supervisorId: tx.from_supervisor_id,
           supervisorName: 'You',
           isOwn: true,
+          isOnline: false,
         });
       }
       // (c) Supervisor Transfer (Received by this supervisor)
@@ -871,6 +880,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           supervisorId: tx.to_supervisor_id,
           supervisorName: 'You',
           isOwn: true,
+          isOnline: false,
         });
       }
       // (d) Supervisor Transfer (Between co-supervisors in same factory)
@@ -897,6 +907,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           supervisorId: tx.from_supervisor_id,
           supervisorName: senderName,
           isOwn: false,
+          isOnline: false,
         });
       }
       // (e) Office Cash / Refund Credit (office_to_supervisor)
@@ -925,6 +936,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
             supervisorId: tx.to_supervisor_id,
             supervisorName: 'You',
             isOwn: true,
+            isOnline: false,
           });
         } else {
           list.push({
@@ -949,6 +961,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
             supervisorId: tx.to_supervisor_id,
             supervisorName: 'You',
             isOwn: true,
+            isOnline: false,
           });
         }
       }
@@ -958,9 +971,17 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     return list.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   }, [activeExpenses, activeAllTxs, supervisorId, otherSupervisors]);
 
-  // Filtered transactions based on supervisor toggle, type pill, and search
+  // Filtered transactions based on channel toggle, supervisor toggle, type pill, and search
   const filteredTransactions = useMemo(() => {
     return combinedTransactions.filter((tx) => {
+      // Channel Filter (All vs Offline Cash vs Online Bank/UPI)
+      if (historyChannelFilter === 'offline' && tx.isOnline) {
+        return false;
+      }
+      if (historyChannelFilter === 'online' && !tx.isOnline) {
+        return false;
+      }
+
       if (historySupervisorFilter === 'my' && !tx.isOwn) {
         return false;
       }
@@ -993,13 +1014,28 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       }
       return true;
     });
-  }, [combinedTransactions, historySupervisorFilter, historyTypeFilter, historySearchQuery]);
+  }, [combinedTransactions, historyChannelFilter, historySupervisorFilter, historyTypeFilter, historySearchQuery]);
+
+  // Transactions filtered by channel and supervisor (for filter pill counts)
+  const channelFilteredTransactions = useMemo(() => {
+    return combinedTransactions.filter((tx) => {
+      if (historyChannelFilter === 'offline' && tx.isOnline) return false;
+      if (historyChannelFilter === 'online' && !tx.isOnline) return false;
+      if (historySupervisorFilter === 'my' && !tx.isOwn) return false;
+      return true;
+    });
+  }, [combinedTransactions, historyChannelFilter, historySupervisorFilter]);
 
   const totalSpendingAmount = useMemo(() => {
     return combinedTransactions
-      .filter((tx) => (historySupervisorFilter === 'all' || tx.isOwn) && tx.direction === 'outflow' && !tx.isRefunded)
+      .filter((tx) => {
+        if (historyChannelFilter === 'offline' && tx.isOnline) return false;
+        if (historyChannelFilter === 'online' && !tx.isOnline) return false;
+        if (historySupervisorFilter === 'my' && !tx.isOwn) return false;
+        return tx.direction === 'outflow' && !tx.isRefunded;
+      })
       .reduce((sum, tx) => sum + tx.amount, 0);
-  }, [combinedTransactions, historySupervisorFilter]);
+  }, [combinedTransactions, historyChannelFilter, historySupervisorFilter]);
 
   // Handle Receipt Confirmation
   const handleConfirmClick = (txId: string, amount: number, type: string) => {
@@ -1505,16 +1541,32 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           });
         }
 
-        const res = await logExpenseAction(supervisorId!, factoryId!, amount, category, note, photoUrl);
-        if (res.queued) {
-          setActionMessage({ type: 'success', text: 'Offline: Expense queued. Available balance updated locally.' });
+        if (expensePaymentMethod === 'online') {
+          const res = await logOnlineExpenseAction({
+            supervisorId: supervisorId!,
+            factoryId: factoryId!,
+            amount,
+            category,
+            note,
+            photoUrl,
+          });
+          if (!res.success) {
+            throw new Error(res.error || 'Failed to log online expense.');
+          }
+          setActionMessage({ type: 'success', text: 'Online bank expense logged successfully (Cash balance unchanged).' });
         } else {
-          setActionMessage({ type: 'success', text: 'Expense logged successfully.' });
+          const res = await logExpenseAction(supervisorId!, factoryId!, amount, category, note, photoUrl);
+          if (res.queued) {
+            setActionMessage({ type: 'success', text: 'Offline: Expense queued. Available balance updated locally.' });
+          } else {
+            setActionMessage({ type: 'success', text: 'Cash expense logged successfully (Available balance updated).' });
+          }
         }
         setPhotoFile(null);
         setPhotoPreview(null);
         form.reset();
         queryClient.invalidateQueries({ queryKey: ['factory-expenses', factoryId] });
+        queryClient.invalidateQueries({ queryKey: ['supervisor-balance', supervisorId] });
       }
       
       queryClient.invalidateQueries();
@@ -2014,50 +2066,50 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
       {/* 2. Quick Actions Tab Container */}
       <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">
-        {/* Tabs */}
-        <div className="grid grid-cols-4 border-b border-slate-200 bg-slate-50 text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-600">
+        {/* Tabs - Spacious & Mobile Optimized */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 p-1.5 sm:p-0 sm:gap-0 border-b border-slate-200 bg-slate-100/90 sm:bg-slate-50 text-xs font-bold text-slate-600">
           <button
             onClick={() => { setActiveTab('advance'); setActionMessage(null); setLastDisburseSms(null); }}
-            className={`py-3 text-center border-b-2 min-h-[44px] flex items-center justify-center gap-1 sm:gap-1.5 ${
+            className={`py-2.5 sm:py-3 px-3 text-center sm:border-b-2 min-h-[44px] rounded-lg sm:rounded-none flex items-center justify-center gap-1.5 transition-all ${
               activeTab === 'advance'
-                ? 'border-slate-900 text-slate-900 bg-white font-black'
-                : 'border-transparent hover:bg-slate-100'
+                ? 'sm:border-slate-900 text-slate-950 bg-white font-black shadow-xs sm:shadow-none'
+                : 'border-transparent text-slate-600 hover:text-slate-900 hover:bg-white/60 sm:hover:bg-slate-100'
             }`}
           >
-            <HandCoins className="h-3.5 w-3.5 shrink-0" />
+            <HandCoins className="h-4 w-4 shrink-0 text-amber-600 sm:text-slate-900" />
             <span className="truncate">Add Advance</span>
           </button>
           <button
             onClick={() => { setActiveTab('hisaab'); setActionMessage(null); }}
-            className={`py-3 text-center border-b-2 min-h-[44px] flex items-center justify-center gap-1 sm:gap-1.5 ${
+            className={`py-2.5 sm:py-3 px-3 text-center sm:border-b-2 min-h-[44px] rounded-lg sm:rounded-none flex items-center justify-center gap-1.5 transition-all ${
               activeTab === 'hisaab'
-                ? 'border-slate-900 text-slate-900 bg-white font-black'
-                : 'border-transparent hover:bg-slate-100'
+                ? 'sm:border-slate-900 text-slate-950 bg-white font-black shadow-xs sm:shadow-none'
+                : 'border-transparent text-slate-600 hover:text-slate-900 hover:bg-white/60 sm:hover:bg-slate-100'
             }`}
           >
-            <Calculator className="h-3.5 w-3.5 shrink-0 text-slate-700" />
+            <Calculator className="h-4 w-4 shrink-0 text-indigo-600 sm:text-slate-900" />
             <span className="truncate">Hisaab</span>
           </button>
           <button
             onClick={() => { setActiveTab('expense'); setActionMessage(null); }}
-            className={`py-3 text-center border-b-2 min-h-[44px] flex items-center justify-center gap-1 sm:gap-1.5 ${
+            className={`py-2.5 sm:py-3 px-3 text-center sm:border-b-2 min-h-[44px] rounded-lg sm:rounded-none flex items-center justify-center gap-1.5 transition-all ${
               activeTab === 'expense'
-                ? 'border-slate-900 text-slate-900 bg-white font-black'
-                : 'border-transparent hover:bg-slate-100'
+                ? 'sm:border-slate-900 text-slate-950 bg-white font-black shadow-xs sm:shadow-none'
+                : 'border-transparent text-slate-600 hover:text-slate-900 hover:bg-white/60 sm:hover:bg-slate-100'
             }`}
           >
-            <IndianRupee className="h-3.5 w-3.5 shrink-0" />
+            <IndianRupee className="h-4 w-4 shrink-0 text-red-600 sm:text-slate-900" />
             <span className="truncate">Expense</span>
           </button>
           <button
             onClick={() => { setActiveTab('transfer'); setActionMessage(null); }}
-            className={`py-3 text-center border-b-2 min-h-[44px] flex items-center justify-center gap-1 sm:gap-1.5 ${
+            className={`py-2.5 sm:py-3 px-3 text-center sm:border-b-2 min-h-[44px] rounded-lg sm:rounded-none flex items-center justify-center gap-1.5 transition-all ${
               activeTab === 'transfer'
-                ? 'border-slate-900 text-slate-900 bg-white font-black'
-                : 'border-transparent hover:bg-slate-100'
+                ? 'sm:border-slate-900 text-slate-950 bg-white font-black shadow-xs sm:shadow-none'
+                : 'border-transparent text-slate-600 hover:text-slate-900 hover:bg-white/60 sm:hover:bg-slate-100'
             }`}
           >
-            <ArrowRightLeft className="h-3.5 w-3.5 shrink-0" />
+            <ArrowRightLeft className="h-4 w-4 shrink-0 text-emerald-600 sm:text-slate-900" />
             <span className="truncate">Transfer</span>
           </button>
         </div>
@@ -2867,6 +2919,44 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
             {/* EXPENSE FORM */}
             {activeTab === 'expense' && (
               <>
+                {/* Payment Method Selector */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Payment Method
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setExpensePaymentMethod('cash')}
+                      className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg border text-xs font-bold transition-all min-h-[44px] ${
+                        expensePaymentMethod === 'cash'
+                          ? 'border-emerald-600 bg-emerald-50 text-emerald-800 ring-1 ring-emerald-600 shadow-xs'
+                          : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      <Banknote className="h-4 w-4 text-emerald-600" />
+                      <span>Cash in Hand</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setExpensePaymentMethod('online')}
+                      className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg border text-xs font-bold transition-all min-h-[44px] ${
+                        expensePaymentMethod === 'online'
+                          ? 'border-indigo-600 bg-indigo-50 text-indigo-800 ring-1 ring-indigo-600 shadow-xs'
+                          : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      <CreditCard className="h-4 w-4 text-indigo-600" />
+                      <span>Online / Bank UPI</span>
+                    </button>
+                  </div>
+                  <p className="mt-1.5 text-[11px] text-slate-500">
+                    {expensePaymentMethod === 'cash'
+                      ? 'Paid with physical cash. Your available cash balance will be deducted.'
+                      : 'Paid from your personal bank account or UPI. Available cash in hand will not change.'}
+                  </p>
+                </div>
+
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label htmlFor="amount" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
@@ -3051,6 +3141,10 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                 <span>
                   Save Hisaab (Wages {hisaabTotalWages ? formatINR(Number(hisaabTotalWages)) : ''})
                 </span>
+              ) : activeTab === 'expense' ? (
+                <span>
+                  Log {expensePaymentMethod === 'online' ? 'Online Bank' : 'Cash'} Expense
+                </span>
               ) : (
                 <span>Submit Entry</span>
               )}
@@ -3070,7 +3164,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                 Transaction History
               </h2>
               <p className="text-[11px] text-slate-500">
-                Unified record of every cash expense & worker advance
+                Unified record of all offline cash & online transactions
               </p>
             </div>
           </div>
@@ -3082,10 +3176,54 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
         {/* Search & Filter Controls */}
         <div className="p-3 bg-white border-b border-slate-100 space-y-2.5">
+          {/* Primary Channel Filter Toggle: Before any filters */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 pb-0.5">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+              Transaction Mode:
+            </span>
+            <div className="grid grid-cols-3 gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200">
+              <button
+                type="button"
+                onClick={() => setHistoryChannelFilter('all')}
+                className={`px-2.5 py-1.5 rounded-md text-xs font-bold text-center transition-all min-h-[34px] ${
+                  historyChannelFilter === 'all'
+                    ? 'bg-slate-900 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-950 hover:bg-white/60'
+                }`}
+              >
+                All ({combinedTransactions.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setHistoryChannelFilter('offline')}
+                className={`flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-bold transition-all min-h-[34px] ${
+                  historyChannelFilter === 'offline'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-950 hover:bg-white/60'
+                }`}
+              >
+                <Banknote className="h-3.5 w-3.5" />
+                <span>Offline ({combinedTransactions.filter(t => !t.isOnline).length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setHistoryChannelFilter('online')}
+                className={`flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-bold transition-all min-h-[34px] ${
+                  historyChannelFilter === 'online'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-950 hover:bg-white/60'
+                }`}
+              >
+                <QrCode className="h-3.5 w-3.5" />
+                <span>Online ({combinedTransactions.filter(t => t.isOnline).length})</span>
+              </button>
+            </div>
+          </div>
+
           {/* Co-Supervisor Filter (Only if multiple supervisors exist in the factory) */}
           {hasCoSupervisors && (
             <div className="flex items-center justify-between pb-1 text-xs">
-              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Show:</span>
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Supervisor:</span>
               <div className="flex gap-1">
                 <button
                   type="button"
@@ -3096,7 +3234,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  All Factory ({combinedTransactions.length})
+                  All Factory ({channelFilteredTransactions.length})
                 </button>
                 <button
                   type="button"
@@ -3107,7 +3245,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  My Account ({combinedTransactions.filter(t => t.isOwn).length})
+                  My Account ({channelFilteredTransactions.filter(t => t.isOwn).length})
                 </button>
               </div>
             </div>
@@ -3128,12 +3266,12 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           {/* Type Filter Pills: All, Salary Payments, Advances, Transfers, Expenses, Refunds */}
           <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
             {[
-              { id: 'all', label: `All (${combinedTransactions.length})` },
-              { id: 'salary', label: `Salary (${combinedTransactions.filter(t => t.kind === 'salary_payment' || t.kind === 'salary_earned').length})` },
-              { id: 'advances', label: `Advances (${combinedTransactions.filter(t => t.kind === 'advance' || t.kind === 'advance_recovery').length})` },
-              { id: 'transfers', label: `Transfers (${combinedTransactions.filter(t => t.kind === 'transfer_sent' || t.kind === 'transfer_received').length})` },
-              { id: 'expenses', label: `Expenses (${combinedTransactions.filter(t => t.kind === 'expense').length})` },
-              { id: 'refunds', label: `Refunds (${combinedTransactions.filter(t => t.kind === 'advance_refund' || t.isRefunded).length})` },
+              { id: 'all', label: `All (${channelFilteredTransactions.length})` },
+              { id: 'salary', label: `Salary (${channelFilteredTransactions.filter(t => t.kind === 'salary_payment' || t.kind === 'salary_earned').length})` },
+              { id: 'advances', label: `Advances (${channelFilteredTransactions.filter(t => t.kind === 'advance' || t.kind === 'advance_recovery').length})` },
+              { id: 'transfers', label: `Transfers (${channelFilteredTransactions.filter(t => t.kind === 'transfer_sent' || t.kind === 'transfer_received').length})` },
+              { id: 'expenses', label: `Expenses (${channelFilteredTransactions.filter(t => t.kind === 'expense').length})` },
+              { id: 'refunds', label: `Refunds (${channelFilteredTransactions.filter(t => t.kind === 'advance_refund' || t.isRefunded).length})` },
             ].map((pill) => (
               <button
                 key={pill.id}
@@ -3169,10 +3307,23 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                 <li key={tx.id} className="p-3.5 space-y-2 hover:bg-slate-50/70 transition-colors">
                   {/* Top Row: Type/Category Badge & Amount */}
                   <div className="flex items-center justify-between gap-2">
-                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border uppercase tracking-wider ${tx.badgeClass}`}>
-                      {tx.badgeIcon}
-                      <span>{tx.categoryLabel}</span>
-                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border uppercase tracking-wider ${tx.badgeClass}`}>
+                        {tx.badgeIcon}
+                        <span>{tx.categoryLabel}</span>
+                      </span>
+                      {tx.isOnline ? (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 uppercase tracking-wider">
+                          <QrCode className="h-3 w-3" />
+                          <span>Online</span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase tracking-wider">
+                          <Banknote className="h-3 w-3" />
+                          <span>Cash</span>
+                        </span>
+                      )}
+                    </div>
                     <div className="text-right">
                       {tx.isRefunded ? (
                         <div className="flex items-center gap-1.5 justify-end">
