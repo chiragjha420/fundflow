@@ -18,35 +18,25 @@ import {
   Check, 
   X, 
   UserPlus, 
-  Send, 
-  IndianRupee, 
-  ArrowRightLeft,
   Search, 
   Camera, 
   User, 
-  AlertCircle,
-  RefreshCw,
-  HandCoins,
-  MessageSquare,
-  Smartphone,
-  Phone,
-  Upload,
-  History,
-  Truck,
-  Wrench,
-  Package,
-  Tag,
-  Briefcase,
-  ArrowUpRight,
-  ArrowDownLeft,
-  RotateCcw,
-  Building2,
-  Coins,
-  Banknote,
-  Calculator,
-  CalendarDays,
-  QrCode,
-  CreditCard
+  AlertCircle, 
+  RefreshCw, 
+  HandCoins, 
+  MessageSquare, 
+  Smartphone, 
+  Phone, 
+  Upload, 
+  Truck, 
+  Wrench, 
+  Package, 
+  Tag, 
+  Briefcase, 
+  Coins, 
+  CalendarDays, 
+  QrCode, 
+  CreditCard 
 } from 'lucide-react';
 import { sendWorkerDisbursementSms } from '@/lib/sms';
 import { createCashRequest } from '@/app/actions/cash-requests';
@@ -183,7 +173,6 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const [historySearchQuery, setHistorySearchQuery] = useState<string>('');
   const [historyChannelFilter, setHistoryChannelFilter] = useState<'all' | 'offline' | 'online'>('all');
   const [historyTypeFilter, setHistoryTypeFilter] = useState<'all' | 'salary' | 'advances' | 'transfers' | 'expenses' | 'refunds'>('all');
-  const [historySupervisorFilter, setHistorySupervisorFilter] = useState<'all' | 'my'>('all');
   const [isHistoryExpanded, setIsHistoryExpanded] = useState<boolean>(false);
 
   // Form loading states
@@ -614,8 +603,6 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
   const activeExpenses = expenses !== undefined ? expenses : cachedExpenses;
 
-  const hasCoSupervisors = (otherSupervisors || []).some(s => s.factory_id === factoryId && s.id !== supervisorId);
-
   const getCategoryBadge = (category: string) => {
     const cat = (category || 'other').toLowerCase();
     switch (cat) {
@@ -687,43 +674,41 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       isOnline?: boolean;
     }> = [];
 
-    // 1. Map expenses
+    // 1. Map expenses (strictly this supervisor's own expenses)
     (activeExpenses || []).forEach((exp) => {
+      if (exp.supervisor_id !== supervisorId) return;
       const isOnline = exp.payment_method === 'online' || exp.note?.includes('[ONLINE_EXPENSE]');
       const badge = getCategoryBadge(exp.category);
-      const supName = exp.supervisors?.name || getSupervisorDisplayName(exp.supervisor_id);
       list.push({
         id: `exp-${exp.id}`,
         kind: 'expense',
         direction: 'outflow',
         amount: Number(exp.amount || 0),
         title: exp.note || badge.label,
-        subtitle: isOnline
-          ? (exp.note ? `${badge.label} • Online (Bank/UPI)` : 'Online (Bank/UPI)')
-          : (exp.note ? `${badge.label} • Cash in Hand` : 'Cash in Hand'),
+        subtitle: isOnline ? 'Online (Bank/UPI)' : undefined,
         categoryKey: (exp.category || 'other').toLowerCase(),
-        categoryLabel: isOnline ? `Online: ${badge.label}` : `Expense: ${badge.label}`,
-        badgeClass: isOnline ? 'bg-indigo-50 text-indigo-800 border-indigo-200' : badge.className,
-        badgeIcon: isOnline ? <QrCode className="h-3 w-3 text-indigo-600" /> : badge.icon,
+        categoryLabel: badge.label,
+        badgeClass: 'bg-rose-50 text-rose-700',
+        badgeIcon: null,
         note: exp.note || '',
         photoUrl: exp.photo_url || null,
         photoTitle: `Receipt: ${exp.note || badge.label}`,
         photoButtonLabel: 'View Receipt',
         created_at: exp.created_at,
         supervisorId: exp.supervisor_id,
-        supervisorName: supName,
-        isOwn: exp.supervisor_id === supervisorId,
+        supervisorName: 'You',
+        isOwn: true,
         isOnline,
       });
     });
 
-    // 2. Map all transactions from activeAllTxs
+    // 2. Map all transactions from activeAllTxs (strictly this supervisor's account)
     (activeAllTxs?.transactions || []).forEach((tx: any) => {
       // (a) Worker Cash Disbursal (Advance vs Salary Payment)
       if (tx.type === 'supervisor_to_worker') {
+        if (tx.from_supervisor_id !== supervisorId) return;
         const { note: cleanNote, photoUrl } = parseHandoverNote(tx.note);
         const workerName = tx.to_work?.name || 'Worker';
-        const supName = tx.from?.name || getSupervisorDisplayName(tx.from_supervisor_id);
         const isRefunded = refundedSet.has(tx.id);
         const isSalary = tx.worker_payment_type === 'salary_payment';
 
@@ -734,29 +719,23 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           amount: Number(tx.amount || 0),
           isRefunded,
           title: workerName,
-          subtitle: isRefunded 
-            ? 'Refunded by Admin (money credited back)' 
-            : (cleanNote || (isSalary ? 'Salary Payment / Kharcha' : 'Cash Advance')),
+          subtitle: isRefunded ? 'Refunded by Admin' : (cleanNote || undefined),
           categoryKey: isRefunded ? 'refund' : (isSalary ? 'salary' : 'advance'),
-          categoryLabel: isRefunded 
-            ? 'Advance Refunded' 
-            : (isSalary ? 'Salary Payment' : 'Worker Advance'),
+          categoryLabel: isRefunded ? 'Refunded' : (isSalary ? 'Hisaab' : 'Advance'),
           badgeClass: isRefunded 
-            ? 'bg-amber-100 text-amber-800 border-amber-300' 
+            ? 'bg-amber-100 text-amber-800' 
             : isSalary 
-              ? 'bg-emerald-50 text-emerald-800 border-emerald-200' 
-              : 'bg-amber-50 text-amber-900 border-amber-200',
-          badgeIcon: isRefunded 
-            ? <RotateCcw className="h-3 w-3 text-amber-700" />
-            : <HandCoins className={`h-3 w-3 ${isSalary ? 'text-emerald-600' : 'text-amber-600'}`} />,
+              ? 'bg-emerald-50 text-emerald-800' 
+              : 'bg-slate-100 text-slate-700',
+          badgeIcon: null,
           note: cleanNote || '',
           photoUrl: photoUrl || null,
           photoTitle: `Handover Proof: ${workerName}`,
           photoButtonLabel: 'View Proof',
           created_at: tx.created_at,
           supervisorId: tx.from_supervisor_id,
-          supervisorName: supName,
-          isOwn: tx.from_supervisor_id === supervisorId,
+          supervisorName: 'You',
+          isOwn: true,
           isOnline: false,
         });
       }
@@ -777,9 +756,9 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           categoryKey: isEarned ? 'salary' : 'recovery',
           categoryLabel: isEarned ? 'Salary Earned' : 'Advance Recovered',
           badgeClass: isEarned 
-            ? 'bg-purple-50 text-purple-800 border-purple-200' 
-            : 'bg-blue-50 text-blue-800 border-blue-200',
-          badgeIcon: isEarned ? <Coins className="h-3 w-3 text-purple-600" /> : <RotateCcw className="h-3 w-3 text-blue-600" />,
+            ? 'bg-purple-50 text-purple-800' 
+            : 'bg-blue-50 text-blue-800',
+          badgeIcon: null,
           note: tx.note || '',
           photoUrl: null,
           photoTitle: '',
@@ -787,15 +766,15 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           created_at: tx.created_at,
           supervisorId: '',
           supervisorName: 'Factory Ledger',
-          isOwn: false,
+          isOwn: true,
           isOnline: true,
         });
       }
       // (c) Online QR Payments from Hisaab
       else if (tx.type === 'online_qr_payout' || tx.worker_payment_type === 'online_qr_payment') {
+        if (tx.from_supervisor_id !== supervisorId) return;
         const targetWorker = activeWorkers.find(w => w.worker_id === tx.to_worker_id);
         const workerName = tx.to_work?.name || targetWorker?.worker_name || 'Worker';
-        const supName = tx.from?.name || getSupervisorDisplayName(tx.from_supervisor_id);
 
         list.push({
           id: `online-${tx.id}`,
@@ -803,31 +782,26 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           direction: 'outflow',
           amount: Number(tx.amount || 0),
           title: workerName,
-          subtitle: tx.note || 'Paid via Online QR Code (Hisaab)',
-          categoryKey: 'online',
-          categoryLabel: 'Online QR Payment',
-          badgeClass: 'bg-indigo-50 text-indigo-800 border-indigo-200',
-          badgeIcon: <QrCode className="h-3 w-3 text-indigo-600" />,
+          subtitle: tx.note || undefined,
+          categoryKey: 'salary',
+          categoryLabel: 'Online Hisaab',
+          badgeClass: 'bg-indigo-50 text-indigo-700',
+          badgeIcon: null,
           note: tx.note || '',
           photoUrl: null,
           photoTitle: '',
           photoButtonLabel: '',
           created_at: tx.created_at,
           supervisorId: tx.from_supervisor_id || '',
-          supervisorName: supName,
-          isOwn: tx.from_supervisor_id === supervisorId,
+          supervisorName: 'You',
+          isOwn: true,
           isOnline: true,
         });
       }
-      // (b) Supervisor Transfer (Sent by this supervisor)
+      // (d) Supervisor Transfer (Sent by this supervisor)
       else if (tx.type === 'supervisor_to_supervisor' && tx.from_supervisor_id === supervisorId) {
         const recipientName = tx.to_sup?.name || getSupervisorDisplayName(tx.to_supervisor_id);
         const statusLabel = tx.status === 'pending' ? ' (Pending)' : tx.status === 'disputed' ? ' (Disputed)' : '';
-        const badgeClass = tx.status === 'pending' 
-          ? 'bg-amber-50 text-amber-700 border-amber-200' 
-          : tx.status === 'disputed' 
-          ? 'bg-rose-50 text-rose-700 border-rose-200' 
-          : 'bg-purple-50 text-purple-700 border-purple-200';
 
         list.push({
           id: `tx-sent-${tx.id}`,
@@ -836,11 +810,11 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           amount: Number(tx.amount || 0),
           status: tx.status,
           title: `Transfer to ${recipientName}`,
-          subtitle: tx.note ? `"${tx.note}"` : 'Supervisor Transfer',
+          subtitle: tx.note || undefined,
           categoryKey: 'transfer',
-          categoryLabel: `Transfer: Sent${statusLabel}`,
-          badgeClass,
-          badgeIcon: <ArrowUpRight className="h-3 w-3" />,
+          categoryLabel: `Transfer Out${statusLabel}`,
+          badgeClass: 'bg-purple-50 text-purple-700',
+          badgeIcon: null,
           note: tx.note || '',
           photoUrl: null,
           photoTitle: `Transfer to ${recipientName}`,
@@ -852,13 +826,10 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           isOnline: false,
         });
       }
-      // (c) Supervisor Transfer (Received by this supervisor)
+      // (e) Supervisor Transfer (Received by this supervisor)
       else if (tx.type === 'supervisor_to_supervisor' && tx.to_supervisor_id === supervisorId) {
         const senderName = tx.from?.name || getSupervisorDisplayName(tx.from_supervisor_id);
         const statusLabel = tx.status === 'pending' ? ' (Pending)' : tx.status === 'disputed' ? ' (Disputed)' : '';
-        const badgeClass = tx.status === 'pending' 
-          ? 'bg-amber-50 text-amber-700 border-amber-200' 
-          : 'bg-emerald-50 text-emerald-700 border-emerald-200';
 
         list.push({
           id: `tx-recv-${tx.id}`,
@@ -867,11 +838,11 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           amount: Number(tx.amount || 0),
           status: tx.status,
           title: `Transfer from ${senderName}`,
-          subtitle: tx.note ? `"${tx.note}"` : 'Supervisor Transfer Received',
+          subtitle: tx.note || undefined,
           categoryKey: 'transfer',
-          categoryLabel: `Transfer: Received${statusLabel}`,
-          badgeClass,
-          badgeIcon: <ArrowDownLeft className="h-3 w-3" />,
+          categoryLabel: `Transfer In${statusLabel}`,
+          badgeClass: 'bg-emerald-50 text-emerald-700',
+          badgeIcon: null,
           note: tx.note || '',
           photoUrl: null,
           photoTitle: `Transfer from ${senderName}`,
@@ -883,34 +854,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           isOnline: false,
         });
       }
-      // (d) Supervisor Transfer (Between co-supervisors in same factory)
-      else if (tx.type === 'supervisor_to_supervisor') {
-        const senderName = tx.from?.name || getSupervisorDisplayName(tx.from_supervisor_id);
-        const recipientName = tx.to_sup?.name || getSupervisorDisplayName(tx.to_supervisor_id);
-        list.push({
-          id: `tx-sup-${tx.id}`,
-          kind: 'transfer_sent',
-          direction: 'outflow',
-          amount: Number(tx.amount || 0),
-          status: tx.status,
-          title: `${senderName} → ${recipientName}`,
-          subtitle: tx.note ? `"${tx.note}"` : 'Co-supervisor Transfer',
-          categoryKey: 'transfer',
-          categoryLabel: 'Transfer: S2S',
-          badgeClass: 'bg-slate-100 text-slate-700 border-slate-200',
-          badgeIcon: <ArrowRightLeft className="h-3 w-3" />,
-          note: tx.note || '',
-          photoUrl: null,
-          photoTitle: `${senderName} to ${recipientName}`,
-          photoButtonLabel: '',
-          created_at: tx.created_at,
-          supervisorId: tx.from_supervisor_id,
-          supervisorName: senderName,
-          isOwn: false,
-          isOnline: false,
-        });
-      }
-      // (e) Office Cash / Refund Credit (office_to_supervisor)
+      // (f) Office Cash / Refund Credit (office_to_supervisor)
       else if (tx.type === 'office_to_supervisor' && tx.to_supervisor_id === supervisorId) {
         const isRefund = tx.note?.includes('[REFUND:');
         const cleanNote = tx.note ? tx.note.replace(/\[REFUND:[a-f0-9-]+\]\s*/i, '').trim() : '';
@@ -923,11 +867,11 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
             amount: Number(tx.amount || 0),
             status: tx.status,
             title: 'Advance Refund Credited',
-            subtitle: cleanNote || 'Refund credited back to your balance by Admin',
+            subtitle: cleanNote || undefined,
             categoryKey: 'refund',
-            categoryLabel: 'Refund from Office',
-            badgeClass: 'bg-teal-50 text-teal-800 border-teal-200',
-            badgeIcon: <RotateCcw className="h-3 w-3 text-teal-700" />,
+            categoryLabel: 'Refund In',
+            badgeClass: 'bg-teal-50 text-teal-700',
+            badgeIcon: null,
             note: cleanNote || '',
             photoUrl: null,
             photoTitle: 'Refund Credit',
@@ -946,13 +890,13 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
             amount: Number(tx.amount || 0),
             status: tx.status,
             title: 'Office Cash Received',
-            subtitle: cleanNote || 'Cash disbursed from Office',
+            subtitle: cleanNote || undefined,
             categoryKey: 'office',
-            categoryLabel: tx.status === 'pending' ? 'Office Cash (Pending Confirmation)' : 'Office Cash',
+            categoryLabel: tx.status === 'pending' ? 'Office Cash (Pending)' : 'Office Cash',
             badgeClass: tx.status === 'pending' 
-              ? 'bg-amber-50 text-amber-700 border-amber-200' 
-              : 'bg-blue-50 text-blue-700 border-blue-200',
-            badgeIcon: <Building2 className="h-3 w-3" />,
+              ? 'bg-amber-50 text-amber-700' 
+              : 'bg-blue-50 text-blue-700',
+            badgeIcon: null,
             note: cleanNote || '',
             photoUrl: null,
             photoTitle: 'Office Cash',
@@ -971,7 +915,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     return list.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   }, [activeExpenses, activeAllTxs, supervisorId, otherSupervisors]);
 
-  // Filtered transactions based on channel toggle, supervisor toggle, type pill, and search
+  // Filtered transactions based on channel toggle, type pill, and search
   const filteredTransactions = useMemo(() => {
     return combinedTransactions.filter((tx) => {
       // Channel Filter (All vs Offline Cash vs Online Bank/UPI)
@@ -982,10 +926,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         return false;
       }
 
-      if (historySupervisorFilter === 'my' && !tx.isOwn) {
-        return false;
-      }
-      if (historyTypeFilter === 'salary' && tx.kind !== 'salary_payment' && tx.kind !== 'salary_earned') {
+      if (historyTypeFilter === 'salary' && tx.kind !== 'salary_payment' && tx.kind !== 'salary_earned' && tx.kind !== 'online_payment') {
         return false;
       }
       if (historyTypeFilter === 'advances' && tx.kind !== 'advance' && tx.kind !== 'advance_recovery') {
@@ -1006,36 +947,24 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         const matchNote = tx.note.toLowerCase().includes(q);
         const matchSubtitle = (tx.subtitle || '').toLowerCase().includes(q);
         const matchCategory = tx.categoryLabel.toLowerCase().includes(q);
-        const matchSup = tx.supervisorName.toLowerCase().includes(q);
         const matchAmt = tx.amount.toString().includes(q);
-        if (!matchTitle && !matchNote && !matchSubtitle && !matchCategory && !matchSup && !matchAmt) {
+        if (!matchTitle && !matchNote && !matchSubtitle && !matchCategory && !matchAmt) {
           return false;
         }
       }
       return true;
     });
-  }, [combinedTransactions, historyChannelFilter, historySupervisorFilter, historyTypeFilter, historySearchQuery]);
-
-  // Transactions filtered by channel and supervisor (for filter pill counts)
-  const channelFilteredTransactions = useMemo(() => {
-    return combinedTransactions.filter((tx) => {
-      if (historyChannelFilter === 'offline' && tx.isOnline) return false;
-      if (historyChannelFilter === 'online' && !tx.isOnline) return false;
-      if (historySupervisorFilter === 'my' && !tx.isOwn) return false;
-      return true;
-    });
-  }, [combinedTransactions, historyChannelFilter, historySupervisorFilter]);
+  }, [combinedTransactions, historyChannelFilter, historyTypeFilter, historySearchQuery]);
 
   const totalSpendingAmount = useMemo(() => {
     return combinedTransactions
       .filter((tx) => {
         if (historyChannelFilter === 'offline' && tx.isOnline) return false;
         if (historyChannelFilter === 'online' && !tx.isOnline) return false;
-        if (historySupervisorFilter === 'my' && !tx.isOwn) return false;
         return tx.direction === 'outflow' && !tx.isRefunded;
       })
       .reduce((sum, tx) => sum + tx.amount, 0);
-  }, [combinedTransactions, historyChannelFilter, historySupervisorFilter]);
+  }, [combinedTransactions, historyChannelFilter]);
 
   // Handle Receipt Confirmation
   const handleConfirmClick = (txId: string, amount: number, type: string) => {
@@ -1963,20 +1892,15 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       <NotificationBanner role="supervisor" />
 
       {/* Cash Replenishment Request Button */}
-      <div className="bg-gradient-to-r from-slate-900 to-slate-800 rounded-lg p-3.5 text-white flex items-center justify-between shadow-sm">
-        <div className="flex items-center gap-2.5">
-          <div className="h-8 w-8 rounded-full bg-slate-800 flex items-center justify-center text-emerald-400 shrink-0">
-            <HandCoins className="h-4 w-4" />
-          </div>
-          <div>
-            <p className="text-xs font-bold text-white">Need Factory Cash?</p>
-            <p className="text-[11px] text-slate-300">Request cash replenishment from Main Office</p>
-          </div>
+      <div className="bg-slate-900 rounded-xl p-3 text-white flex items-center justify-between shadow-xs">
+        <div className="flex items-center gap-2">
+          <HandCoins className="h-4 w-4 text-emerald-400 shrink-0" />
+          <span className="text-xs font-bold text-white">Need Factory Cash?</span>
         </div>
         <button
           type="button"
           onClick={() => setShowCashRequestModal(true)}
-          className="px-3 py-1.5 rounded bg-white text-slate-950 text-xs font-bold hover:bg-slate-100 transition-colors shrink-0 shadow-sm min-h-[36px]"
+          className="px-3.5 py-1.5 rounded-lg bg-white text-slate-950 text-xs font-bold hover:bg-slate-100 transition-colors shrink-0 shadow-xs min-h-[34px]"
         >
           Request Cash
         </button>
@@ -2065,53 +1989,55 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       )}
 
       {/* 2. Quick Actions Tab Container */}
-      <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">
-        {/* Tabs - Spacious & Mobile Optimized */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 p-1.5 sm:p-0 sm:gap-0 border-b border-slate-200 bg-slate-100/90 sm:bg-slate-50 text-xs font-bold text-slate-600">
-          <button
-            onClick={() => { setActiveTab('advance'); setActionMessage(null); setLastDisburseSms(null); }}
-            className={`py-2.5 sm:py-3 px-3 text-center sm:border-b-2 min-h-[44px] rounded-lg sm:rounded-none flex items-center justify-center gap-1.5 transition-all ${
-              activeTab === 'advance'
-                ? 'sm:border-slate-900 text-slate-950 bg-white font-black shadow-xs sm:shadow-none'
-                : 'border-transparent text-slate-600 hover:text-slate-900 hover:bg-white/60 sm:hover:bg-slate-100'
-            }`}
-          >
-            <HandCoins className="h-4 w-4 shrink-0 text-amber-600 sm:text-slate-900" />
-            <span className="truncate">Add Advance</span>
-          </button>
-          <button
-            onClick={() => { setActiveTab('hisaab'); setActionMessage(null); }}
-            className={`py-2.5 sm:py-3 px-3 text-center sm:border-b-2 min-h-[44px] rounded-lg sm:rounded-none flex items-center justify-center gap-1.5 transition-all ${
-              activeTab === 'hisaab'
-                ? 'sm:border-slate-900 text-slate-950 bg-white font-black shadow-xs sm:shadow-none'
-                : 'border-transparent text-slate-600 hover:text-slate-900 hover:bg-white/60 sm:hover:bg-slate-100'
-            }`}
-          >
-            <Calculator className="h-4 w-4 shrink-0 text-indigo-600 sm:text-slate-900" />
-            <span className="truncate">Hisaab</span>
-          </button>
-          <button
-            onClick={() => { setActiveTab('expense'); setActionMessage(null); }}
-            className={`py-2.5 sm:py-3 px-3 text-center sm:border-b-2 min-h-[44px] rounded-lg sm:rounded-none flex items-center justify-center gap-1.5 transition-all ${
-              activeTab === 'expense'
-                ? 'sm:border-slate-900 text-slate-950 bg-white font-black shadow-xs sm:shadow-none'
-                : 'border-transparent text-slate-600 hover:text-slate-900 hover:bg-white/60 sm:hover:bg-slate-100'
-            }`}
-          >
-            <IndianRupee className="h-4 w-4 shrink-0 text-red-600 sm:text-slate-900" />
-            <span className="truncate">Expense</span>
-          </button>
-          <button
-            onClick={() => { setActiveTab('transfer'); setActionMessage(null); }}
-            className={`py-2.5 sm:py-3 px-3 text-center sm:border-b-2 min-h-[44px] rounded-lg sm:rounded-none flex items-center justify-center gap-1.5 transition-all ${
-              activeTab === 'transfer'
-                ? 'sm:border-slate-900 text-slate-950 bg-white font-black shadow-xs sm:shadow-none'
-                : 'border-transparent text-slate-600 hover:text-slate-900 hover:bg-white/60 sm:hover:bg-slate-100'
-            }`}
-          >
-            <ArrowRightLeft className="h-4 w-4 shrink-0 text-emerald-600 sm:text-slate-900" />
-            <span className="truncate">Transfer</span>
-          </button>
+      <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
+        {/* Quick Action Tabs */}
+        <div className="p-2 border-b border-slate-100 bg-slate-50/60">
+          <div className="grid grid-cols-4 gap-1 bg-slate-200/70 p-1 rounded-xl text-xs font-bold">
+            <button
+              type="button"
+              onClick={() => { setActiveTab('advance'); setActionMessage(null); setLastDisburseSms(null); }}
+              className={`py-2 px-1 text-center rounded-lg transition-all min-h-[38px] flex items-center justify-center ${
+                activeTab === 'advance'
+                  ? 'bg-white text-slate-950 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/40'
+              }`}
+            >
+              <span className="hidden sm:inline">Add </span>Advance
+            </button>
+            <button
+              type="button"
+              onClick={() => { setActiveTab('hisaab'); setActionMessage(null); }}
+              className={`py-2 px-1 text-center rounded-lg transition-all min-h-[38px] flex items-center justify-center ${
+                activeTab === 'hisaab'
+                  ? 'bg-white text-slate-950 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/40'
+              }`}
+            >
+              Hisaab
+            </button>
+            <button
+              type="button"
+              onClick={() => { setActiveTab('expense'); setActionMessage(null); }}
+              className={`py-2 px-1 text-center rounded-lg transition-all min-h-[38px] flex items-center justify-center ${
+                activeTab === 'expense'
+                  ? 'bg-white text-slate-950 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/40'
+              }`}
+            >
+              Expense
+            </button>
+            <button
+              type="button"
+              onClick={() => { setActiveTab('transfer'); setActionMessage(null); }}
+              className={`py-2 px-1 text-center rounded-lg transition-all min-h-[38px] flex items-center justify-center ${
+                activeTab === 'transfer'
+                  ? 'bg-white text-slate-950 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/40'
+              }`}
+            >
+              Transfer
+            </button>
+          </div>
         </div>
 
         {/* Tab content forms */}
@@ -2924,37 +2850,30 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                   <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
                     Payment Method
                   </label>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-2 gap-2 bg-slate-100 p-1 rounded-lg">
                     <button
                       type="button"
                       onClick={() => setExpensePaymentMethod('cash')}
-                      className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg border text-xs font-bold transition-all min-h-[44px] ${
+                      className={`py-2 px-3 rounded-md text-xs font-bold transition-all text-center min-h-[38px] ${
                         expensePaymentMethod === 'cash'
-                          ? 'border-emerald-600 bg-emerald-50 text-emerald-800 ring-1 ring-emerald-600 shadow-xs'
-                          : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'
+                          ? 'bg-white text-slate-950 shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
                       }`}
                     >
-                      <Banknote className="h-4 w-4 text-emerald-600" />
-                      <span>Cash in Hand</span>
+                      Cash in Hand
                     </button>
                     <button
                       type="button"
                       onClick={() => setExpensePaymentMethod('online')}
-                      className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg border text-xs font-bold transition-all min-h-[44px] ${
+                      className={`py-2 px-3 rounded-md text-xs font-bold transition-all text-center min-h-[38px] ${
                         expensePaymentMethod === 'online'
-                          ? 'border-indigo-600 bg-indigo-50 text-indigo-800 ring-1 ring-indigo-600 shadow-xs'
-                          : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'
+                          ? 'bg-white text-slate-950 shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
                       }`}
                     >
-                      <CreditCard className="h-4 w-4 text-indigo-600" />
-                      <span>Online / Bank UPI</span>
+                      Online (Bank / UPI)
                     </button>
                   </div>
-                  <p className="mt-1.5 text-[11px] text-slate-500">
-                    {expensePaymentMethod === 'cash'
-                      ? 'Paid with physical cash. Your available cash balance will be deducted.'
-                      : 'Paid from your personal bank account or UPI. Available cash in hand will not change.'}
-                  </p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
@@ -3153,131 +3072,87 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         </div>
       </div>
 
-      {/* 3. Unified Transaction History Section (All Cash Spending: Expenses & Worker Advances) */}
-      <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">
-        {/* Header */}
-        <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-2 flex-wrap">
-          <div className="flex items-center gap-2">
-            <History className="h-4 w-4 text-slate-800" />
-            <div>
-              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900">
-                Transaction History
-              </h2>
-              <p className="text-[11px] text-slate-500">
-                Unified record of all offline cash & online transactions
-              </p>
-            </div>
+      {/* 3. Transaction History Section */}
+      <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
+        {/* Card Header: 1 clean line */}
+        <div className="px-4 py-3 border-b border-slate-100 bg-slate-50/60 flex items-center justify-between">
+          <h2 className="text-xs font-bold uppercase tracking-wider text-slate-800">
+            Transaction History
+          </h2>
+          <div className="text-right">
+            <span className="text-xs font-bold text-slate-900">
+              {formatINR(totalSpendingAmount)}
+            </span>
+            <span className="text-[11px] text-slate-500 ml-1">spent</span>
           </div>
-
-          <span className="text-[11px] font-black text-red-600 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full shrink-0">
-            {formatINR(totalSpendingAmount)} spent
-          </span>
         </div>
 
-        {/* Search & Filter Controls */}
+        {/* Filter Controls: Sleek & Minimal */}
         <div className="p-3 bg-white border-b border-slate-100 space-y-2.5">
-          {/* Primary Channel Filter Toggle: Before any filters */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 pb-0.5">
-            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-              Transaction Mode:
-            </span>
-            <div className="grid grid-cols-3 gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200">
-              <button
-                type="button"
-                onClick={() => setHistoryChannelFilter('all')}
-                className={`px-2.5 py-1.5 rounded-md text-xs font-bold text-center transition-all min-h-[34px] ${
-                  historyChannelFilter === 'all'
-                    ? 'bg-slate-900 text-white shadow-xs'
-                    : 'text-slate-600 hover:text-slate-950 hover:bg-white/60'
-                }`}
-              >
-                All ({combinedTransactions.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setHistoryChannelFilter('offline')}
-                className={`flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-bold transition-all min-h-[34px] ${
-                  historyChannelFilter === 'offline'
-                    ? 'bg-emerald-600 text-white shadow-xs'
-                    : 'text-slate-600 hover:text-slate-950 hover:bg-white/60'
-                }`}
-              >
-                <Banknote className="h-3.5 w-3.5" />
-                <span>Offline ({combinedTransactions.filter(t => !t.isOnline).length})</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setHistoryChannelFilter('online')}
-                className={`flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-bold transition-all min-h-[34px] ${
-                  historyChannelFilter === 'online'
-                    ? 'bg-indigo-600 text-white shadow-xs'
-                    : 'text-slate-600 hover:text-slate-950 hover:bg-white/60'
-                }`}
-              >
-                <QrCode className="h-3.5 w-3.5" />
-                <span>Online ({combinedTransactions.filter(t => t.isOnline).length})</span>
-              </button>
-            </div>
+          {/* Transaction Mode Toggle (All | Cash | Online) */}
+          <div className="grid grid-cols-3 gap-1 bg-slate-100 p-1 rounded-lg">
+            <button
+              type="button"
+              onClick={() => setHistoryChannelFilter('all')}
+              className={`py-1.5 text-xs font-bold rounded-md transition-all text-center ${
+                historyChannelFilter === 'all'
+                  ? 'bg-white text-slate-950 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-900'
+              }`}
+            >
+              All
+            </button>
+            <button
+              type="button"
+              onClick={() => setHistoryChannelFilter('offline')}
+              className={`py-1.5 text-xs font-bold rounded-md transition-all text-center ${
+                historyChannelFilter === 'offline'
+                  ? 'bg-white text-slate-950 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-900'
+              }`}
+            >
+              Cash (Offline)
+            </button>
+            <button
+              type="button"
+              onClick={() => setHistoryChannelFilter('online')}
+              className={`py-1.5 text-xs font-bold rounded-md transition-all text-center ${
+                historyChannelFilter === 'online'
+                  ? 'bg-white text-slate-950 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-900'
+              }`}
+            >
+              Online
+            </button>
           </div>
 
-          {/* Co-Supervisor Filter (Only if multiple supervisors exist in the factory) */}
-          {hasCoSupervisors && (
-            <div className="flex items-center justify-between pb-1 text-xs">
-              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Supervisor:</span>
-              <div className="flex gap-1">
-                <button
-                  type="button"
-                  onClick={() => setHistorySupervisorFilter('all')}
-                  className={`px-2.5 py-0.5 rounded text-[11px] font-bold transition-colors ${
-                    historySupervisorFilter === 'all'
-                      ? 'bg-slate-900 text-white'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                  }`}
-                >
-                  All Factory ({channelFilteredTransactions.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setHistorySupervisorFilter('my')}
-                  className={`px-2.5 py-0.5 rounded text-[11px] font-bold transition-colors ${
-                    historySupervisorFilter === 'my'
-                      ? 'bg-slate-900 text-white'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                  }`}
-                >
-                  My Account ({channelFilteredTransactions.filter(t => t.isOwn).length})
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Live Search Bar */}
+          {/* Search Bar */}
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400 pointer-events-none" />
             <input
               type="text"
               value={historySearchQuery}
               onChange={(e) => setHistorySearchQuery(e.target.value)}
-              placeholder="Search transactions (worker, transfer, expense, note)..."
-              className="w-full pl-9 pr-3 py-2 rounded-lg border border-slate-300 text-xs min-h-[38px] text-slate-950 bg-white placeholder:text-slate-400 focus:ring-2 focus:ring-slate-900 focus:border-slate-900"
+              placeholder="Search by worker, note, or amount..."
+              className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-900 bg-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-400 min-h-[36px]"
             />
           </div>
 
-          {/* Type Filter Pills: All, Salary Payments, Advances, Transfers, Expenses, Refunds */}
+          {/* Category Filter Pills (clean labels, no repeated noise counts) */}
           <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
             {[
-              { id: 'all', label: `All (${channelFilteredTransactions.length})` },
-              { id: 'salary', label: `Salary (${channelFilteredTransactions.filter(t => t.kind === 'salary_payment' || t.kind === 'salary_earned').length})` },
-              { id: 'advances', label: `Advances (${channelFilteredTransactions.filter(t => t.kind === 'advance' || t.kind === 'advance_recovery').length})` },
-              { id: 'transfers', label: `Transfers (${channelFilteredTransactions.filter(t => t.kind === 'transfer_sent' || t.kind === 'transfer_received').length})` },
-              { id: 'expenses', label: `Expenses (${channelFilteredTransactions.filter(t => t.kind === 'expense').length})` },
-              { id: 'refunds', label: `Refunds (${channelFilteredTransactions.filter(t => t.kind === 'advance_refund' || t.isRefunded).length})` },
+              { id: 'all', label: 'All' },
+              { id: 'advances', label: 'Advances' },
+              { id: 'salary', label: 'Hisaab' },
+              { id: 'expenses', label: 'Expenses' },
+              { id: 'transfers', label: 'Transfers' },
+              { id: 'refunds', label: 'Refunds' },
             ].map((pill) => (
               <button
                 key={pill.id}
                 type="button"
                 onClick={() => setHistoryTypeFilter(pill.id as any)}
-                className={`px-2.5 py-1 rounded-full text-[11px] font-bold shrink-0 transition-colors ${
+                className={`px-3 py-1 rounded-full text-xs font-semibold shrink-0 transition-colors ${
                   historyTypeFilter === pill.id
                     ? 'bg-slate-900 text-white shadow-2xs'
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
@@ -3294,7 +3169,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           <div className="p-8 text-center text-xs text-slate-500">
             {historySearchQuery || historyTypeFilter !== 'all'
               ? 'No transactions matching your search or filter.'
-              : 'No transactions recorded yet for this factory or account.'}
+              : 'No transactions recorded yet.'}
           </div>
         ) : (
           <ul className="divide-y divide-slate-100 bg-white">
@@ -3304,98 +3179,81 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
               const timeStr = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
               return (
-                <li key={tx.id} className="p-3.5 space-y-2 hover:bg-slate-50/70 transition-colors">
-                  {/* Top Row: Type/Category Badge & Amount */}
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border uppercase tracking-wider ${tx.badgeClass}`}>
-                        {tx.badgeIcon}
-                        <span>{tx.categoryLabel}</span>
-                      </span>
-                      {tx.isOnline ? (
-                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 uppercase tracking-wider">
-                          <QrCode className="h-3 w-3" />
-                          <span>Online</span>
+                <li key={tx.id} className="p-3.5 hover:bg-slate-50/70 transition-colors">
+                  <div className="flex items-start justify-between gap-3">
+                    {/* Left: Category Tag, Title, Subtitle, Date */}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                          tx.isRefunded
+                            ? 'bg-amber-100 text-amber-800'
+                            : tx.kind === 'salary_payment'
+                            ? 'bg-emerald-50 text-emerald-800'
+                            : tx.kind === 'advance'
+                            ? 'bg-slate-100 text-slate-700'
+                            : tx.kind === 'expense'
+                            ? 'bg-rose-50 text-rose-700'
+                            : tx.kind === 'transfer_sent'
+                            ? 'bg-purple-50 text-purple-700'
+                            : 'bg-teal-50 text-teal-700'
+                        }`}>
+                          {tx.isRefunded ? 'Refunded' : tx.categoryLabel}
                         </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase tracking-wider">
-                          <Banknote className="h-3 w-3" />
-                          <span>Cash</span>
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-right">
-                      {tx.isRefunded ? (
-                        <div className="flex items-center gap-1.5 justify-end">
-                          <span className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded font-bold uppercase">
-                            Refunded
-                          </span>
-                          <span className="text-sm font-black line-through text-slate-400">
-                            {formatINR(tx.amount)}
-                          </span>
-                        </div>
-                      ) : tx.direction === 'inflow' ? (
-                        <div className="flex items-center gap-1 justify-end">
-                          <span className="text-[10px] text-emerald-600 font-bold uppercase mr-1">
-                            {tx.kind === 'advance_refund' ? 'Credited' : 'Received'}
-                          </span>
-                          <span className="text-sm font-black text-emerald-600">
-                            +{formatINR(tx.amount)}
-                          </span>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-1 justify-end">
-                          <span className="text-xs text-slate-400 font-semibold uppercase mr-1">
-                            {tx.kind === 'transfer_sent' ? 'Sent' : 'Spent'}
-                          </span>
-                          <span className="text-sm font-black text-red-600">
-                            -{formatINR(tx.amount)}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
 
-                  {/* Middle Row: Title & Subtitle */}
-                  <div>
-                    <p className="text-xs font-bold text-slate-900 leading-snug">
-                      {tx.title}
-                    </p>
-                    {tx.subtitle && tx.subtitle !== tx.title && (
-                      <p className="text-[11px] text-slate-500 line-clamp-1 mt-0.5">
-                        {tx.subtitle}
+                        {tx.isOnline && (
+                          <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700 uppercase tracking-wider">
+                            Online
+                          </span>
+                        )}
+                      </div>
+
+                      <p className="text-xs font-bold text-slate-900 leading-snug">
+                        {tx.title}
                       </p>
-                    )}
-                  </div>
 
-                  {/* Bottom Row: Timestamp, Supervisor Attribution, and Proof/Receipt Button */}
-                  <div className="flex items-center justify-between pt-1 text-[11px] text-slate-400 border-t border-slate-50">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span>
-                        {dateStr} at {timeStr}
-                      </span>
-                      {tx.supervisorName && (
-                        <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
-                          {tx.isOwn ? 'By You' : `By ${tx.supervisorName}`}
-                        </span>
+                      {tx.subtitle && tx.subtitle !== tx.title && (
+                        <p className="text-[11px] text-slate-500 line-clamp-1 mt-0.5">
+                          {tx.subtitle}
+                        </p>
                       )}
+
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        {dateStr} at {timeStr}
+                      </p>
                     </div>
 
-                    {tx.photoUrl ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setViewingPhotoUrl(tx.photoUrl);
-                          setViewingPhotoTitle(tx.photoTitle);
-                        }}
-                        className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded cursor-pointer transition-colors shadow-2xs"
-                      >
-                        <Camera className="h-3 w-3 text-emerald-600" />
-                        <span>{tx.photoButtonLabel}</span>
-                      </button>
-                    ) : tx.kind === 'advance' ? (
-                      <span className="text-[10px] text-slate-400 italic">No photo</span>
-                    ) : null}
+                    {/* Right: Clean Amount & Optional Proof */}
+                    <div className="text-right shrink-0">
+                      {tx.isRefunded ? (
+                        <span className="text-sm font-bold line-through text-slate-400 block">
+                          {formatINR(tx.amount)}
+                        </span>
+                      ) : tx.direction === 'inflow' ? (
+                        <span className="text-sm font-bold text-emerald-600 block">
+                          +{formatINR(tx.amount)}
+                        </span>
+                      ) : (
+                        <span className="text-sm font-bold text-slate-900 block">
+                          -{formatINR(tx.amount)}
+                        </span>
+                      )}
+
+                      {tx.photoUrl && (
+                        <div className="mt-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setViewingPhotoUrl(tx.photoUrl);
+                              setViewingPhotoTitle(tx.photoTitle);
+                            }}
+                            className="inline-flex items-center gap-1 text-[10px] font-semibold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-2 py-0.5 rounded transition-colors"
+                          >
+                            <Camera className="h-3 w-3 text-slate-500" />
+                            <span>Proof</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </li>
               );
@@ -3412,8 +3270,8 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
               className="text-xs font-bold text-indigo-600 hover:text-indigo-800 transition-colors"
             >
               {isHistoryExpanded
-                ? '▲ Show Recent (8)'
-                : `▼ View All (${filteredTransactions.length}) Transactions`}
+                ? 'Show Recent (8)'
+                : `View All (${filteredTransactions.length}) Transactions`}
             </button>
           </div>
         )}

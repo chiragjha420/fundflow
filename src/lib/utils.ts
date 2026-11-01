@@ -22,11 +22,14 @@ export function formatINR(amount: number | string): string {
  */
 export function parseHandoverNote(rawNote: string | null | undefined): { note: string; photoUrl: string | null } {
   if (!rawNote) return { note: '', photoUrl: null };
+  let photoUrl: string | null = null;
   const match = rawNote.match(/\[handover_photo:(https?:\/\/[^\]]+)\]/);
   if (match) {
-    const photoUrl = match[1];
-    const cleanNote = rawNote.replace(/\[handover_photo:https?:\/\/[^\]]+\]/, '').trim();
-    return { note: cleanNote, photoUrl };
+    photoUrl = match[1];
   }
-  return { note: rawNote, photoUrl: null };
+  const cleanNote = rawNote
+    .replace(/\[handover_photo:https?:\/\/[^\]]+\]/g, '')
+    .replace(/\[TYPE:[^\]]+\]/gi, '')
+    .trim();
+  return { note: cleanNote, photoUrl };
 }
