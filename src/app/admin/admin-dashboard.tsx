@@ -37,7 +37,8 @@ import {
   ArrowRightLeft,
   Wrench,
   Bell,
-  Banknote
+  Banknote,
+  QrCode
 } from 'lucide-react';
 import { 
   FactoryWorkerBalance, 
@@ -110,6 +111,7 @@ interface AdminDashboardProps {
   workers: FactoryWorkerBalance[];
   refundedTransactions?: Record<string, { refundedAt: string; reason: string; amount: number; workerName: string }>;
   salaryLedgerEntries?: WorkerSalaryLedgerEntry[];
+  hisaabRecords?: any[];
 }
 
 export function AdminDashboard({
@@ -120,6 +122,7 @@ export function AdminDashboard({
   workers,
   refundedTransactions = {},
   salaryLedgerEntries = [],
+  hisaabRecords = [],
 }: AdminDashboardProps) {
   const [formError, setFormError] = useState<string | null>(null);
   const [formSuccess, setFormSuccess] = useState(false);
@@ -757,6 +760,13 @@ export function AdminDashboard({
 
     const transfers = transfersReceived - transfersSent;
 
+    // Online QR payouts during Hisaab for this factory
+    const onlinePaid = (hisaabRecords || [])
+      .filter(h => h.factory_id === factory.id && Number(h.online_paid || 0) > 0)
+      .reduce((sum, h) => sum + Number(h.online_paid || 0), 0);
+
+    const totalSpend = disbursed + onlinePaid + factoryExpenses;
+
     return {
       id: factory.id,
       name: factory.name,
@@ -765,7 +775,9 @@ export function AdminDashboard({
       confirmed,
       transfers,
       disbursed,
+      onlinePaid,
       expenses: factoryExpenses,
+      totalSpend,
       remaining,
     };
   });
@@ -857,8 +869,31 @@ export function AdminDashboard({
         factoryId: exp.factory_id,
         supervisorId: exp.supervisor_id,
         isFlagged: false,
+        isRefunded: false,
+        refundInfo: undefined,
       };
-    })
+    }),
+    ...(hisaabRecords || [])
+      .filter(h => Number(h.online_paid || 0) > 0)
+      .map(h => {
+        return {
+          id: `hisaab-online-${h.id}`,
+          created_at: h.created_at,
+          amount: Number(h.online_paid),
+          status: 'confirmed' as any,
+          note: `[Online QR Payout] Paid to worker QR (${h.from_date || ''} to ${h.to_date || ''})${h.note ? ` • ${h.note}` : ''}`,
+          type: 'online_qr_payment',
+          purpose: 'Wages' as const,
+          fromLabel: h.supervisor_name ? `${h.supervisor_name} (Online)` : 'Online / QR',
+          toLabel: h.worker_name || 'Worker',
+          factoryId: h.factory_id,
+          supervisorId: h.supervisor_id,
+          isFlagged: false,
+          isOnline: true,
+          isRefunded: false,
+          refundInfo: undefined,
+        };
+      })
   ].filter(entry => {
     // Factory Filter
     if (selectedFactoryId !== 'all' && entry.factoryId !== selectedFactoryId) {
@@ -1372,100 +1407,138 @@ export function AdminDashboard({
 
         {/* Right Column: Factory Cash Positions table */}
         <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden lg:col-span-2">
-          <div className="px-5 py-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Building2 className="h-5 w-5 text-slate-600" />
-              <h2 className="text-sm font-bold uppercase tracking-wider text-slate-900">Factory Cash Positions</h2>
-            </div>
-          </div>
+          {(() => {
+            const totalAllSpend = factoryCashPositions.reduce((s, p) => s + (p.totalSpend || 0), 0);
+            const totalAllCashDisbursed = factoryCashPositions.reduce((s, p) => s + (p.disbursed || 0), 0);
+            const totalAllOnline = factoryCashPositions.reduce((s, p) => s + (p.onlinePaid || 0), 0);
+            const totalAllExpenses = factoryCashPositions.reduce((s, p) => s + (p.expenses || 0), 0);
 
-          {factoryCashPositions.length === 0 ? (
-            <div className="p-8 text-center text-sm text-slate-500">
-              No factories configured. Create a factory under the Supervisors tab to see cash positions.
-            </div>
-          ) : (
-            <>
-              {/* Mobile Factory Cards (Zero Horizontal Scroll) */}
-              <div className="md:hidden divide-y divide-slate-100 bg-white">
-                {factoryCashPositions.map((pos) => (
-                  <div key={pos.id} className="p-4 space-y-2.5">
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <h3 className="font-bold text-slate-900 text-sm">{pos.name}</h3>
-                        <p className="text-xs text-slate-500">{pos.location}</p>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Cash On Hand</span>
-                        <span className="text-base font-black text-emerald-600">{formatINR(pos.remaining)}</span>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2 text-xs bg-slate-50 p-2.5 rounded-lg border border-slate-100">
-                      <div>
-                        <span className="text-slate-500 block text-[11px]">Sent:</span>
-                        <span className="font-semibold text-slate-700">{formatINR(pos.sent)}</span>
-                      </div>
-                      <div>
-                        <span className="text-slate-500 block text-[11px]">Confirmed:</span>
-                        <span className="font-semibold text-slate-800">{formatINR(pos.confirmed)}</span>
-                      </div>
-                      <div>
-                        <span className="text-slate-500 block text-[11px]">Net Transfers:</span>
-                        <span className={`font-semibold ${pos.transfers > 0 ? 'text-emerald-600' : pos.transfers < 0 ? 'text-amber-600' : 'text-slate-600'}`}>
-                          {pos.transfers > 0 ? `+${formatINR(pos.transfers)}` : formatINR(pos.transfers)}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-slate-500 block text-[11px]">Disbursed:</span>
-                        <span className="font-semibold text-slate-700">{formatINR(pos.disbursed)}</span>
-                      </div>
-                      <div className="col-span-2 pt-1 border-t border-slate-200/60 flex justify-between items-center">
-                        <span className="text-slate-500 text-[11px]">Expenses:</span>
-                        <span className="font-bold text-red-600">{formatINR(pos.expenses)}</span>
-                      </div>
-                    </div>
+            return (
+              <>
+                <div className="px-5 py-4 border-b border-slate-100 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Building2 className="h-5 w-5 text-slate-600" />
+                    <h2 className="text-sm font-bold uppercase tracking-wider text-slate-900">Factory Cash & Spends Summary</h2>
                   </div>
-                ))}
-              </div>
+                  {factoryCashPositions.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="text-slate-600">
+                        Total Spends: <strong className="text-slate-950 font-black">{formatINR(totalAllSpend)}</strong>
+                      </span>
+                      <span className="text-slate-300 hidden sm:inline">•</span>
+                      <span className="text-indigo-700">
+                        Online QR: <strong className="font-bold">{formatINR(totalAllOnline)}</strong>
+                      </span>
+                      <span className="text-slate-300 hidden sm:inline">•</span>
+                      <span className="text-slate-600">
+                        Cash: <strong className="font-bold">{formatINR(totalAllCashDisbursed)}</strong>
+                      </span>
+                    </div>
+                  )}
+                </div>
 
-              {/* Desktop Table View */}
-              <div className="hidden md:block overflow-x-auto">
-                <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
-                  <thead className="bg-slate-50 text-slate-700 font-medium text-xs uppercase tracking-wider">
-                    <tr>
-                      <th className="px-6 py-3">Factory</th>
-                      <th className="px-6 py-3 text-right">Sent (Total)</th>
-                      <th className="px-6 py-3 text-right">Confirmed Rec</th>
-                      <th className="px-6 py-3 text-right">Transfers (Net)</th>
-                      <th className="px-6 py-3 text-right">Disbursed (Workers)</th>
-                      <th className="px-6 py-3 text-right">Expenses</th>
-                      <th className="px-6 py-3 text-right">Cash On Hand</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 bg-white text-slate-900 font-semibold">
-                    {factoryCashPositions.map((pos) => (
-                      <tr key={pos.id} className="hover:bg-slate-50">
-                        <td className="px-6 py-4">
-                          <div>
-                            <div className="font-bold text-slate-900">{pos.name}</div>
-                            <div className="text-xs text-slate-500 font-normal">{pos.location}</div>
+                {factoryCashPositions.length === 0 ? (
+                  <div className="p-8 text-center text-sm text-slate-500">
+                    No factories configured. Create a factory under the Supervisors tab to see cash positions.
+                  </div>
+                ) : (
+                  <>
+                    {/* Mobile Factory Cards (Zero Horizontal Scroll) */}
+                    <div className="md:hidden divide-y divide-slate-100 bg-white">
+                      {factoryCashPositions.map((pos) => (
+                        <div key={pos.id} className="p-4 space-y-2.5">
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <h3 className="font-bold text-slate-900 text-sm">{pos.name}</h3>
+                              <p className="text-xs text-slate-500">{pos.location}</p>
+                            </div>
+                            <div className="text-right">
+                              <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Cash On Hand</span>
+                              <span className="text-base font-black text-emerald-600">{formatINR(pos.remaining)}</span>
+                            </div>
                           </div>
-                        </td>
-                        <td className="px-6 py-4 text-right text-slate-500">{formatINR(pos.sent)}</td>
-                        <td className="px-6 py-4 text-right text-slate-800">{formatINR(pos.confirmed)}</td>
-                        <td className={`px-6 py-4 text-right ${pos.transfers > 0 ? 'text-emerald-600' : pos.transfers < 0 ? 'text-amber-600' : 'text-slate-500'}`}>
-                          {pos.transfers > 0 ? `+${formatINR(pos.transfers)}` : formatINR(pos.transfers)}
-                        </td>
-                        <td className="px-6 py-4 text-right text-slate-600">{formatINR(pos.disbursed)}</td>
-                        <td className="px-6 py-4 text-right text-red-600">{formatINR(pos.expenses)}</td>
-                        <td className="px-6 py-4 text-right font-bold text-emerald-600">{formatINR(pos.remaining)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
+
+                          <div className="grid grid-cols-2 gap-2 text-xs bg-slate-50 p-2.5 rounded-lg border border-slate-100">
+                            <div>
+                              <span className="text-slate-500 block text-[11px]">Sent:</span>
+                              <span className="font-semibold text-slate-700">{formatINR(pos.sent)}</span>
+                            </div>
+                            <div>
+                              <span className="text-slate-500 block text-[11px]">Confirmed:</span>
+                              <span className="font-semibold text-slate-800">{formatINR(pos.confirmed)}</span>
+                            </div>
+                            <div>
+                              <span className="text-slate-500 block text-[11px]">Net Transfers:</span>
+                              <span className={`font-semibold ${pos.transfers > 0 ? 'text-emerald-600' : pos.transfers < 0 ? 'text-amber-600' : 'text-slate-600'}`}>
+                                {pos.transfers > 0 ? `+${formatINR(pos.transfers)}` : formatINR(pos.transfers)}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-slate-500 block text-[11px]">Cash Disbursed:</span>
+                              <span className="font-semibold text-slate-700">{formatINR(pos.disbursed)}</span>
+                            </div>
+                            <div>
+                              <span className="text-slate-500 block text-[11px]">Online QR Payout:</span>
+                              <span className="font-bold text-indigo-700">{formatINR(pos.onlinePaid)}</span>
+                            </div>
+                            <div>
+                              <span className="text-slate-500 block text-[11px]">Expenses:</span>
+                              <span className="font-bold text-red-600">{formatINR(pos.expenses)}</span>
+                            </div>
+                            <div className="col-span-2 pt-1.5 border-t border-slate-200/80 flex justify-between items-center bg-white px-2.5 py-1.5 rounded border border-slate-100">
+                              <span className="text-slate-700 font-bold text-[11px] uppercase tracking-wider">Total Factory Spend:</span>
+                              <span className="font-black text-slate-950 text-xs">{formatINR(pos.totalSpend)}</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Desktop Table View */}
+                    <div className="hidden md:block overflow-x-auto">
+                      <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+                        <thead className="bg-slate-50 text-slate-700 font-medium text-xs uppercase tracking-wider">
+                          <tr>
+                            <th className="px-5 py-3">Factory</th>
+                            <th className="px-4 py-3 text-right">Sent (Total)</th>
+                            <th className="px-4 py-3 text-right">Confirmed Rec</th>
+                            <th className="px-4 py-3 text-right">Transfers (Net)</th>
+                            <th className="px-4 py-3 text-right">Cash Disbursed</th>
+                            <th className="px-4 py-3 text-right text-indigo-900">Online QR</th>
+                            <th className="px-4 py-3 text-right">Expenses</th>
+                            <th className="px-5 py-3 text-right text-slate-900">Total Spend</th>
+                            <th className="px-5 py-3 text-right text-emerald-800">Cash On Hand</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 bg-white text-slate-900 font-semibold">
+                          {factoryCashPositions.map((pos) => (
+                            <tr key={pos.id} className="hover:bg-slate-50">
+                              <td className="px-5 py-4">
+                                <div>
+                                  <div className="font-bold text-slate-900">{pos.name}</div>
+                                  <div className="text-xs text-slate-500 font-normal">{pos.location}</div>
+                                </div>
+                              </td>
+                              <td className="px-4 py-4 text-right text-slate-500">{formatINR(pos.sent)}</td>
+                              <td className="px-4 py-4 text-right text-slate-800">{formatINR(pos.confirmed)}</td>
+                              <td className={`px-4 py-4 text-right ${pos.transfers > 0 ? 'text-emerald-600' : pos.transfers < 0 ? 'text-amber-600' : 'text-slate-500'}`}>
+                                {pos.transfers > 0 ? `+${formatINR(pos.transfers)}` : formatINR(pos.transfers)}
+                              </td>
+                              <td className="px-4 py-4 text-right text-slate-600">{formatINR(pos.disbursed)}</td>
+                              <td className="px-4 py-4 text-right text-indigo-700 font-bold">{formatINR(pos.onlinePaid)}</td>
+                              <td className="px-4 py-4 text-right text-red-600">{formatINR(pos.expenses)}</td>
+                              <td className="px-5 py-4 text-right font-black text-slate-950">{formatINR(pos.totalSpend)}</td>
+                              <td className="px-5 py-4 text-right font-bold text-emerald-600">{formatINR(pos.remaining)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+              </>
+            );
+          })()}
         </div>
       </div>
 
@@ -2526,6 +2599,12 @@ export function AdminDashboard({
                         }`}>
                           {entry.status.toUpperCase()}
                         </span>
+                        {entry.type === 'online_qr_payment' && (
+                          <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                            <QrCode className="h-3 w-3" />
+                            <span>Online QR</span>
+                          </span>
+                        )}
                         {entry.isFlagged && (
                           <span className="flex items-center gap-0.5 text-[9px] font-bold text-red-600 uppercase">
                             <AlertTriangle className="h-2.5 w-2.5" />
@@ -2618,7 +2697,14 @@ export function AdminDashboard({
                           </span>
                         </td>
                         <td className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-600">
-                          {entry.type.replace(/_/g, ' ')}
+                          {entry.type === 'online_qr_payment' ? (
+                            <span className="inline-flex items-center gap-1 text-indigo-700 normal-case font-bold">
+                              <QrCode className="h-3.5 w-3.5" />
+                              <span>Online QR Payout</span>
+                            </span>
+                          ) : (
+                            entry.type.replace(/_/g, ' ')
+                          )}
                         </td>
                         <td className="px-6 py-4 text-slate-700">
                           {entry.fromLabel}
@@ -2643,7 +2729,13 @@ export function AdminDashboard({
                               {entry.status.toUpperCase()}
                             </span>
                             
-                            {entry.isFlagged && (
+                            {entry.type === 'online_qr_payment' && (
+                          <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                            <QrCode className="h-3 w-3" />
+                            <span>Online QR</span>
+                          </span>
+                        )}
+                        {entry.isFlagged && (
                               <span className="flex items-center gap-1 text-[10px] font-bold text-red-600 uppercase">
                                 <AlertTriangle className="h-3 w-3" />
                                 <span>Over 24h old</span>
@@ -2671,7 +2763,7 @@ export function AdminDashboard({
                                   )}
                                   {!parsed.note && !parsed.photoUrl && <span className="text-slate-400">-</span>}
                                 </div>
-                                {entry.purpose === 'Wages' && !entry.isRefunded && (
+                                {entry.type === 'supervisor_to_worker' && !entry.isRefunded && (
                                   <button
                                     type="button"
                                     onClick={() => setRefundTargetTx({

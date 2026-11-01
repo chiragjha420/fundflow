@@ -427,6 +427,9 @@ export interface HisaabResult {
   advanceDeducted?: number;
   newAdvanceRemaining?: number;
   netWages?: number;
+  cashPaid?: number;
+  onlinePaid?: number;
+  unpaidRemaining?: number;
   error?: string;
 }
 
@@ -435,7 +438,9 @@ export interface HisaabResult {
  * - Takes From & To date and Total Wages earned by the worker during that period.
  * - Deducts a chosen amount from the worker's outstanding advance.
  * - The advance balance is decreased by whatever deduction is made.
- * - Zero physical cash movement unless payNetCashNow is selected.
+ * - Supports splitting the net wages into physical Cash handover and Online QR payment.
+ * - Physical Cash is deducted from supervisor's balance.
+ * - Online QR payment is NOT deducted from supervisor's balance, but is tracked in factory spends and analytics for Admin.
  */
 export async function recordWorkerHisaabAction(params: {
   workerId: string;
@@ -445,6 +450,8 @@ export async function recordWorkerHisaabAction(params: {
   toDate: string;
   totalWages: number;
   advanceDeducted: number;
+  cashPaid?: number;
+  onlinePaid?: number;
   payNetCashNow?: boolean;
   note?: string;
 }): Promise<HisaabResult> {
@@ -490,21 +497,70 @@ export async function recordWorkerHisaabAction(params: {
       };
     }
 
+    const netWages = cleanWages - cleanDeduct;
+
+    // Calculate cash and online portions
+    let cleanCashPaid = 0;
+    if (params.cashPaid !== undefined) {
+      cleanCashPaid = Math.max(0, Math.round(Number(params.cashPaid) || 0));
+    } else if (params.payNetCashNow) {
+      cleanCashPaid = netWages;
+    }
+
+    const cleanOnlinePaid = Math.max(0, Math.round(Number(params.onlinePaid) || 0));
+    const totalPayout = cleanCashPaid + cleanOnlinePaid;
+
+    if (totalPayout > netWages) {
+      return {
+        success: false,
+        error: `Total payout (Cash: ₹${cleanCashPaid.toLocaleString('en-IN')} + Online: ₹${cleanOnlinePaid.toLocaleString('en-IN')} = ₹${totalPayout.toLocaleString('en-IN')}) cannot exceed net wages of ₹${netWages.toLocaleString('en-IN')}.`,
+      };
+    }
+
+    // Check supervisor balance for physical cash handover
+    if (cleanCashPaid > 0 && params.supervisorId) {
+      try {
+        const { data: supBal } = await admin.rpc('get_supervisor_balance', { sub_id: params.supervisorId });
+        if (typeof supBal === 'number' && cleanCashPaid > supBal) {
+          return {
+            success: false,
+            error: `Cannot give ₹${cleanCashPaid.toLocaleString('en-IN')} in cash. Your available cash in hand balance is ₹${supBal.toLocaleString('en-IN')}.`,
+          };
+        }
+      } catch (balErr) {
+        console.warn('Supervisor balance RPC check failed, proceeding:', balErr);
+      }
+    }
+
+    // Get supervisor name if available
+    let supervisorName = 'Supervisor';
+    if (params.supervisorId) {
+      const { data: sup } = await admin.from('supervisors').select('name').eq('id', params.supervisorId).single();
+      if (sup?.name) supervisorName = sup.name;
+    }
+
     const hisaabId = crypto.randomUUID();
     const periodStr = `${params.fromDate} to ${params.toDate}`;
     const hisaabNote = params.note?.trim() || `Hisaab settlement for ${periodStr}`;
+    const unpaidRemaining = Math.max(0, netWages - totalPayout);
 
     // 1. Record Hisaab master entry in audit_log
     const hisaabPayload = {
       id: hisaabId,
       worker_id: workerId,
+      worker_name: currentWorker.worker_name,
       factory_id: factoryId,
       supervisor_id: params.supervisorId || null,
+      supervisor_name: supervisorName,
       from_date: params.fromDate,
       to_date: params.toDate,
       total_wages: cleanWages,
       advance_deducted: cleanDeduct,
-      net_wages: cleanWages - cleanDeduct,
+      net_wages: netWages,
+      cash_paid: cleanCashPaid,
+      online_paid: cleanOnlinePaid,
+      total_paid: totalPayout,
+      unpaid_remaining: unpaidRemaining,
       previous_advance: currentAdv,
       new_advance: Math.max(0, currentAdv - cleanDeduct),
       note: hisaabNote,
@@ -533,19 +589,43 @@ export async function recordWorkerHisaabAction(params: {
       });
     }
 
-    // 3. If supervisor paid net wages in cash right now
-    const netWages = cleanWages - cleanDeduct;
-    if (params.payNetCashNow && netWages > 0 && params.supervisorId) {
+    // 3. If supervisor paid cash portion now -> deduct from supervisor physical cash in hand
+    if (cleanCashPaid > 0 && params.supervisorId) {
       await admin.from('cash_transactions').insert({
         id: crypto.randomUUID(),
         type: 'supervisor_to_worker',
         from_supervisor_id: params.supervisorId,
         to_worker_id: workerId,
-        amount: netWages,
+        amount: cleanCashPaid,
         status: 'confirmed',
         confirmed_at: new Date().toISOString(),
-        note: `[HISAAB_CASH_PAID] Net Wages Handed Over (Hisaab: ${periodStr})`,
+        note: `[HISAAB_CASH_PAID] Cash Handed Over (Hisaab: ${periodStr})${params.note ? ` • ${params.note}` : ''}`,
         created_at: new Date().toISOString(),
+      });
+    }
+
+    // 4. If online QR payment was made, record in audit_log
+    // (This does NOT touch supervisor physical cash balance, but is tracked in factory spends and analytics)
+    if (cleanOnlinePaid > 0) {
+      await admin.from('audit_log').insert({
+        table_name: 'worker_online_payments',
+        action: 'ONLINE_QR_PAYOUT',
+        row_id: crypto.randomUUID(),
+        new_data: {
+          id: crypto.randomUUID(),
+          hisaab_id: hisaabId,
+          worker_id: workerId,
+          worker_name: currentWorker.worker_name,
+          factory_id: factoryId,
+          supervisor_id: params.supervisorId || null,
+          supervisor_name: supervisorName,
+          amount: cleanOnlinePaid,
+          period: periodStr,
+          note: `[HISAAB_ONLINE_PAID] Online QR Payment (Hisaab: ${periodStr})${params.note ? ` • ${params.note}` : ''}`,
+          created_at: new Date().toISOString(),
+        },
+        changed_by: params.supervisorId || null,
+        changed_at: new Date().toISOString(),
       });
     }
 
@@ -560,6 +640,9 @@ export async function recordWorkerHisaabAction(params: {
       advanceDeducted: cleanDeduct,
       newAdvanceRemaining: Math.max(0, currentAdv - cleanDeduct),
       netWages,
+      cashPaid: cleanCashPaid,
+      onlinePaid: cleanOnlinePaid,
+      unpaidRemaining,
     };
   } catch (err: any) {
     return { success: false, error: err.message || 'Failed to record Hisaab.' };
@@ -1189,6 +1272,7 @@ export async function getWorkerFullLedgerAction(workerId: string): Promise<{
       { data: refundNotes },
       reclassMap,
       salaryEntries,
+      hisaabRecords,
     ] = await Promise.all([
       admin
         .from('cash_transactions')
@@ -1208,6 +1292,7 @@ export async function getWorkerFullLedgerAction(workerId: string): Promise<{
         .ilike('note', '%[REFUND:%'),
       getReclassifiedTransactions(),
       getSalaryLedgerEntries(undefined, workerId),
+      getWorkerHisaabRecordsAction(undefined, workerId),
     ]);
 
     const refundedMap: Record<string, string> = {};
@@ -1335,6 +1420,28 @@ export async function getWorkerFullLedgerAction(workerId: string): Promise<{
           photoUrl: null,
           effectOnAdvance: -amount,
           effectOnSalary: -amount,
+        });
+      }
+    });
+
+    // Online QR Payments (Hisaab)
+    (hisaabRecords || []).forEach(h => {
+      const onlineAmt = Number(h.online_paid || 0);
+      if (onlineAmt > 0) {
+        ledger.push({
+          id: `hisaab-online-${h.id}`,
+          date: h.created_at,
+          type: 'salary_payment',
+          title: `Online QR Payment (${h.supervisor_name ? `by ${h.supervisor_name}` : 'Supervisor'})`,
+          label: 'Online QR Payment',
+          amount: onlineAmt,
+          note: `Paid online via QR code (${h.from_date || ''} to ${h.to_date || ''})${h.note ? ` • ${h.note}` : ''}`,
+          isCash: false,
+          supervisorName: h.supervisor_name || 'Supervisor',
+          photoUrl: null,
+          effectOnAdvance: 0,
+          effectOnSalary: -onlineAmt,
+          refunded: false,
         });
       }
     });
@@ -1706,12 +1813,13 @@ export async function getSupervisorAllTransactionsAction(
       }
     }
 
-    // 2. Fetch cash transactions, reclassifications, and non-cash salary ledger entries
+    // 2. Fetch cash transactions, reclassifications, non-cash salary ledger entries, and hisaab records
     const [
       { data: txs, error },
       { data: refundLogs },
       reclassMap,
       salaryEntries,
+      hisaabRecords,
     ] = await Promise.all([
       admin
         .from('cash_transactions')
@@ -1738,6 +1846,7 @@ export async function getSupervisorAllTransactionsAction(
         .eq('action', 'refund'),
       getReclassifiedTransactions(),
       getSalaryLedgerEntries(factoryId),
+      getWorkerHisaabRecordsAction(factoryId),
     ]);
 
     if (error) {
@@ -1787,7 +1896,25 @@ export async function getSupervisorAllTransactionsAction(
       };
     });
 
-    const allCombined = [...augmentedCashTxs, ...nonCashItems].sort(
+    // 6. Convert Hisaab online QR payments to transaction items for unified feed
+    const onlineHisaabItems = (hisaabRecords || [])
+      .filter(h => Number(h.online_paid || 0) > 0)
+      .map(h => ({
+        id: `hisaab-online-${h.id}`,
+        type: 'online_qr_payout',
+        worker_payment_type: 'online_qr_payment',
+        amount: Number(h.online_paid),
+        note: `[HISAAB_ONLINE_PAID] Online QR Payment (${h.from_date || ''} to ${h.to_date || ''})${h.note ? ` • ${h.note}` : ''}`,
+        status: 'confirmed',
+        created_at: h.created_at,
+        to_worker_id: h.worker_id,
+        to_work: { name: h.worker_name || 'Worker', active: true },
+        from_supervisor_id: h.supervisor_id,
+        from: { name: h.supervisor_name || 'Supervisor' },
+        is_online: true,
+      }));
+
+    const allCombined = [...augmentedCashTxs, ...nonCashItems, ...onlineHisaabItems].sort(
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
 

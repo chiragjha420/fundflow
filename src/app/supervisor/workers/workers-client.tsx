@@ -36,7 +36,9 @@ import {
   Phone,
   Coins,
   Calculator,
-  Plus
+  Plus,
+  QrCode,
+  CreditCard
 } from 'lucide-react';
 
 interface Worker {
@@ -99,6 +101,8 @@ export function SupervisorWorkersClientPage() {
   const [hisaabToDate, setHisaabToDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
   const [hisaabTotalWages, setHisaabTotalWages] = useState<string>('');
   const [hisaabAdvanceDeduct, setHisaabAdvanceDeduct] = useState<string>('0');
+  const [hisaabCashAmount, setHisaabCashAmount] = useState<string>('');
+  const [hisaabOnlineAmount, setHisaabOnlineAmount] = useState<string>('');
   const [hisaabNote, setHisaabNote] = useState<string>('');
   const [hisaabLoading, setHisaabLoading] = useState<boolean>(false);
   const [hisaabError, setHisaabError] = useState<string>('');
@@ -140,6 +144,15 @@ export function SupervisorWorkersClientPage() {
       return;
     }
 
+    const netWages = Math.max(0, wagesNum - deductNum);
+    const cashNum = Math.max(0, parseFloat(hisaabCashAmount || '0'));
+    const onlineNum = Math.max(0, parseFloat(hisaabOnlineAmount || '0'));
+
+    if (cashNum + onlineNum > netWages) {
+      setHisaabError(`Total payout (Cash: ₹${cashNum.toLocaleString('en-IN')} + Online: ₹${onlineNum.toLocaleString('en-IN')}) cannot exceed net wages of ₹${netWages.toLocaleString('en-IN')}.`);
+      return;
+    }
+
     setHisaabLoading(true);
     setHisaabError('');
     try {
@@ -151,6 +164,8 @@ export function SupervisorWorkersClientPage() {
         toDate: hisaabToDate,
         totalWages: wagesNum,
         advanceDeducted: deductNum,
+        cashPaid: cashNum,
+        onlinePaid: onlineNum,
         note: hisaabNote || undefined,
       });
 
@@ -163,6 +178,8 @@ export function SupervisorWorkersClientPage() {
       setHisaabWorker(null);
       setHisaabTotalWages('');
       setHisaabAdvanceDeduct('0');
+      setHisaabCashAmount('');
+      setHisaabOnlineAmount('');
       setHisaabNote('');
       queryClient.invalidateQueries();
     } catch (err: any) {
@@ -1348,6 +1365,173 @@ export function SupervisorWorkersClientPage() {
                       <span>Advance Remaining After Hisaab:</span>
                       <span className="font-bold text-slate-900">{formatINR(remainingAdv)}</span>
                     </div>
+                  </div>
+                );
+              })()}
+
+              {/* Worker Payout Distribution (Cash vs Online QR) */}
+              {(() => {
+                const wagesNum = parseFloat(hisaabTotalWages) || 0;
+                const deductNum = Math.max(0, parseFloat(hisaabAdvanceDeduct) || 0);
+                const netPayable = Math.max(0, wagesNum - deductNum);
+
+                if (wagesNum <= 0) return null;
+
+                const cashNum = parseFloat(hisaabCashAmount) || 0;
+                const onlineNum = parseFloat(hisaabOnlineAmount) || 0;
+                const totalPayout = cashNum + onlineNum;
+                const remainingUnpaid = Math.max(0, netPayable - totalPayout);
+                const isOver = totalPayout > netPayable;
+
+                return (
+                  <div className="rounded-lg p-3 bg-slate-50 border border-slate-200 space-y-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                          <CreditCard className="h-4 w-4 text-indigo-600" />
+                          <span>Payout Distribution</span>
+                        </label>
+                        <p className="text-[11px] text-slate-500 mt-0.5">
+                          Specify cash handed over vs money paid online to their QR code.
+                        </p>
+                      </div>
+                      <span className="text-xs font-black text-slate-900 shrink-0">
+                        Net: {formatINR(netPayable)}
+                      </span>
+                    </div>
+
+                    {/* 1-Tap Preset Chips */}
+                    {netPayable > 0 && (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setHisaabCashAmount(String(netPayable));
+                            setHisaabOnlineAmount('0');
+                          }}
+                          className="text-xs px-2.5 py-1 rounded border border-emerald-300 bg-emerald-50 text-emerald-900 font-bold hover:bg-emerald-100 transition-colors"
+                        >
+                          All in Cash ({formatINR(netPayable)})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setHisaabCashAmount('0');
+                            setHisaabOnlineAmount(String(netPayable));
+                          }}
+                          className="text-xs px-2.5 py-1 rounded border border-indigo-300 bg-indigo-50 text-indigo-900 font-bold hover:bg-indigo-100 transition-colors"
+                        >
+                          All Online QR ({formatINR(netPayable)})
+                        </button>
+                        {netPayable > 1000 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const half = Math.floor(netPayable / 2);
+                              setHisaabCashAmount(String(half));
+                              setHisaabOnlineAmount(String(netPayable - half));
+                            }}
+                            className="text-xs px-2.5 py-1 rounded border border-slate-300 bg-white text-slate-700 font-medium hover:bg-slate-50 transition-colors"
+                          >
+                            Split Half
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setHisaabCashAmount('0');
+                            setHisaabOnlineAmount('0');
+                          }}
+                          className="text-xs px-2.5 py-1 rounded border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition-colors"
+                        >
+                          No Payout Now (₹0)
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-0.5">
+                      {/* Cash Handover Input */}
+                      <div className="space-y-1">
+                        <label htmlFor="hisaabCashAmountModal" className="block text-xs font-bold text-slate-800">
+                          Cash Handover (INR)
+                        </label>
+                        <div className="relative rounded shadow-xs">
+                          <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                            <span className="text-slate-500 text-sm font-bold">₹</span>
+                          </div>
+                          <input
+                            id="hisaabCashAmountModal"
+                            type="number"
+                            min="0"
+                            max={netPayable}
+                            value={hisaabCashAmount}
+                            onChange={(e) => setHisaabCashAmount(e.target.value)}
+                            disabled={hisaabLoading}
+                            placeholder="0"
+                            className="block w-full rounded-lg border border-slate-300 pl-7 pr-3 py-2 text-slate-950 text-sm font-bold bg-white focus:ring-2 focus:ring-slate-500 min-h-[44px]"
+                          />
+                        </div>
+                        <p className="text-[10px] text-slate-500">
+                          Deducted from your cash in hand balance.
+                        </p>
+                      </div>
+
+                      {/* Online QR Payment Input */}
+                      <div className="space-y-1">
+                        <label htmlFor="hisaabOnlineAmountModal" className="block text-xs font-bold text-indigo-950 flex items-center gap-1">
+                          <QrCode className="h-3.5 w-3.5 text-indigo-600" />
+                          <span>Online / QR Transfer (INR)</span>
+                        </label>
+                        <div className="relative rounded shadow-xs">
+                          <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                            <span className="text-indigo-500 text-sm font-bold">₹</span>
+                          </div>
+                          <input
+                            id="hisaabOnlineAmountModal"
+                            type="number"
+                            min="0"
+                            max={netPayable}
+                            value={hisaabOnlineAmount}
+                            onChange={(e) => setHisaabOnlineAmount(e.target.value)}
+                            disabled={hisaabLoading}
+                            placeholder="0"
+                            className="block w-full rounded-lg border border-indigo-300 pl-7 pr-3 py-2 text-slate-950 text-sm font-bold bg-white focus:ring-2 focus:ring-indigo-500 min-h-[44px]"
+                          />
+                        </div>
+                        <p className="text-[10px] text-indigo-700 font-medium">
+                          Paid via QR code. Not deducted from your balance.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Summary Row */}
+                    <div className="bg-white rounded border border-slate-200 p-2.5 text-xs space-y-1">
+                      <div className="flex justify-between items-center text-slate-600">
+                        <span>Physical Cash Handover:</span>
+                        <span className="font-bold text-slate-900">{formatINR(cashNum)}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-indigo-700">
+                        <span>Online QR Payment:</span>
+                        <span className="font-bold">{formatINR(onlineNum)}</span>
+                      </div>
+                      <div className="border-t border-slate-100 pt-1 flex justify-between items-center font-bold">
+                        <span className="text-slate-800">Total Payout Now:</span>
+                        <span className={isOver ? 'text-red-600 font-black' : 'text-slate-950'}>{formatINR(totalPayout)}</span>
+                      </div>
+                      {remainingUnpaid > 0 && !isOver && (
+                        <div className="flex justify-between items-center text-[11px] text-amber-700">
+                          <span>Remaining Unpaid (Accumulates):</span>
+                          <span className="font-semibold">{formatINR(remainingUnpaid)}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {isOver && (
+                      <div className="rounded p-2 bg-red-50 border border-red-200 text-xs text-red-700 font-semibold flex items-center gap-1.5">
+                        <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                        <span>Total payout ({formatINR(totalPayout)}) exceeds net wages ({formatINR(netPayable)}).</span>
+                      </div>
+                    )}
                   </div>
                 );
               })()}
