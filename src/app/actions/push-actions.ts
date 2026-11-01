@@ -86,7 +86,7 @@ export async function sendSupervisorTransferPushAction(
   try {
     const { sendPushToRole } = await import('@/lib/web-push-sender');
     await sendPushToRole('supervisor', {
-      title: '💸 Cash Transfer Received!',
+      title: 'Cash Transfer Received',
       body: `${fromSupervisorName || 'A supervisor'} sent you ₹${amount.toLocaleString('en-IN')}. Tap to confirm on your dashboard.`,
       url: '/supervisor',
     }, toSupervisorId);

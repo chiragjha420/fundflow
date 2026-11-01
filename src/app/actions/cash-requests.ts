@@ -74,7 +74,7 @@ export async function createCashRequest(
 
     // 1. Send real OS Web Push to all Admin devices (wakes laptop/phone up even if closed)
     sendPushToRole('admin', {
-      title: `🔔 New Cash Request: ₹${amount.toLocaleString('en-IN')}`,
+      title: `New Cash Request: ₹${amount.toLocaleString('en-IN')}`,
       body: `${supervisorName} (${factoryName}) requested ₹${amount.toLocaleString('en-IN')}: "${cleanNote}"`,
       url: '/admin',
     }).catch(err => console.warn('[WebPush] Error sending push to admins:', err));

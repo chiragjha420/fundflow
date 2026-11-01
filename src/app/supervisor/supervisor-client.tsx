@@ -41,7 +41,8 @@ import {
   ArrowDownLeft,
   RotateCcw,
   Building2,
-  Coins
+  Coins,
+  Banknote
 } from 'lucide-react';
 import { sendWorkerDisbursementSms } from '@/lib/sms';
 import { createCashRequest } from '@/app/actions/cash-requests';
@@ -135,7 +136,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const [viewingPhotoTitle, setViewingPhotoTitle] = useState<string>('Proof of Handover');
 
   // Disburse Payment Type (Advance vs Salary Payment)
-  const [disbursePaymentType, setDisbursePaymentType] = useState<'advance' | 'salary_payment'>('salary_payment');
+  const [disbursePaymentType, setDisbursePaymentType] = useState<'advance' | 'salary_payment'>('advance');
 
   // Settle Advance from Salary Modal States
   const [showSettleModal, setShowSettleModal] = useState<boolean>(false);
@@ -161,6 +162,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const [selectedWorkerId, setSelectedWorkerId] = useState<string>('');
   const [disburseNote, setDisburseNote] = useState<string>('');
   const [lastDisburseSms, setLastDisburseSms] = useState<{ workerName: string; smsUri: string } | null>(null);
+
 
   // Worker Search & Quick Add States
   const [workerSearchTerm, setWorkerSearchTerm] = useState<string>('');
@@ -327,12 +329,12 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         if ('vibrate' in navigator) {
           try { navigator.vibrate([200, 100, 200]); } catch {}
         }
-        sendFundFlowNotification('💵 Office Cash Received!', {
+        sendFundFlowNotification('Office Cash Received', {
           body: `Main Office sent ${formatINR(t.amount)}. Tap to confirm on your dashboard.`,
           soundType: 'cash_in',
           url: '/supervisor',
         });
-        showToast('success', `💵 Main Office sent ${formatINR(t.amount)}! Please confirm receipt below.`);
+        showToast('success', `Main Office sent ${formatINR(t.amount)}. Please confirm receipt below.`);
       }
     }
   }, [pendingTxs]);
@@ -359,31 +361,31 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
         // 1. Office Disbursed Cash to this Supervisor!
         if (payload.type === 'office_disbursement' && payload.to_supervisor_id === supervisorId) {
-          sendFundFlowNotification('💵 Office Cash Received!', {
+          sendFundFlowNotification('Office Cash Received', {
             body: `Main Office sent ${formatINR(payload.amount)}. Tap to confirm receipt on your dashboard.`,
             soundType: 'cash_in',
             url: '/supervisor',
           });
-          showToast('success', `💵 Main Office sent ${formatINR(payload.amount)}!`);
+          showToast('success', `Main Office sent ${formatINR(payload.amount)}.`);
           queryClient.invalidateQueries({ queryKey: ['incoming-pending', supervisorId] });
           queryClient.invalidateQueries({ queryKey: ['supervisor-balance', supervisorId] });
         }
 
         // 2. Peer Supervisor Transferred Cash to this Supervisor!
         if (payload.type === 'supervisor_transfer' && payload.to_supervisor_id === supervisorId) {
-          sendFundFlowNotification('💸 Cash Transfer Received!', {
+          sendFundFlowNotification('Cash Transfer Received', {
             body: `${payload.from_supervisor_name || 'A supervisor'} transferred ${formatINR(payload.amount)}. Tap to confirm.`,
             soundType: 'cash_in',
             url: '/supervisor',
           });
-          showToast('success', `💸 Transfer of ${formatINR(payload.amount)} received!`);
+          showToast('success', `Transfer of ${formatINR(payload.amount)} received.`);
           queryClient.invalidateQueries({ queryKey: ['incoming-pending', supervisorId] });
           queryClient.invalidateQueries({ queryKey: ['supervisor-balance', supervisorId] });
         }
 
         // 3. Peer Supervisor Confirmed a Transfer sent by this Supervisor!
         if (payload.type === 'receipt_confirmed' && payload.from_supervisor_id === supervisorId) {
-          sendFundFlowNotification('✅ Transfer Confirmed!', {
+          sendFundFlowNotification('Transfer Confirmed', {
             body: `${payload.to_supervisor_name || 'Supervisor'} confirmed receipt of ${formatINR(payload.amount)}.`,
             soundType: 'success',
             url: '/supervisor',
@@ -441,6 +443,20 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   });
 
   const selectedWorker = activeWorkers.find(w => w.worker_id === selectedWorkerId);
+
+  // Automatically adapt payment classification when a worker is selected
+  useEffect(() => {
+    if (!selectedWorkerId) {
+      setDisbursePaymentType('advance');
+      return;
+    }
+    const currentWorker = activeWorkers.find(w => w.worker_id === selectedWorkerId);
+    if (currentWorker && (currentWorker.unpaid_salary || 0) > 0) {
+      setDisbursePaymentType('salary_payment');
+    } else {
+      setDisbursePaymentType('advance');
+    }
+  }, [selectedWorkerId, activeWorkers]);
 
   // 4. Fetch Active Supervisors (for transfer selection)
   const { data: otherSupervisors } = useQuery({
@@ -1510,9 +1526,10 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
               <button
                 type="button"
                 onClick={() => setShowCashRequestModal(false)}
-                className="text-slate-400 hover:text-slate-600 text-sm"
+                className="text-slate-400 hover:text-slate-600 p-1"
+                title="Close"
               >
-                ✕
+                <X className="h-4 w-4" />
               </button>
             </div>
 
@@ -1651,7 +1668,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                 />
               </div>
               <p className="text-[11px] text-slate-500 mt-1.5">
-                ✓ Saved permanently to {phoneModalWorker.worker_name}'s profile for future text receipts.
+                Saved permanently to {phoneModalWorker.worker_name}'s profile for future text receipts.
               </p>
             </div>
 
@@ -2033,15 +2050,15 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                             onClick={() => setDisbursePaymentType('salary_payment')}
                             className={`py-2 px-3 rounded-lg border text-xs font-bold transition-all text-left flex flex-col ${
                               disbursePaymentType === 'salary_payment'
-                                ? 'bg-emerald-600 text-white border-emerald-700 shadow-sm'
+                                ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
                                 : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
                             }`}
                           >
                             <span className="flex items-center gap-1.5">
-                              <span>💵</span>
+                              <Banknote className="h-4 w-4" />
                               <span>Salary Payment</span>
                             </span>
-                            <span className={`text-[10px] font-normal mt-0.5 ${disbursePaymentType === 'salary_payment' ? 'text-emerald-100' : 'text-slate-400'}`}>
+                            <span className={`text-[10px] font-normal mt-0.5 ${disbursePaymentType === 'salary_payment' ? 'text-slate-300' : 'text-slate-400'}`}>
                               Wages / Kharcha withdrawal
                             </span>
                           </button>
@@ -2051,12 +2068,12 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                             onClick={() => setDisbursePaymentType('advance')}
                             className={`py-2 px-3 rounded-lg border text-xs font-bold transition-all text-left flex flex-col ${
                               disbursePaymentType === 'advance'
-                                ? 'bg-slate-900 text-white border-slate-950 shadow-sm'
+                                ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
                                 : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
                             }`}
                           >
                             <span className="flex items-center gap-1.5">
-                              <span>💸</span>
+                              <HandCoins className="h-4 w-4" />
                               <span>Cash Advance</span>
                             </span>
                             <span className={`text-[10px] font-normal mt-0.5 ${disbursePaymentType === 'advance' ? 'text-slate-300' : 'text-slate-400'}`}>
@@ -2077,9 +2094,10 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                             setSettleAmount(String(maxSettle));
                             setShowSettleModal(true);
                           }}
-                          className="w-full py-1.5 px-2.5 rounded bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-900 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                          className="w-full py-1.5 px-2.5 rounded bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-800 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
                         >
-                          <span>⇄ Settle Advance from Salary (No Cash Outflow)</span>
+                          <ArrowRightLeft className="h-3.5 w-3.5 text-slate-600" />
+                          <span>Settle Advance from Salary (No Cash Outflow)</span>
                         </button>
                       )}
                     </div>

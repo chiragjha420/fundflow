@@ -145,7 +145,7 @@ export async function createOfficeDisbursement(state: any, formData: FormData) {
 
   // 1. Send real OS Web Push to supervisor's phone (wakes phone up even when app is closed)
   sendPushToRole('supervisor', {
-    title: '💵 Office Cash Received!',
+    title: 'Office Cash Received',
     body: `Main Office sent ₹${amount.toLocaleString('en-IN')}: "${note}". Tap to confirm receipt on your dashboard.`,
     url: '/supervisor',
   }, supervisorId).catch((err) => console.warn('[WebPush] Error sending push to supervisor:', err));

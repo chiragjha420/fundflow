@@ -925,10 +925,10 @@ export function SupervisorWorkersClientPage() {
                               setSettleAmount(String(maxS));
                               setShowSettleModal(true);
                             }}
-                            className="px-2 py-1.5 rounded bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 text-xs font-bold transition-colors"
+                            className="px-2.5 py-1.5 rounded border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition-colors"
                             title="Settle Advance from Salary"
                           >
-                            ⇄ Settle
+                            Settle
                           </button>
                         )}
 

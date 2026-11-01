@@ -31,10 +31,13 @@ import {
   User,
   X,
   RotateCcw,
-  Wallet,
   Zap,
-  Sparkles,
-  CheckCircle2
+  CheckCircle2,
+  Users,
+  ArrowRightLeft,
+  Wrench,
+  Bell,
+  Banknote
 } from 'lucide-react';
 import { 
   FactoryWorkerBalance, 
@@ -218,13 +221,13 @@ export function AdminDashboard({
       if ('vibrate' in navigator) {
         try { navigator.vibrate([200, 100, 200]); } catch {}
       }
-      sendFundFlowNotification(`🔔 New Cash Request: ${formatINR(req.amount)}`, {
+      sendFundFlowNotification(`New Cash Request: ${formatINR(req.amount)}`, {
         body: `${req.supervisor_name} (${req.factory_name}) requested ${formatINR(req.amount)}: "${req.note}"`,
         soundType: 'alert',
         url: '/admin#cash-requests-section',
       });
       setInAppAlert({
-        title: `🔔 New Cash Request: ${formatINR(req.amount)}`,
+        title: `New Cash Request: ${formatINR(req.amount)}`,
         body: `${req.supervisor_name} (${req.factory_name}) requested cash: "${req.note}"`,
       });
       setTimeout(() => setInAppAlert(null), 8000);
@@ -276,13 +279,13 @@ export function AdminDashboard({
           if ('vibrate' in navigator) {
             try { navigator.vibrate([200, 100, 200]); } catch {}
           }
-          sendFundFlowNotification(`🔔 New Cash Request: ${formatINR(payload.amount)}`, {
+          sendFundFlowNotification(`New Cash Request: ${formatINR(payload.amount)}`, {
             body: `${payload.supervisor_name} (${payload.factory_name}) requested ${formatINR(payload.amount)}: "${payload.note}"`,
             soundType: 'alert',
             url: '/admin#cash-requests-section',
           });
           setInAppAlert({
-            title: `🔔 New Cash Request: ${formatINR(payload.amount)}`,
+            title: `New Cash Request: ${formatINR(payload.amount)}`,
             body: `${payload.supervisor_name} (${payload.factory_name}) requested cash: "${payload.note}"`,
           });
           setTimeout(() => setInAppAlert(null), 8000);
@@ -292,7 +295,7 @@ export function AdminDashboard({
         // B. Supervisor confirmed an office disbursement
         if (payload.type === 'receipt_confirmed' && payload.from_type === 'office') {
           playAlertSound('success');
-          sendFundFlowNotification('✅ Cash Receipt Confirmed', {
+          sendFundFlowNotification('Cash Receipt Confirmed', {
             body: `${payload.to_supervisor_name} confirmed receipt of ${formatINR(payload.amount)}.`,
             soundType: 'success',
             url: '/admin',
@@ -302,7 +305,7 @@ export function AdminDashboard({
         // C. Supervisor disputed a transaction
         if (payload.type === 'receipt_disputed') {
           playAlertSound('alert');
-          sendFundFlowNotification('⚠️ Transaction Disputed', {
+          sendFundFlowNotification('Transaction Disputed', {
             body: `${payload.to_supervisor_name} flagged an issue on a transaction: "${payload.note || 'Dispute raised'}"`,
             soundType: 'alert',
             url: '/admin',
@@ -1045,8 +1048,8 @@ export function AdminDashboard({
       {/* Floating In-App Real-Time Alert Card */}
       {inAppAlert && (
         <div className="fixed top-4 right-4 z-50 max-w-md bg-slate-900 border-2 border-emerald-500 text-white p-4 rounded-xl shadow-2xl flex items-start gap-3 transition-all">
-          <div className="h-9 w-9 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0 font-bold text-lg">
-            🔔
+          <div className="h-9 w-9 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+            <Bell className="h-4 w-4 text-emerald-400" />
           </div>
           <div className="flex-1">
             <h4 className="text-sm font-black text-white">{inAppAlert.title}</h4>
@@ -1054,9 +1057,10 @@ export function AdminDashboard({
           </div>
           <button
             onClick={() => setInAppAlert(null)}
-            className="text-slate-400 hover:text-white p-1 text-xs font-bold"
+            className="text-slate-400 hover:text-white p-1"
+            title="Dismiss notification"
           >
-            ✕
+            <X className="h-4 w-4" />
           </button>
         </div>
       )}
@@ -1437,10 +1441,10 @@ export function AdminDashboard({
                 setCreditSalaryError('');
                 setShowCreditSalaryModal(true);
               }}
-              className="inline-flex items-center gap-1.5 rounded-md border border-purple-600 bg-purple-600 px-3 py-1.5 sm:py-2 text-xs font-bold text-white shadow-xs hover:bg-purple-700 transition-colors min-h-[36px]"
+              className="inline-flex items-center gap-1.5 rounded-md bg-slate-900 px-3 py-1.5 sm:py-2 text-xs font-bold text-white shadow-xs hover:bg-slate-800 transition-colors min-h-[36px]"
               title="Credit earned salary/wages to a worker"
             >
-              <Coins className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+              <Coins className="h-3.5 w-3.5" />
               <span>+ Credit Salary</span>
             </button>
 
@@ -1453,11 +1457,11 @@ export function AdminDashboard({
                 setBatchSalarySuccess('');
                 setShowBatchSalaryModal(true);
               }}
-              className="inline-flex items-center gap-1.5 rounded-md border border-indigo-600 bg-indigo-50 px-3 py-1.5 sm:py-2 text-xs font-bold text-indigo-700 shadow-xs hover:bg-indigo-100 transition-colors min-h-[36px]"
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 sm:py-2 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-50 hover:text-slate-900 transition-colors min-h-[36px]"
               title="Accrue monthly wages for all workers in 1-click"
             >
-              <Building2 className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-              <span>👥 Batch Monthly</span>
+              <Users className="h-3.5 w-3.5 text-slate-500" />
+              <span>Batch Monthly</span>
             </button>
 
             <button
@@ -1474,27 +1478,28 @@ export function AdminDashboard({
                 setSettleAdvanceError('');
                 setShowSettleAdvanceModal(true);
               }}
-              className="inline-flex items-center gap-1.5 rounded-md border border-blue-600 bg-blue-50 px-3 py-1.5 sm:py-2 text-xs font-bold text-blue-700 shadow-xs hover:bg-blue-100 transition-colors min-h-[36px]"
-              title="Deduct advance from accumulated salary with ₹0 cash movement"
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 sm:py-2 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-50 hover:text-slate-900 transition-colors min-h-[36px]"
+              title="Deduct advance from accumulated salary with zero cash movement"
             >
-              <RotateCcw className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-              <span>⇄ Settle Advance</span>
+              <ArrowRightLeft className="h-3.5 w-3.5 text-slate-500" />
+              <span>Settle Advance</span>
             </button>
 
             <button
               type="button"
               onClick={() => setShowReclassifyModal(true)}
-              className="inline-flex items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 sm:py-2 text-xs font-bold text-amber-800 shadow-xs hover:bg-amber-100 transition-colors min-h-[36px]"
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 sm:py-2 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-50 hover:text-slate-900 transition-colors min-h-[36px]"
               title="Audit and reclassify legacy Kharcha/weekly advance entries"
             >
-              <Zap className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-amber-600" />
-              <span>⚡ Fix Kharcha</span>
+              <Wrench className="h-3.5 w-3.5 text-slate-500" />
+              <span>Fix Kharcha</span>
             </button>
 
             <Link
               href={workerFactoryId !== 'all' ? `/admin/opening-advances?factory=${workerFactoryId}` : '/admin/opening-advances'}
-              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-600 bg-emerald-600 px-3 py-1.5 sm:py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 transition-colors min-h-[36px]"
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 sm:py-2 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-50 hover:text-slate-900 transition-colors min-h-[36px]"
             >
+              <Coins className="h-3.5 w-3.5 text-slate-500" />
               <span>Opening Balances</span>
             </Link>
 
@@ -1504,7 +1509,7 @@ export function AdminDashboard({
                 onClick={exportWorkerAdvancesToCSV}
                 className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 sm:py-2 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 transition-colors min-h-[36px]"
               >
-                <Download className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-slate-500" />
+                <Download className="h-3.5 w-3.5 text-slate-500" />
                 <span>Export CSV</span>
               </button>
             )}
@@ -1812,10 +1817,10 @@ export function AdminDashboard({
                               setCreditSalaryError('');
                               setShowCreditSalaryModal(true);
                             }}
-                            className="flex-1 py-1.5 px-2 rounded bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-700 text-xs font-bold flex items-center justify-center gap-1 min-h-[34px]"
+                            className="flex-1 py-1.5 px-2 rounded bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center justify-center gap-1 min-h-[34px]"
                           >
                             <Coins className="h-3 w-3" />
-                            <span>+ Salary</span>
+                            <span>Salary</span>
                           </button>
 
                           <button
@@ -1829,16 +1834,16 @@ export function AdminDashboard({
                               setSettleAdvanceError('');
                               setShowSettleAdvanceModal(true);
                             }}
-                            className="flex-1 py-1.5 px-2 rounded bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 text-xs font-bold flex items-center justify-center gap-1 min-h-[34px] disabled:opacity-40"
+                            className="flex-1 py-1.5 px-2 rounded border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1 min-h-[34px] disabled:opacity-40"
                           >
-                            <RotateCcw className="h-3 w-3" />
-                            <span>⇄ Settle</span>
+                            <ArrowRightLeft className="h-3 w-3" />
+                            <span>Settle</span>
                           </button>
 
                           <button
                             type="button"
                             onClick={() => toggleWorkerFullLedger(item.worker.worker_id)}
-                            className="py-1.5 px-2.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1 min-h-[34px]"
+                            className="py-1.5 px-2.5 rounded border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1 min-h-[34px]"
                           >
                             <span>{isLedgerOpen ? 'Close' : 'Statement'}</span>
                             {isLedgerOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
@@ -2053,14 +2058,29 @@ export function AdminDashboard({
                                 </span>
                               </td>
 
-                              <td className="px-4 py-3 text-right">
-                                <span className={`text-xs font-black px-2 py-1 rounded ${
-                                  (item.worker.net_payable || 0) >= 0 
-                                    ? 'bg-slate-900 text-white' 
-                                    : 'bg-red-100 text-red-800 border border-red-300'
-                                }`}>
-                                  {(item.worker.net_payable || 0) >= 0 ? '+' : ''}{formatINR(item.worker.net_payable || 0)}
-                                </span>
+                              <td className="px-4 py-3 text-right whitespace-nowrap">
+                                {(item.worker.net_payable || 0) > 0 ? (
+                                  <div className="inline-flex flex-col items-end">
+                                    <span className="inline-block text-xs font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded whitespace-nowrap">
+                                      {formatINR(item.worker.net_payable || 0)}
+                                    </span>
+                                    <span className="text-[9px] text-emerald-600 font-semibold mt-0.5">Payable</span>
+                                  </div>
+                                ) : (item.worker.net_payable || 0) < 0 ? (
+                                  <div className="inline-flex flex-col items-end">
+                                    <span className="inline-block text-xs font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded whitespace-nowrap">
+                                      {formatINR(Math.abs(item.worker.net_payable || 0))}
+                                    </span>
+                                    <span className="text-[9px] text-amber-700 font-semibold mt-0.5">Advance Owed</span>
+                                  </div>
+                                ) : (
+                                  <div className="inline-flex flex-col items-end">
+                                    <span className="inline-block text-xs font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded whitespace-nowrap">
+                                      ₹0
+                                    </span>
+                                    <span className="text-[9px] text-slate-400 mt-0.5">Settled</span>
+                                  </div>
+                                )}
                               </td>
 
                               <td className="px-4 py-3 text-center">
@@ -2076,7 +2096,7 @@ export function AdminDashboard({
                                       setCreditSalaryError('');
                                       setShowCreditSalaryModal(true);
                                     }}
-                                    className="p-1 rounded bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200"
+                                    className="p-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 transition-colors"
                                     title="Credit Earned Salary"
                                   >
                                     <Coins className="h-3.5 w-3.5" />
@@ -2093,16 +2113,16 @@ export function AdminDashboard({
                                       setSettleAdvanceError('');
                                       setShowSettleAdvanceModal(true);
                                     }}
-                                    className="p-1 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 disabled:opacity-30"
+                                    className="p-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 disabled:opacity-30 transition-colors"
                                     title="Settle Advance from Salary"
                                   >
-                                    <RotateCcw className="h-3.5 w-3.5" />
+                                    <ArrowRightLeft className="h-3.5 w-3.5" />
                                   </button>
 
                                   <button
                                     type="button"
                                     onClick={() => toggleWorkerFullLedger(item.worker.worker_id)}
-                                    className="px-2 py-1 rounded border border-slate-200 text-slate-600 hover:bg-slate-100 flex items-center gap-1 font-semibold text-[11px]"
+                                    className="px-2 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-100 flex items-center gap-1 font-semibold text-[11px] transition-colors"
                                   >
                                     <span>{isLedgerOpen ? 'Hide' : 'Ledger'}</span>
                                     {isLedgerOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}

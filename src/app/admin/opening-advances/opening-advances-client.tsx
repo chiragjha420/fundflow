@@ -596,7 +596,7 @@ export function OpeningAdvancesClient({
           </div>
           {hasUnsavedChanges && (
             <span className="font-extrabold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full text-[10px]">
-              ⚡ {dirtyUpdates.length} worker{dirtyUpdates.length > 1 ? 's' : ''} modified (Unsaved)
+              {dirtyUpdates.length} worker{dirtyUpdates.length > 1 ? 's' : ''} modified (Unsaved)
             </span>
           )}
         </div>
@@ -645,7 +645,7 @@ export function OpeningAdvancesClient({
                           </span>
                           {w.worker_phone && (
                             <span className="text-[10px] text-slate-500 block">
-                              📱 {w.worker_phone}
+                              {w.worker_phone}
                             </span>
                           )}
                         </div>

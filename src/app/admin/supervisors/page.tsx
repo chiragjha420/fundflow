@@ -67,7 +67,7 @@ export default async function SupervisorsAdminPage() {
                         <div>
                           <h3 className="font-bold text-slate-900 text-sm">{sub.name}</h3>
                           <p className="text-xs text-slate-500">{sub.factories?.name || 'Unassigned'}</p>
-                          <p className="text-xs text-slate-400 mt-0.5">📱 {sub.phone}</p>
+                          <p className="text-xs text-slate-400 mt-0.5">{sub.phone}</p>
                         </div>
                         <span
                           className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
