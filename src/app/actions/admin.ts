@@ -446,3 +446,45 @@ export async function getRefundedTransactionsAction(): Promise<Record<string, { 
     return {};
   }
 }
+
+/**
+ * Admin action to view and edit/remove worker phone numbers.
+ * Only accessible by admin.
+ */
+export async function adminUpdateWorkerPhoneAction(
+  workerId: string,
+  rawPhone: string | null
+): Promise<{ success: boolean; formattedPhone?: string | null; error?: string }> {
+  try {
+    const adminClient = createAdminClient();
+
+    let formattedPhone: string | null = null;
+    if (rawPhone && rawPhone.trim()) {
+      const cleanPhone = rawPhone.trim().replace(/[^\d+]/g, '');
+      if (cleanPhone.length < 10) {
+        return { success: false, error: 'Please enter a valid 10-digit mobile number, or leave blank to remove.' };
+      }
+      formattedPhone = cleanPhone.length === 10 ? `+91${cleanPhone}` : cleanPhone;
+    }
+
+    const { error } = await adminClient
+      .from('workers')
+      .update({ phone: formattedPhone })
+      .eq('id', workerId);
+
+    if (error) {
+      console.error('adminUpdateWorkerPhoneAction DB error:', error);
+      return { success: false, error: error.message };
+    }
+
+    revalidatePath('/admin');
+    revalidatePath('/admin/opening-advances');
+    revalidatePath('/supervisor');
+    revalidatePath('/supervisor/workers');
+
+    return { success: true, formattedPhone };
+  } catch (err: any) {
+    console.error('adminUpdateWorkerPhoneAction exception:', err);
+    return { success: false, error: err.message || 'Failed to update phone number.' };
+  }
+}

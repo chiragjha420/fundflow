@@ -1008,7 +1008,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
             note: cleanNoteOnly,
           }).then((smsRes) => {
             if (smsRes.sentViaGateway) {
-              showToast('success', `Free SMS sent to ${targetWorker.worker_name} (${phoneToUse})!`);
+              showToast('success', `Free SMS receipt sent to ${targetWorker.worker_name}!`);
             } else if (smsRes.smsUri) {
               setLastDisburseSms({
                 workerName: targetWorker.worker_name,
@@ -2505,7 +2505,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search workers by name or phone..."
+            placeholder="Search workers by name..."
             className="w-full pl-9 pr-3 py-2 rounded border border-slate-300 text-xs focus:ring-slate-500 focus:border-slate-500 text-slate-950 min-h-[44px]"
           />
         </div>
@@ -2535,10 +2535,10 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                   <div>
                     <h4 className="text-sm font-bold text-slate-900">{w.worker_name}</h4>
                     {w.worker_phone ? (
-                      <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
+                      <div className="flex items-center gap-1 mt-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded w-fit">
                         <Phone className="h-3 w-3 text-emerald-600 shrink-0" />
-                        <span>{w.worker_phone}</span>
-                      </p>
+                        <span>Phone Linked</span>
+                      </div>
                     ) : (
                       <button
                         type="button"

@@ -27,7 +27,8 @@ import {
   Trash2,
   CalendarDays,
   Clock,
-  Upload
+  Upload,
+  Phone
 } from 'lucide-react';
 
 interface Worker {
@@ -242,7 +243,7 @@ export function SupervisorWorkersClientPage() {
   const handleEditClick = (worker: Worker) => {
     setEditingWorker(worker);
     setEditName(worker.worker_name);
-    setEditPhone(worker.worker_phone || '');
+    setEditPhone(''); // Protect worker privacy - do not expose phone to supervisor
     setPhotoFile(null);
     setPhotoPreview(worker.worker_photo_url);
     setActionMessage(null);
@@ -323,10 +324,15 @@ export function SupervisorWorkersClientPage() {
         }
       }
 
+      // If worker already has a phone, keep it locked. If adding for first time, save new phone.
+      const phoneToSave = editingWorker.worker_phone 
+        ? editingWorker.worker_phone 
+        : (editPhone.trim() ? (editPhone.trim().length === 10 ? `+91${editPhone.trim()}` : editPhone.trim()) : null);
+
       const res = await updateWorkerAction(
         editingWorker.worker_id,
         editName,
-        editPhone || null,
+        phoneToSave,
         finalPhotoUrl
       );
 
@@ -407,27 +413,50 @@ export function SupervisorWorkersClientPage() {
                 />
               </div>
 
-              <div>
-                <label htmlFor="editPhone" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                  Mobile Number (For Free SMS Receipts)
-                </label>
-                <div className="relative mt-1">
-                  <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 text-xs font-bold pointer-events-none">+91</span>
-                  <input
-                    id="editPhone"
-                    type="tel"
-                    disabled={actionLoading}
-                    value={editPhone.replace(/^\+91/, '')}
-                    onChange={(e) => setEditPhone(e.target.value)}
-                    placeholder="10-digit mobile number"
-                    maxLength={14}
-                    className="block w-full rounded border border-slate-300 pl-11 pr-3 py-2 text-slate-950 text-sm min-h-[44px] bg-white font-medium"
-                  />
+              {editingWorker.worker_phone ? (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                    Mobile Number
+                  </label>
+                  <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-md">
+                    <div className="flex items-center gap-2">
+                      <Phone className="h-4 w-4 text-emerald-600" />
+                      <div>
+                        <span className="text-xs font-bold text-slate-800 block">Phone Number Linked</span>
+                        <span className="text-[10px] text-emerald-600 font-semibold">SMS confirmations active</span>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-500 bg-white border border-slate-200 px-2.5 py-1 rounded shadow-2xs">
+                      Admin Only Edit
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    Worker phone numbers are protected. Only Admin can view or edit numbers once added.
+                  </p>
                 </div>
-                <p className="text-[11px] text-slate-500 mt-1">
-                  Worker will automatically receive text confirmations whenever cash is disbursed.
-                </p>
-              </div>
+              ) : (
+                <div>
+                  <label htmlFor="editPhone" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                    Add Mobile Number (10 Digits)
+                  </label>
+                  <div className="relative mt-1">
+                    <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 text-xs font-bold pointer-events-none">+91</span>
+                    <input
+                      id="editPhone"
+                      type="tel"
+                      disabled={actionLoading}
+                      value={editPhone.replace(/^\+91/, '')}
+                      onChange={(e) => setEditPhone(e.target.value)}
+                      placeholder="10-digit mobile number"
+                      maxLength={14}
+                      className="block w-full rounded border border-slate-300 pl-11 pr-3 py-2 text-slate-950 text-sm min-h-[44px] bg-white font-medium"
+                    />
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    Once added, this phone number will be locked and can only be viewed or modified by Admin.
+                  </p>
+                </div>
+              )}
 
               {/* Read-only advance display */}
               <div className="bg-slate-50 border border-slate-200 rounded p-3">
@@ -587,7 +616,7 @@ export function SupervisorWorkersClientPage() {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search workers by name or phone..."
+              placeholder="Search workers by name..."
               className="w-full pl-9 pr-3 py-2 rounded border border-slate-300 text-xs focus:ring-slate-500 focus:border-slate-500 text-slate-950 min-h-[42px] bg-white shadow-sm"
             />
           </div>
@@ -712,11 +741,16 @@ export function SupervisorWorkersClientPage() {
                       </div>
                       <div>
                         <h4 className="text-sm font-bold text-slate-900">{w.worker_name}</h4>
-                        {w.worker_phone && (
+                        {w.worker_phone ? (
                           <div className="text-xs text-slate-500 mt-0.5">
-                            <span className="text-emerald-700 font-medium flex items-center gap-1">
-                              <span>📱</span> {w.worker_phone}
+                            <span className="text-emerald-700 font-medium inline-flex items-center gap-1 text-[11px] bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">
+                              <Phone className="h-3 w-3 text-emerald-600" />
+                              <span>Phone Linked</span>
                             </span>
+                          </div>
+                        ) : (
+                          <div className="text-xs text-slate-400 mt-0.5">
+                            <span className="text-[10px] text-slate-400 italic">No phone linked</span>
                           </div>
                         )}
                         {fromDate || toDate ? (

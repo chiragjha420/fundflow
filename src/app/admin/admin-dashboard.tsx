@@ -2,14 +2,14 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { createOfficeDisbursement, refundWorkerAdvanceAction } from '@/app/actions/admin';
+import { createOfficeDisbursement, refundWorkerAdvanceAction, adminUpdateWorkerPhoneAction } from '@/app/actions/admin';
 import { AdminAIChat } from './admin-ai-chat';
 import { NotificationBanner } from '@/components/notification-banner';
 import { getCashRequests, updateCashRequestStatus, CashRequest } from '@/app/actions/cash-requests';
 import { playAlertSound, sendFundFlowNotification } from '@/lib/notifications';
 import { registerDeviceForWebPush } from '@/lib/push-client';
 import { createBrowserClient } from '@/lib/supabase/browser-client';
-import { HandCoins, Coins } from 'lucide-react';
+import { HandCoins, Coins, Edit2, Phone } from 'lucide-react';
 import { formatINR, parseHandoverNote } from '@/lib/utils';
 import { 
   Building2, 
@@ -162,6 +162,45 @@ export function AdminDashboard({
       alert(e.message || 'Error executing refund.');
     } finally {
       setRefundLoading(false);
+    }
+  };
+
+  // Admin Edit Worker Phone States
+  const [editingWorkerPhone, setEditingWorkerPhone] = useState<{
+    workerId: string;
+    workerName: string;
+    currentPhone: string;
+  } | null>(null);
+  const [phoneEditInput, setPhoneEditInput] = useState<string>('');
+  const [phoneEditLoading, setPhoneEditLoading] = useState<boolean>(false);
+  const [phoneEditError, setPhoneEditError] = useState<string>('');
+  const [phoneEditSuccess, setPhoneEditSuccess] = useState<string | null>(null);
+  const [localWorkerPhoneOverrides, setLocalWorkerPhoneOverrides] = useState<Record<string, string | null>>({});
+
+  const handleAdminSaveWorkerPhone = async () => {
+    if (!editingWorkerPhone) return;
+    setPhoneEditLoading(true);
+    setPhoneEditError('');
+    try {
+      const res = await adminUpdateWorkerPhoneAction(
+        editingWorkerPhone.workerId,
+        phoneEditInput.trim() || null
+      );
+      if (!res.success) {
+        setPhoneEditError(res.error || 'Failed to update phone number.');
+        return;
+      }
+      setLocalWorkerPhoneOverrides(prev => ({
+        ...prev,
+        [editingWorkerPhone.workerId]: res.formattedPhone || null,
+      }));
+      setPhoneEditSuccess(`Phone updated for ${editingWorkerPhone.workerName}`);
+      setTimeout(() => setPhoneEditSuccess(null), 3500);
+      setEditingWorkerPhone(null);
+    } catch (err: any) {
+      setPhoneEditError(err.message || 'Failed to update phone number.');
+    } finally {
+      setPhoneEditLoading(false);
     }
   };
 
@@ -663,10 +702,14 @@ export function AdminDashboard({
     const periodCount = periodDisbursements.filter(t => !localRefundedMap[t.id]).length;
     const factoryName = factories.find(f => f.id === w.factory_id)?.name || 'Unknown Factory';
     const supervisorName = supervisors.find(s => s.id === w.supervisor_id)?.name || 'Unknown Supervisor';
+    const effectivePhone = localWorkerPhoneOverrides[w.worker_id] !== undefined
+      ? localWorkerPhoneOverrides[w.worker_id]
+      : w.worker_phone;
 
     return {
       worker: {
         ...w,
+        worker_phone: effectivePhone,
         running_advance: adjustedRunningAdvance,
         total_cash_disbursed: adjustedTotalDisbursed,
       },
@@ -1363,9 +1406,27 @@ export function AdminDashboard({
                             <div>
                               <h4 className="text-xs font-bold text-slate-900">{item.worker.worker_name}</h4>
                               <p className="text-[11px] text-slate-500">{item.factoryName} • {item.supervisorName}</p>
-                              {item.worker.worker_phone && (
-                                <p className="text-[10px] text-slate-400">{item.worker.worker_phone}</p>
-                              )}
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                <p className="text-[10px] text-slate-500 font-medium">
+                                  {item.worker.worker_phone || 'No phone'}
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingWorkerPhone({
+                                      workerId: item.worker.worker_id,
+                                      workerName: item.worker.worker_name,
+                                      currentPhone: item.worker.worker_phone || '',
+                                    });
+                                    setPhoneEditInput(item.worker.worker_phone || '');
+                                    setPhoneEditError('');
+                                  }}
+                                  className="text-slate-400 hover:text-indigo-600 transition-colors p-0.5 rounded"
+                                  title="Edit Worker Phone (Admin)"
+                                >
+                                  <Edit2 className="h-2.5 w-2.5" />
+                                </button>
+                              </div>
                             </div>
                           </div>
 
@@ -1510,7 +1571,25 @@ export function AdminDashboard({
                                   </div>
                                   <div>
                                     <div className="font-bold text-slate-900">{item.worker.worker_name}</div>
-                                    <div className="text-xs text-slate-500">{item.worker.worker_phone || 'No phone'}</div>
+                                    <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                                      <span>{item.worker.worker_phone || 'No phone'}</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setEditingWorkerPhone({
+                                            workerId: item.worker.worker_id,
+                                            workerName: item.worker.worker_name,
+                                            currentPhone: item.worker.worker_phone || '',
+                                          });
+                                          setPhoneEditInput(item.worker.worker_phone || '');
+                                          setPhoneEditError('');
+                                        }}
+                                        className="inline-flex items-center text-slate-400 hover:text-indigo-600 transition-colors p-0.5 rounded hover:bg-slate-100"
+                                        title="Edit Worker Phone (Admin)"
+                                      >
+                                        <Edit2 className="h-3 w-3" />
+                                      </button>
+                                    </div>
                                   </div>
                                 </div>
                               </td>
@@ -2119,6 +2198,104 @@ export function AdminDashboard({
           </div>
         </div>
       )}
-</div>
+
+      {/* Admin Edit Worker Phone Modal */}
+      {editingWorkerPhone && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="h-8 w-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600">
+                  <Phone className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900">
+                    Edit Worker Phone
+                  </h3>
+                  <span className="text-[10px] text-slate-500">Admin Only Access</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setEditingWorkerPhone(null); setPhoneEditError(''); }}
+                className="text-slate-400 hover:text-slate-600 p-1"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-100 rounded-lg p-3 text-xs space-y-1">
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Worker:</span>
+                <span className="font-bold text-slate-900">{editingWorkerPhone.workerName}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Current Phone:</span>
+                <span className="font-semibold text-slate-700">{editingWorkerPhone.currentPhone || 'None'}</span>
+              </div>
+            </div>
+
+            {phoneEditError && (
+              <div className="rounded-lg bg-red-50 p-2.5 text-xs text-red-700 border border-red-200">
+                {phoneEditError}
+              </div>
+            )}
+
+            <div>
+              <label htmlFor="adminPhoneInput" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                Mobile Number
+              </label>
+              <div className="relative">
+                <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 text-xs font-bold pointer-events-none">+91</span>
+                <input
+                  id="adminPhoneInput"
+                  type="tel"
+                  disabled={phoneEditLoading}
+                  value={phoneEditInput.replace(/^\+91/, '')}
+                  onChange={(e) => setPhoneEditInput(e.target.value)}
+                  placeholder="10-digit number (or blank to clear)"
+                  maxLength={14}
+                  className="block w-full rounded-lg border border-slate-300 pl-11 pr-3 py-2 text-slate-950 text-sm focus:ring-2 focus:ring-slate-900 min-h-[44px]"
+                />
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">
+                Enter 10-digit number, or leave blank to remove the phone.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                disabled={phoneEditLoading}
+                onClick={() => { setEditingWorkerPhone(null); setPhoneEditError(''); }}
+                className="flex-1 py-2 px-3 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 min-h-[40px]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={phoneEditLoading}
+                onClick={handleAdminSaveWorkerPhone}
+                className="flex-1 py-2 px-3 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold min-h-[40px] flex items-center justify-center gap-1.5 shadow-sm"
+              >
+                {phoneEditLoading ? (
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <span>Save Phone</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Success Banner for Phone Edit */}
+      {phoneEditSuccess && (
+        <div className="fixed bottom-5 right-5 z-50 rounded-lg bg-emerald-600 px-4 py-3 text-white text-xs font-bold shadow-lg flex items-center gap-2 animate-in slide-in-from-bottom duration-200">
+          <Phone className="h-4 w-4" />
+          <span>{phoneEditSuccess}</span>
+        </div>
+      )}
+    </div>
   );
 }

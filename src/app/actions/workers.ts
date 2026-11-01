@@ -220,11 +220,30 @@ export async function updateWorkerServer(
   try {
     const admin = createAdminClient();
 
+    // Check if worker already has a phone number - only admin can modify existing numbers
+    const { data: currentWorker } = await admin
+      .from('workers')
+      .select('phone')
+      .eq('id', workerId)
+      .single();
+
+    let finalPhone = phone?.trim() || null;
+    if (currentWorker?.phone) {
+      // Preserve existing locked phone number
+      finalPhone = currentWorker.phone;
+    } else if (finalPhone) {
+      // Adding phone for the first time
+      const clean = finalPhone.replace(/[^\d+]/g, '');
+      if (clean.length === 10) {
+        finalPhone = `+91${clean}`;
+      }
+    }
+
     const { error } = await admin
       .from('workers')
       .update({
         name: name.trim(),
-        phone: phone?.trim() || null,
+        phone: finalPhone,
         photo_url: photoUrl || null,
       })
       .eq('id', workerId);
@@ -299,13 +318,25 @@ export async function updateWorkerPhoneServer(
   rawPhone: string
 ): Promise<{ success: boolean; formattedPhone?: string; error?: string }> {
   try {
+    const admin = createAdminClient();
+
+    // Check if worker already has a phone number - only admin can modify existing numbers
+    const { data: currentWorker } = await admin
+      .from('workers')
+      .select('phone')
+      .eq('id', workerId)
+      .single();
+
+    if (currentWorker?.phone) {
+      return { success: false, error: 'Worker already has a phone number linked. Only admin can modify existing numbers.' };
+    }
+
     const cleanPhone = rawPhone?.trim().replace(/[^\d+]/g, '');
     if (!cleanPhone || cleanPhone.length < 10) {
       return { success: false, error: 'Please enter a valid 10-digit mobile number.' };
     }
 
     const formattedPhone = cleanPhone.length === 10 ? `+91${cleanPhone}` : cleanPhone;
-    const admin = createAdminClient();
 
     const { error } = await admin
       .from('workers')
