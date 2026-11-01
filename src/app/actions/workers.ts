@@ -313,6 +313,114 @@ export async function creditWorkerSalaryAction(
 }
 
 /**
+ * Add / Credit salary for a worker with optional advance deduction.
+ * - Records salary earned (increases unpaid salary).
+ * - If advanceDeductAmount > 0, deducts that amount from outstanding advance (advance recovery).
+ * - Net salary remaining increases the worker's accumulated unpaid salary.
+ * - Zero physical cash movement.
+ */
+export async function addWorkerSalaryWithDeductionAction(params: {
+  workerId: string;
+  factoryId?: string;
+  salaryAmount: number;
+  advanceDeductAmount?: number;
+  periodMonth?: string;
+  note?: string;
+  supervisorId?: string;
+}): Promise<{
+  success: boolean;
+  salaryEarnedId?: string;
+  advanceRecoveryId?: string;
+  netSalaryAdded?: number;
+  advanceRemaining?: number;
+  error?: string;
+}> {
+  try {
+    const { workerId, salaryAmount } = params;
+    let factoryId = params.factoryId || '';
+    const cleanSalary = Math.round(Number(salaryAmount) || 0);
+    const cleanDeduct = Math.max(0, Math.round(Number(params.advanceDeductAmount) || 0));
+
+    if (!workerId) {
+      return { success: false, error: 'Please select a valid worker.' };
+    }
+    if (cleanSalary <= 0) {
+      return { success: false, error: 'Please enter a valid salary amount greater than zero.' };
+    }
+
+    const admin = createAdminClient();
+    if (!factoryId) {
+      const { data: w } = await admin.from('workers').select('factory_id').eq('id', workerId).single();
+      factoryId = w?.factory_id || '';
+    }
+
+    // Fetch current balances to validate advance deduction
+    const workers = await getAllWorkersWithSalaryBalancesAction(factoryId || undefined);
+    const currentWorker = workers.find(w => w.worker_id === workerId);
+    if (!currentWorker) {
+      return { success: false, error: 'Worker not found.' };
+    }
+
+    if (cleanDeduct > 0) {
+      if (cleanDeduct > currentWorker.running_advance) {
+        return {
+          success: false,
+          error: `Deduction amount (₹${cleanDeduct.toLocaleString('en-IN')}) cannot exceed worker's current advance of ₹${currentWorker.running_advance.toLocaleString('en-IN')}.`,
+        };
+      }
+      if (cleanDeduct > cleanSalary) {
+        return {
+          success: false,
+          error: `Deduction amount (₹${cleanDeduct.toLocaleString('en-IN')}) cannot exceed the salary amount of ₹${cleanSalary.toLocaleString('en-IN')}.`,
+        };
+      }
+    }
+
+    const period = params.periodMonth?.trim() || null;
+    const salaryNote = params.note?.trim() || `Salary Credited for ${period || 'Period'}`;
+
+    // 1. Record Salary Earned
+    const earnRes = await insertSalaryLedgerEntry({
+      worker_id: workerId,
+      factory_id: factoryId,
+      type: 'salary_earned',
+      amount: cleanSalary,
+      period_month: period,
+      note: salaryNote,
+      created_by: params.supervisorId || null,
+    });
+
+    let recRes: { success: boolean; id: string } | undefined;
+    // 2. Record Advance Recovery (if deduction > 0)
+    if (cleanDeduct > 0) {
+      recRes = await insertSalaryLedgerEntry({
+        worker_id: workerId,
+        factory_id: factoryId,
+        type: 'advance_recovery',
+        amount: cleanDeduct,
+        period_month: period,
+        note: `Advance deducted from ${period || 'earned'} salary`,
+        created_by: params.supervisorId || null,
+      });
+    }
+
+    revalidatePath('/admin');
+    revalidatePath('/supervisor');
+    revalidatePath('/supervisor/workers');
+
+    return {
+      success: true,
+      salaryEarnedId: earnRes.id,
+      advanceRecoveryId: recRes?.id,
+      netSalaryAdded: cleanSalary - cleanDeduct,
+      advanceRemaining: Math.max(0, currentWorker.running_advance - cleanDeduct),
+    };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Failed to process salary.' };
+  }
+}
+
+/**
  * Recover an advance from a worker's accumulated salary balance.
  * Reduces both Outstanding Advance and Unpaid Salary with ZERO cash outflow.
  */

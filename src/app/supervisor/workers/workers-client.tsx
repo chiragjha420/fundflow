@@ -13,7 +13,8 @@ import {
   getWorkerDisbursementsAction, 
   deleteWorkerServer,
   creditWorkerSalaryAction,
-  recoverWorkerAdvanceAction
+  recoverWorkerAdvanceAction,
+  addWorkerSalaryWithDeductionAction
 } from '@/app/actions/workers';
 import { compressImage } from '@/lib/image-compressor';
 import { CameraCaptureModal } from '@/components/camera-capture-modal';
@@ -43,6 +44,7 @@ interface Worker {
   factory_id: string;
   supervisor_id: string;
   opening_advance: number;
+  monthly_salary?: number;
   running_advance: number;
   unpaid_salary?: number;
   total_salary_earned?: number;
@@ -88,7 +90,8 @@ export function SupervisorWorkersClientPage() {
   const [showCreditSalaryModal, setShowCreditSalaryModal] = useState<boolean>(false);
   const [creditSalaryWorker, setCreditSalaryWorker] = useState<Worker | null>(null);
   const [creditSalaryAmount, setCreditSalaryAmount] = useState<string>('');
-  const [creditSalaryMonth, setCreditSalaryMonth] = useState<string>('');
+  const [creditSalaryDeduction, setCreditSalaryDeduction] = useState<string>('0');
+  const [creditSalaryMonth, setCreditSalaryMonth] = useState<string>(() => new Date().toLocaleString('en-IN', { month: 'long', year: 'numeric' }));
   const [creditSalaryNote, setCreditSalaryNote] = useState<string>('');
   const [creditSalaryLoading, setCreditSalaryLoading] = useState<boolean>(false);
   const [creditSalaryError, setCreditSalaryError] = useState<string>('');
@@ -103,47 +106,46 @@ export function SupervisorWorkersClientPage() {
   const handleExecuteCreditSalary = async () => {
     if (!creditSalaryWorker || !factoryId) return;
     const amountNum = parseFloat(creditSalaryAmount);
+    const deductNum = Math.max(0, parseFloat(creditSalaryDeduction || '0'));
     if (isNaN(amountNum) || amountNum <= 0) {
       setCreditSalaryError('Please enter a valid positive salary amount.');
       return;
     }
+    if (deductNum > (creditSalaryWorker.running_advance || 0)) {
+      setCreditSalaryError(`Deduction cannot exceed worker advance of ${formatINR(creditSalaryWorker.running_advance || 0)}.`);
+      return;
+    }
+    if (deductNum > amountNum) {
+      setCreditSalaryError(`Deduction cannot exceed salary amount of ${formatINR(amountNum)}.`);
+      return;
+    }
+
     setCreditSalaryLoading(true);
     setCreditSalaryError('');
     try {
-      const res = await creditWorkerSalaryAction(
-        creditSalaryWorker.worker_id,
+      const res = await addWorkerSalaryWithDeductionAction({
+        workerId: creditSalaryWorker.worker_id,
         factoryId,
-        amountNum,
-        creditSalaryMonth,
-        creditSalaryNote
-      );
+        salaryAmount: amountNum,
+        advanceDeductAmount: deductNum,
+        periodMonth: creditSalaryMonth || undefined,
+        note: creditSalaryNote || undefined,
+      });
+
       if (!res.success) {
-        setCreditSalaryError(res.error || 'Failed to credit salary.');
+        setCreditSalaryError(res.error || 'Failed to process salary.');
         return;
       }
-
-      queryClient.setQueryData(['workers', factoryId], (old: Worker[] | undefined) => {
-        if (!old) return old;
-        return old.map(w => {
-          if (w.worker_id !== creditSalaryWorker.worker_id) return w;
-          const newUnpaid = (w.unpaid_salary || 0) + amountNum;
-          return {
-            ...w,
-            unpaid_salary: newUnpaid,
-            total_salary_earned: (w.total_salary_earned || 0) + amountNum,
-            net_payable: newUnpaid - (w.running_advance || 0),
-          };
-        });
-      });
 
       setShowCreditSalaryModal(false);
       setCreditSalaryWorker(null);
       setCreditSalaryAmount('');
+      setCreditSalaryDeduction('0');
       setCreditSalaryMonth('');
       setCreditSalaryNote('');
       queryClient.invalidateQueries();
     } catch (err: any) {
-      setCreditSalaryError(err.message || 'Failed to credit salary.');
+      setCreditSalaryError(err.message || 'Error executing salary credit.');
     } finally {
       setCreditSalaryLoading(false);
     }
@@ -905,15 +907,17 @@ export function SupervisorWorkersClientPage() {
                           type="button"
                           onClick={() => {
                             setCreditSalaryWorker(w);
-                            setCreditSalaryAmount('');
-                            setCreditSalaryMonth('');
+                            setCreditSalaryAmount(w.monthly_salary ? String(w.monthly_salary) : '');
+                            setCreditSalaryDeduction(w.running_advance > 0 ? String(Math.min(w.monthly_salary || 0, w.running_advance)) : '0');
+                            setCreditSalaryMonth(new Date().toLocaleString('en-IN', { month: 'long', year: 'numeric' }));
                             setCreditSalaryNote('');
                             setShowCreditSalaryModal(true);
                           }}
-                          className="px-2 py-1.5 rounded bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-700 text-xs font-bold transition-colors"
-                          title="Credit Salary"
+                          className="px-2.5 py-1.5 rounded bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-colors flex items-center gap-1 shadow-2xs"
+                          title="Add Salary & Deduct Advance"
                         >
-                          + Sal
+                          <Coins className="h-3 w-3" />
+                          <span>+ Salary</span>
                         </button>
 
                         {(w.unpaid_salary || 0) > 0 && (w.running_advance || 0) > 0 && (
@@ -1072,6 +1076,12 @@ export function SupervisorWorkersClientPage() {
                 <span className="text-slate-500 font-medium">Current Unpaid Salary:</span>
                 <span className="font-bold text-emerald-700">{formatINR(creditSalaryWorker.unpaid_salary || 0)}</span>
               </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Outstanding Advance Owed:</span>
+                <span className={`font-bold ${(creditSalaryWorker.running_advance || 0) > 0 ? 'text-amber-800 font-black' : 'text-slate-700'}`}>
+                  {formatINR(creditSalaryWorker.running_advance || 0)}
+                </span>
+              </div>
             </div>
 
             {creditSalaryError && (
@@ -1083,7 +1093,7 @@ export function SupervisorWorkersClientPage() {
             <div className="space-y-3">
               <div>
                 <label htmlFor="creditSalaryAmount" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                  Salary Amount to Credit (INR)
+                  Salary Amount to Add (INR)
                 </label>
                 <div className="relative">
                   <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 text-sm font-bold pointer-events-none">₹</span>
@@ -1093,12 +1103,173 @@ export function SupervisorWorkersClientPage() {
                     min="1"
                     disabled={creditSalaryLoading}
                     value={creditSalaryAmount}
-                    onChange={(e) => setCreditSalaryAmount(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setCreditSalaryAmount(val);
+                      const salNum = parseFloat(val) || 0;
+                      const workerAdv = creditSalaryWorker.running_advance || 0;
+                      if (workerAdv > 0) {
+                        const curDeduct = parseFloat(creditSalaryDeduction) || 0;
+                        if (curDeduct > salNum) {
+                          setCreditSalaryDeduction(String(Math.min(salNum, workerAdv)));
+                        }
+                      }
+                    }}
                     placeholder="e.g. 20000"
                     className="block w-full rounded-lg border border-slate-300 pl-8 pr-3 py-2 text-slate-950 text-sm font-bold focus:ring-2 focus:ring-purple-600 min-h-[44px]"
                   />
                 </div>
+
+                {/* Quick Presets */}
+                <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                  {(creditSalaryWorker.monthly_salary || 0) > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCreditSalaryAmount(String(creditSalaryWorker.monthly_salary));
+                        if ((creditSalaryWorker.running_advance || 0) > 0) {
+                          setCreditSalaryDeduction(String(Math.min(creditSalaryWorker.monthly_salary || 0, creditSalaryWorker.running_advance || 0)));
+                        }
+                      }}
+                      className="text-xs px-2.5 py-1 rounded bg-slate-900 text-white font-bold hover:bg-slate-800 transition-colors"
+                    >
+                      Wage: {formatINR(creditSalaryWorker.monthly_salary || 0)}
+                    </button>
+                  )}
+                  {[5000, 10000, 15000, 20000].map(amt => (
+                    <button
+                      key={amt}
+                      type="button"
+                      onClick={() => {
+                        setCreditSalaryAmount(String(amt));
+                        if ((creditSalaryWorker.running_advance || 0) > 0) {
+                          setCreditSalaryDeduction(String(Math.min(amt, creditSalaryWorker.running_advance || 0)));
+                        }
+                      }}
+                      className="text-xs px-2.5 py-1 rounded border border-slate-300 bg-white text-slate-700 font-medium hover:bg-slate-50 transition-colors"
+                    >
+                      +{formatINR(amt)}
+                    </button>
+                  ))}
+                </div>
               </div>
+
+              {/* Advance Deduction Section */}
+              {(() => {
+                const workerAdv = creditSalaryWorker.running_advance || 0;
+                const salNum = parseFloat(creditSalaryAmount) || 0;
+
+                if (workerAdv === 0) {
+                  return (
+                    <div className="rounded-lg p-2.5 bg-slate-50 border border-slate-200 text-xs text-slate-600 flex items-center justify-between">
+                      <span>Worker has ₹0 advance owed.</span>
+                      <span className="font-semibold text-emerald-700">Settled</span>
+                    </div>
+                  );
+                }
+
+                const maxDeduct = Math.min(workerAdv, salNum > 0 ? salNum : workerAdv);
+
+                return (
+                  <div className="rounded-lg p-3 bg-amber-50/70 border border-amber-200 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <label htmlFor="modalDeductAmount" className="block text-xs font-bold text-amber-950 uppercase tracking-wider">
+                          Deduct from Advance
+                        </label>
+                        <span className="text-[11px] text-amber-800">
+                          Advance owed: <strong className="font-bold">{formatINR(workerAdv)}</strong>
+                        </span>
+                      </div>
+                      <span className="text-[10px] bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded border border-amber-300">
+                        Subtracted from Advance
+                      </span>
+                    </div>
+
+                    <div className="relative">
+                      <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 text-sm font-bold pointer-events-none">₹</span>
+                      <input
+                        id="modalDeductAmount"
+                        type="number"
+                        min="0"
+                        max={maxDeduct}
+                        disabled={creditSalaryLoading}
+                        value={creditSalaryDeduction}
+                        onChange={(e) => setCreditSalaryDeduction(e.target.value)}
+                        placeholder="0"
+                        className="block w-full rounded-lg border border-amber-300 pl-8 pr-3 py-2 text-slate-950 text-sm font-bold bg-white focus:ring-2 focus:ring-amber-500 min-h-[42px]"
+                      />
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                      <button
+                        type="button"
+                        onClick={() => setCreditSalaryDeduction('0')}
+                        className="text-xs px-2 py-1 rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition-colors"
+                      >
+                        Deduct ₹0
+                      </button>
+                      {workerAdv > 0 && salNum > 0 && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setCreditSalaryDeduction(String(maxDeduct))}
+                            className="text-xs px-2 py-1 rounded border border-amber-300 bg-amber-100 text-amber-900 font-bold hover:bg-amber-200 transition-colors"
+                          >
+                            Deduct Max ({formatINR(maxDeduct)})
+                          </button>
+                          {maxDeduct > 1000 && (
+                            <button
+                              type="button"
+                              onClick={() => setCreditSalaryDeduction(String(Math.round(maxDeduct / 2)))}
+                              className="text-xs px-2 py-1 rounded border border-amber-200 bg-white text-amber-900 font-medium hover:bg-amber-50 transition-colors"
+                            >
+                              Deduct Half ({formatINR(Math.round(maxDeduct / 2))})
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Live Preview Summary */}
+              {(() => {
+                const salNum = parseFloat(creditSalaryAmount) || 0;
+                const deductNum = Math.max(0, parseFloat(creditSalaryDeduction) || 0);
+                const curAdv = creditSalaryWorker.running_advance || 0;
+
+                if (salNum <= 0) return null;
+
+                const netAdded = Math.max(0, salNum - deductNum);
+                const remainingAdv = Math.max(0, curAdv - deductNum);
+
+                return (
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 space-y-1 text-xs">
+                    <div className="flex justify-between items-center text-slate-700">
+                      <span>Gross Salary Added:</span>
+                      <span className="font-bold text-slate-900">+{formatINR(salNum)}</span>
+                    </div>
+                    {curAdv > 0 && (
+                      <div className="flex justify-between items-center text-amber-800">
+                        <span>Advance Deducted:</span>
+                        <span className="font-bold">-{formatINR(deductNum)}</span>
+                      </div>
+                    )}
+                    <div className="border-t border-slate-200 pt-1 flex justify-between items-center">
+                      <span className="font-semibold text-slate-800">Net Added to Unpaid Salary:</span>
+                      <span className="font-bold text-emerald-700">+{formatINR(netAdded)}</span>
+                    </div>
+                    {curAdv > 0 && (
+                      <div className="flex justify-between items-center text-[11px] text-slate-600">
+                        <span>Remaining Advance Owed:</span>
+                        <span className="font-bold text-slate-900">{formatINR(remainingAdv)}</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               <div>
                 <label htmlFor="creditSalaryMonth" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
@@ -1144,12 +1315,15 @@ export function SupervisorWorkersClientPage() {
                 type="button"
                 disabled={creditSalaryLoading || !creditSalaryAmount || parseFloat(creditSalaryAmount) <= 0}
                 onClick={handleExecuteCreditSalary}
-                className="flex-1 py-2 px-3 rounded-lg bg-purple-700 hover:bg-purple-800 text-white text-xs font-bold min-h-[40px] flex items-center justify-center gap-1.5 shadow-sm disabled:opacity-50"
+                className="flex-1 py-2 px-3 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold min-h-[40px] flex items-center justify-center gap-1.5 shadow-sm disabled:opacity-50"
               >
                 {creditSalaryLoading ? (
                   <RefreshCw className="h-3.5 w-3.5 animate-spin" />
                 ) : (
-                  <span>Credit Salary</span>
+                  <span>
+                    Add Salary
+                    {parseFloat(creditSalaryDeduction) > 0 ? ` & Deduct ${formatINR(parseFloat(creditSalaryDeduction))}` : ''}
+                  </span>
                 )}
               </button>
             </div>

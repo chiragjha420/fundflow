@@ -52,7 +52,7 @@ import { NotificationBanner } from '@/components/notification-banner';
 import { compressImage } from '@/lib/image-compressor';
 import { CameraCaptureModal } from '@/components/camera-capture-modal';
 import { uploadHandoverPhotoAction, uploadWorkerPhotoAction, uploadExpensePhotoAction } from '@/app/actions/upload-actions';
-import { getFactoryWorkersAction, getSupervisorAllTransactionsAction, recoverWorkerAdvanceAction } from '@/app/actions/workers';
+import { getFactoryWorkersAction, getSupervisorAllTransactionsAction, recoverWorkerAdvanceAction, addWorkerSalaryWithDeductionAction } from '@/app/actions/workers';
 import { getFactoryExpensesAction, FactoryExpense } from '@/app/actions/expenses';
 
 interface Worker {
@@ -63,6 +63,7 @@ interface Worker {
   factory_id: string;
   supervisor_id: string;
   opening_advance: number;
+  monthly_salary?: number;
   total_cash_disbursed?: number;
   running_advance: number;
   unpaid_salary?: number;
@@ -110,7 +111,15 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const queryClient = useQueryClient();
 
   // Active Tab for Quick Actions
-  const [activeTab, setActiveTab] = useState<'disburse' | 'expense' | 'transfer'>('disburse');
+  const [activeTab, setActiveTab] = useState<'disburse' | 'salary' | 'expense' | 'transfer'>('disburse');
+
+  // Add Salary Quick Action States
+  const [salarySelectedWorkerId, setSalarySelectedWorkerId] = useState<string>('');
+  const [salaryWorkerSearchTerm, setSalaryWorkerSearchTerm] = useState<string>('');
+  const [salaryInputAmount, setSalaryInputAmount] = useState<string>('');
+  const [salaryDeductAmount, setSalaryDeductAmount] = useState<string>('0');
+  const [salaryInputMonth, setSalaryInputMonth] = useState<string>(() => new Date().toLocaleString('en-IN', { month: 'long', year: 'numeric' }));
+  const [salaryInputNote, setSalaryInputNote] = useState<string>('');
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
@@ -1289,6 +1298,61 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         });
         setShowHandoverModal(true);
         setActionLoading(false);
+      } else if (activeTab === 'salary') {
+        const workerId = salarySelectedWorkerId || selectedWorkerId || (formData.get('salaryWorkerId') as string);
+        const salaryAmount = parseFloat((formData.get('salaryAmount') as string) || salaryInputAmount);
+        const deductAmount = Math.max(0, parseFloat((formData.get('deductAmount') as string) || salaryDeductAmount || '0'));
+        const month = ((formData.get('salaryMonth') as string) || salaryInputMonth)?.trim() || undefined;
+        const note = ((formData.get('salaryNote') as string) || salaryInputNote)?.trim() || undefined;
+
+        if (!workerId) {
+          throw new Error('Please select a worker to add salary for.');
+        }
+        if (isNaN(salaryAmount) || salaryAmount <= 0) {
+          throw new Error('Please enter a valid salary amount greater than zero.');
+        }
+
+        const targetWorker = activeWorkers.find(w => w.worker_id === workerId);
+        if (!targetWorker) {
+          throw new Error('Selected worker not found.');
+        }
+
+        const currentAdvance = targetWorker.running_advance || 0;
+        if (deductAmount > 0) {
+          if (deductAmount > currentAdvance) {
+            throw new Error(`Deduction amount (₹${deductAmount.toLocaleString('en-IN')}) cannot exceed worker's advance of ₹${currentAdvance.toLocaleString('en-IN')}.`);
+          }
+          if (deductAmount > salaryAmount) {
+            throw new Error(`Deduction amount (₹${deductAmount.toLocaleString('en-IN')}) cannot exceed salary amount of ₹${salaryAmount.toLocaleString('en-IN')}.`);
+          }
+        }
+
+        const res = await addWorkerSalaryWithDeductionAction({
+          workerId,
+          factoryId: factoryId || targetWorker.factory_id,
+          salaryAmount,
+          advanceDeductAmount: deductAmount,
+          periodMonth: month,
+          note,
+          supervisorId: supervisorId || undefined,
+        });
+
+        if (!res.success) {
+          throw new Error(res.error || 'Failed to add salary.');
+        }
+
+        showToast('success', `Salary of ${formatINR(salaryAmount)} added for ${targetWorker.worker_name}.${deductAmount > 0 ? ` ${formatINR(deductAmount)} deducted from advance.` : ''}`);
+        setActionMessage({
+          type: 'success',
+          text: `Salary of ${formatINR(salaryAmount)} recorded for ${targetWorker.worker_name}.${deductAmount > 0 ? ` ${formatINR(deductAmount)} subtracted from advance (remaining advance: ${formatINR(res.advanceRemaining || 0)}).` : ''}`,
+        });
+
+        queryClient.invalidateQueries({ queryKey: ['workers', factoryId] });
+        queryClient.invalidateQueries({ queryKey: ['supervisor-all-transactions'] });
+
+        setSalaryInputAmount('');
+        setSalaryDeductAmount('0');
+        setSalaryInputNote('');
       } else if (activeTab === 'transfer') {
         const toSupervisorId = formData.get('toSupervisorId') as string;
         const amount = parseFloat(formData.get('amount') as string);
@@ -1856,39 +1920,50 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       {/* 2. Quick Actions Tab Container */}
       <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">
         {/* Tabs */}
-        <div className="flex border-b border-slate-200 bg-slate-50 text-xs font-bold uppercase tracking-wider text-slate-600">
+        <div className="grid grid-cols-4 border-b border-slate-200 bg-slate-50 text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-600">
           <button
             onClick={() => { setActiveTab('disburse'); setActionMessage(null); setLastDisburseSms(null); }}
-            className={`flex-1 py-3 text-center border-b-2 min-h-[44px] flex items-center justify-center gap-1.5 ${
+            className={`py-3 text-center border-b-2 min-h-[44px] flex items-center justify-center gap-1 sm:gap-1.5 ${
               activeTab === 'disburse'
-                ? 'border-slate-900 text-slate-900 bg-white'
+                ? 'border-slate-900 text-slate-900 bg-white font-black'
                 : 'border-transparent hover:bg-slate-100'
             }`}
           >
-            <Send className="h-3.5 w-3.5" />
-            <span>Disburse</span>
+            <Send className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">Disburse</span>
+          </button>
+          <button
+            onClick={() => { setActiveTab('salary'); setActionMessage(null); }}
+            className={`py-3 text-center border-b-2 min-h-[44px] flex items-center justify-center gap-1 sm:gap-1.5 ${
+              activeTab === 'salary'
+                ? 'border-slate-900 text-slate-900 bg-white font-black'
+                : 'border-transparent hover:bg-slate-100'
+            }`}
+          >
+            <Coins className="h-3.5 w-3.5 shrink-0 text-slate-700" />
+            <span className="truncate">+ Salary</span>
           </button>
           <button
             onClick={() => { setActiveTab('expense'); setActionMessage(null); }}
-            className={`flex-1 py-3 text-center border-b-2 min-h-[44px] flex items-center justify-center gap-1.5 ${
+            className={`py-3 text-center border-b-2 min-h-[44px] flex items-center justify-center gap-1 sm:gap-1.5 ${
               activeTab === 'expense'
-                ? 'border-slate-900 text-slate-900 bg-white'
+                ? 'border-slate-900 text-slate-900 bg-white font-black'
                 : 'border-transparent hover:bg-slate-100'
             }`}
           >
-            <IndianRupee className="h-3.5 w-3.5" />
-            <span>Expense</span>
+            <IndianRupee className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">Expense</span>
           </button>
           <button
             onClick={() => { setActiveTab('transfer'); setActionMessage(null); }}
-            className={`flex-1 py-3 text-center border-b-2 min-h-[44px] flex items-center justify-center gap-1.5 ${
+            className={`py-3 text-center border-b-2 min-h-[44px] flex items-center justify-center gap-1 sm:gap-1.5 ${
               activeTab === 'transfer'
-                ? 'border-slate-900 text-slate-900 bg-white'
+                ? 'border-slate-900 text-slate-900 bg-white font-black'
                 : 'border-transparent hover:bg-slate-100'
             }`}
           >
-            <ArrowRightLeft className="h-3.5 w-3.5" />
-            <span>Transfer</span>
+            <ArrowRightLeft className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">Transfer</span>
           </button>
         </div>
 
@@ -2100,6 +2175,27 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                           <span>Settle Advance from Salary (No Cash Outflow)</span>
                         </button>
                       )}
+
+                      {/* Action to switch directly to Add Salary for this worker */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!selectedWorker) return;
+                          setSalarySelectedWorkerId(selectedWorker.worker_id);
+                          if (selectedWorker.monthly_salary && selectedWorker.monthly_salary > 0) {
+                            setSalaryInputAmount(String(selectedWorker.monthly_salary));
+                            setSalaryDeductAmount(String(Math.min(selectedWorker.monthly_salary, selectedWorker.running_advance || 0)));
+                          } else if (selectedWorker.running_advance > 0) {
+                            setSalaryDeductAmount(String(selectedWorker.running_advance));
+                          }
+                          setActiveTab('salary');
+                          setActionMessage(null);
+                        }}
+                        className="w-full py-2 px-3 rounded bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-xs"
+                      >
+                        <Coins className="h-4 w-4" />
+                        <span>Add Salary for {selectedWorker?.worker_name}</span>
+                      </button>
                     </div>
                   )}
                 </div>
@@ -2192,6 +2288,385 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                         {chip}
                       </button>
                     ))}
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* SALARY ACCRUAL & ADVANCE DEDUCTION FORM */}
+            {activeTab === 'salary' && (
+              <>
+                {/* Worker Selector */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                      Select Worker
+                    </label>
+                    {(salarySelectedWorkerId || selectedWorkerId) && (
+                      <button
+                        type="button"
+                        onClick={() => { 
+                          setSalarySelectedWorkerId(''); 
+                          setSelectedWorkerId(''); 
+                          setSalaryWorkerSearchTerm(''); 
+                        }}
+                        className="text-[11px] text-indigo-600 hover:text-indigo-800 font-bold"
+                      >
+                        Change Worker
+                      </button>
+                    )}
+                  </div>
+
+                  {!(salarySelectedWorkerId || selectedWorkerId) ? (
+                    <div className="space-y-2">
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={salaryWorkerSearchTerm}
+                          onChange={(e) => setSalaryWorkerSearchTerm(e.target.value)}
+                          placeholder="Search worker name to add salary..."
+                          className="w-full pl-9 pr-3 py-2.5 rounded border border-slate-300 text-sm min-h-[44px] text-slate-950 bg-white focus:ring-2 focus:ring-slate-900 focus:border-slate-900 placeholder:text-slate-400"
+                        />
+                      </div>
+
+                      {salaryWorkerSearchTerm.trim().length > 0 && (
+                        <div className="border border-slate-200 rounded-lg max-h-56 overflow-y-auto divide-y divide-slate-100 bg-white shadow-lg">
+                          {activeWorkers
+                            .filter(w => {
+                              const q = salaryWorkerSearchTerm.toLowerCase();
+                              return w.worker_name.toLowerCase().includes(q) || (w.worker_phone && w.worker_phone.includes(q));
+                            })
+                            .map((w) => (
+                              <button
+                                key={w.worker_id}
+                                type="button"
+                                onClick={() => {
+                                  setSalarySelectedWorkerId(w.worker_id);
+                                  setSelectedWorkerId(w.worker_id);
+                                  setSalaryWorkerSearchTerm('');
+                                  if (w.monthly_salary && w.monthly_salary > 0 && !salaryInputAmount) {
+                                    setSalaryInputAmount(String(w.monthly_salary));
+                                  }
+                                  setSalaryDeductAmount(w.running_advance > 0 ? String(Math.min(w.monthly_salary || 0, w.running_advance)) : '0');
+                                }}
+                                className="w-full p-2.5 text-left flex items-center justify-between hover:bg-slate-50 active:bg-slate-100 transition-colors"
+                              >
+                                <div className="flex items-center gap-2.5">
+                                  <div className="h-8 w-8 rounded-full bg-slate-100 border border-slate-200 overflow-hidden flex items-center justify-center shrink-0">
+                                    {w.worker_photo_url ? (
+                                      <img src={w.worker_photo_url} alt="" className="h-full w-full object-cover" />
+                                    ) : (
+                                      <User className="h-4 w-4 text-slate-400" />
+                                    )}
+                                  </div>
+                                  <div>
+                                    <p className="text-xs font-bold text-slate-900">{w.worker_name}</p>
+                                    <div className="flex items-center gap-1.5 text-[10px]">
+                                      {(w.unpaid_salary || 0) > 0 && (
+                                        <span className="text-emerald-700 font-semibold">Sal: {formatINR(w.unpaid_salary || 0)}</span>
+                                      )}
+                                      <span className="text-amber-700 font-semibold">Adv: {formatINR(w.running_advance)}</span>
+                                      {(w.monthly_salary || 0) > 0 && (
+                                        <span className="text-slate-500 font-medium">Rate: {formatINR(w.monthly_salary || 0)}/mo</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                                <span className="text-xs font-bold text-slate-600">
+                                  Select →
+                                </span>
+                              </button>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    /* Selected Worker Details */
+                    (() => {
+                      const curWorker = activeWorkers.find(w => w.worker_id === (salarySelectedWorkerId || selectedWorkerId));
+                      if (!curWorker) return null;
+                      return (
+                        <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2.5">
+                              <div className="h-9 w-9 rounded-full bg-white border border-slate-200 overflow-hidden flex items-center justify-center shrink-0">
+                                {curWorker.worker_photo_url ? (
+                                  <img src={curWorker.worker_photo_url} alt="" className="h-full w-full object-cover" />
+                                ) : (
+                                  <User className="h-5 w-5 text-slate-400" />
+                                )}
+                              </div>
+                              <div>
+                                <p className="text-sm font-bold text-slate-900">{curWorker.worker_name}</p>
+                                <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                                  <span className={`text-[11px] font-bold px-2 py-0.5 rounded border ${
+                                    (curWorker.unpaid_salary || 0) > 0
+                                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                      : 'bg-white text-slate-500 border-slate-200'
+                                  }`}>
+                                    Unpaid Salary: {formatINR(curWorker.unpaid_salary || 0)}
+                                  </span>
+                                  <span className={`text-[11px] font-bold px-2 py-0.5 rounded border ${
+                                    (curWorker.running_advance || 0) > 0
+                                      ? 'bg-amber-50 text-amber-900 border-amber-200'
+                                      : 'bg-white text-slate-500 border-slate-200'
+                                  }`}>
+                                    Advance Owed: {formatINR(curWorker.running_advance || 0)}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => { 
+                                setSalarySelectedWorkerId(''); 
+                                setSelectedWorkerId(''); 
+                                setSalaryWorkerSearchTerm(''); 
+                              }}
+                              className="px-2.5 py-1 text-xs font-bold text-slate-600 bg-white border border-slate-200 rounded hover:bg-slate-100 transition-colors"
+                            >
+                              Change
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })()
+                  )}
+                </div>
+
+                {/* Salary Amount Input */}
+                <div>
+                  <label htmlFor="salaryAmount" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                    Salary Amount to Add (INR)
+                  </label>
+                  <div className="relative mt-1 rounded shadow-sm">
+                    <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                      <span className="text-slate-500 text-sm">₹</span>
+                    </div>
+                    <input
+                      id="salaryAmount"
+                      name="salaryAmount"
+                      type="number"
+                      required
+                      min="1"
+                      value={salaryInputAmount}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setSalaryInputAmount(val);
+                        const curWorker = activeWorkers.find(w => w.worker_id === (salarySelectedWorkerId || selectedWorkerId));
+                        if (curWorker && curWorker.running_advance > 0) {
+                          const salNum = parseFloat(val) || 0;
+                          const currentDeduct = parseFloat(salaryDeductAmount) || 0;
+                          if (currentDeduct > salNum) {
+                            setSalaryDeductAmount(String(Math.min(salNum, curWorker.running_advance)));
+                          }
+                        }
+                      }}
+                      disabled={actionLoading}
+                      placeholder="e.g. 15000"
+                      className="block w-full rounded border border-slate-300 pl-7 pr-3 py-2 text-slate-950 text-sm min-h-[44px] font-bold"
+                    />
+                  </div>
+
+                  {/* Preset chips */}
+                  {(() => {
+                    const curWorker = activeWorkers.find(w => w.worker_id === (salarySelectedWorkerId || selectedWorkerId));
+                    return (
+                      <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                        {curWorker && (curWorker.monthly_salary || 0) > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSalaryInputAmount(String(curWorker.monthly_salary));
+                              if (curWorker.running_advance > 0) {
+                                setSalaryDeductAmount(String(Math.min(curWorker.monthly_salary || 0, curWorker.running_advance)));
+                              }
+                            }}
+                            className="text-xs px-2.5 py-1 rounded bg-slate-900 text-white font-bold hover:bg-slate-800 transition-colors"
+                          >
+                            Wage: {formatINR(curWorker.monthly_salary || 0)}
+                          </button>
+                        )}
+                        {[5000, 10000, 15000, 20000].map(amt => (
+                          <button
+                            key={amt}
+                            type="button"
+                            onClick={() => {
+                              setSalaryInputAmount(String(amt));
+                              if (curWorker && curWorker.running_advance > 0) {
+                                setSalaryDeductAmount(String(Math.min(amt, curWorker.running_advance)));
+                              }
+                            }}
+                            className="text-xs px-2.5 py-1 rounded border border-slate-300 bg-white text-slate-700 font-medium hover:bg-slate-50 transition-colors"
+                          >
+                            +{formatINR(amt)}
+                          </button>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* ADVANCE DEDUCTION SECTION */}
+                {(() => {
+                  const curWorker = activeWorkers.find(w => w.worker_id === (salarySelectedWorkerId || selectedWorkerId));
+                  if (!curWorker) return null;
+
+                  const workerAdv = curWorker.running_advance || 0;
+                  const salNum = parseFloat(salaryInputAmount) || 0;
+
+                  if (workerAdv === 0) {
+                    return (
+                      <div className="rounded-lg p-3 bg-slate-50 border border-slate-200 text-xs text-slate-600 flex items-center justify-between">
+                        <span>Worker has ₹0 advance owed. No deduction needed.</span>
+                        <span className="font-semibold text-emerald-700">Advance Settled</span>
+                      </div>
+                    );
+                  }
+
+                  const maxPossibleDeduct = Math.min(workerAdv, salNum > 0 ? salNum : workerAdv);
+
+                  return (
+                    <div className="rounded-lg p-3 bg-amber-50/60 border border-amber-200 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <label htmlFor="salaryDeductAmount" className="block text-xs font-bold text-amber-950 uppercase tracking-wider">
+                            Deduct from Advance
+                          </label>
+                          <span className="text-[11px] text-amber-800">
+                            Outstanding advance: <strong className="font-bold">{formatINR(workerAdv)}</strong>
+                          </span>
+                        </div>
+                        <span className="text-[10px] bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded border border-amber-300">
+                          Subtracted from Advance
+                        </span>
+                      </div>
+
+                      <div className="relative mt-1 rounded shadow-sm">
+                        <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                          <span className="text-slate-500 text-sm">₹</span>
+                        </div>
+                        <input
+                          id="salaryDeductAmount"
+                          name="deductAmount"
+                          type="number"
+                          min="0"
+                          max={maxPossibleDeduct}
+                          value={salaryDeductAmount}
+                          onChange={(e) => setSalaryDeductAmount(e.target.value)}
+                          disabled={actionLoading}
+                          placeholder="0"
+                          className="block w-full rounded border border-amber-300 pl-7 pr-3 py-2 text-slate-950 text-sm font-bold bg-white focus:ring-2 focus:ring-amber-500 min-h-[44px]"
+                        />
+                      </div>
+
+                      {/* 1-Tap Deduction Presets */}
+                      <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setSalaryDeductAmount('0')}
+                          className="text-xs px-2 py-1 rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition-colors"
+                        >
+                          Deduct ₹0
+                        </button>
+                        {workerAdv > 0 && salNum > 0 && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setSalaryDeductAmount(String(maxPossibleDeduct))}
+                              className="text-xs px-2 py-1 rounded border border-amber-300 bg-amber-100 text-amber-900 font-bold hover:bg-amber-200 transition-colors"
+                            >
+                              Deduct Max ({formatINR(maxPossibleDeduct)})
+                            </button>
+                            {maxPossibleDeduct > 1000 && (
+                              <button
+                                type="button"
+                                onClick={() => setSalaryDeductAmount(String(Math.round(maxPossibleDeduct / 2)))}
+                                className="text-xs px-2 py-1 rounded border border-amber-200 bg-white text-amber-900 font-medium hover:bg-amber-50 transition-colors"
+                              >
+                                Deduct Half ({formatINR(Math.round(maxPossibleDeduct / 2))})
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* LIVE CALCULATION SUMMARY */}
+                {(() => {
+                  const curWorker = activeWorkers.find(w => w.worker_id === (salarySelectedWorkerId || selectedWorkerId));
+                  const salNum = parseFloat(salaryInputAmount) || 0;
+                  const deductNum = Math.max(0, parseFloat(salaryDeductAmount) || 0);
+                  const curAdv = curWorker?.running_advance || 0;
+
+                  if (salNum <= 0) return null;
+
+                  const netAdded = Math.max(0, salNum - deductNum);
+                  const remainingAdv = Math.max(0, curAdv - deductNum);
+
+                  return (
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-1.5 text-xs">
+                      <div className="flex justify-between items-center text-slate-700">
+                        <span>Gross Salary Added:</span>
+                        <span className="font-bold text-slate-900">+{formatINR(salNum)}</span>
+                      </div>
+                      {curAdv > 0 && (
+                        <div className="flex justify-between items-center text-amber-800">
+                          <span>Advance Deducted (Subtracted from Advance):</span>
+                          <span className="font-bold">-{formatINR(deductNum)}</span>
+                        </div>
+                      )}
+                      <div className="border-t border-slate-200 pt-1.5 flex justify-between items-center">
+                        <span className="font-semibold text-slate-800">Net Added to Unpaid Salary:</span>
+                        <span className="font-bold text-emerald-700">+{formatINR(netAdded)}</span>
+                      </div>
+                      {curAdv > 0 && (
+                        <div className="flex justify-between items-center text-[11px] text-slate-600">
+                          <span>Remaining Worker Advance Owed:</span>
+                          <span className="font-bold text-slate-900">{formatINR(remainingAdv)}</span>
+                        </div>
+                      )}
+                      <p className="text-[10px] text-slate-400 pt-0.5">
+                        Physical Cash: ₹0 • Ledger balance adjustment only
+                      </p>
+                    </div>
+                  );
+                })()}
+
+                {/* Month / Period & Note */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label htmlFor="salaryMonth" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                      Period / Month
+                    </label>
+                    <input
+                      id="salaryMonth"
+                      name="salaryMonth"
+                      type="text"
+                      disabled={actionLoading}
+                      value={salaryInputMonth}
+                      onChange={(e) => setSalaryInputMonth(e.target.value)}
+                      placeholder="e.g. November 2026"
+                      className="block w-full rounded border border-slate-300 px-3 py-2 text-slate-950 text-xs min-h-[40px]"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="salaryNote" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                      Notes (Optional)
+                    </label>
+                    <input
+                      id="salaryNote"
+                      name="salaryNote"
+                      type="text"
+                      disabled={actionLoading}
+                      value={salaryInputNote}
+                      onChange={(e) => setSalaryInputNote(e.target.value)}
+                      placeholder="e.g. Monthly wages"
+                      className="block w-full rounded border border-slate-300 px-3 py-2 text-slate-950 text-xs min-h-[40px]"
+                    />
                   </div>
                 </div>
               </>
@@ -2367,7 +2842,11 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
             <button
               type="submit"
-              disabled={actionLoading || (activeTab === 'disburse' && (!selectedWorkerId || !disburseAmount))}
+              disabled={
+                actionLoading || 
+                (activeTab === 'disburse' && (!selectedWorkerId || !disburseAmount)) ||
+                (activeTab === 'salary' && (!(salarySelectedWorkerId || selectedWorkerId) || !salaryInputAmount || parseFloat(salaryInputAmount) <= 0))
+              }
               className="w-full flex justify-center items-center rounded-md bg-slate-900 py-3 text-sm font-semibold text-white shadow hover:bg-slate-800 disabled:opacity-50 min-h-[46px] gap-2 transition-all"
             >
               {actionLoading ? (
@@ -2376,6 +2855,11 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                 <span>
                   {disbursePaymentType === 'salary_payment' ? 'Pay Salary ' : 'Disburse Advance '}
                   {disburseAmount ? formatINR(Number(disburseAmount)) : ''}
+                </span>
+              ) : activeTab === 'salary' ? (
+                <span>
+                  Add {salaryInputAmount ? formatINR(Number(salaryInputAmount)) : ''} Salary
+                  {Number(salaryDeductAmount) > 0 ? ` & Deduct ${formatINR(Number(salaryDeductAmount))} Advance` : ''}
                 </span>
               ) : (
                 <span>Submit Entry</span>
