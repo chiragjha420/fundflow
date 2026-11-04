@@ -36,7 +36,8 @@ import {
   Coins, 
   CalendarDays, 
   QrCode, 
-  CreditCard 
+  CreditCard,
+  Utensils
 } from 'lucide-react';
 import { sendWorkerDisbursementSms } from '@/lib/sms';
 import { createCashRequest } from '@/app/actions/cash-requests';
@@ -342,6 +343,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     },
     initialData: initialData?.supervisor || getStoredJson<Supervisor | null>('fundflow_cached_supervisor', null) || undefined,
     staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
   });
 
   const supervisorId = supervisor?.id;
@@ -375,7 +377,9 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       ? initialData.pendingTxs
       : (supervisorId ? getStoredJson<PendingTx[]>(`fundflow_cached_pending_${supervisorId}`, []) : []),
     enabled: !!supervisorId,
-    refetchInterval: 3000,
+    staleTime: 5000,
+    refetchInterval: 10000,
+    refetchOnWindowFocus: false,
   });
 
   const knownPendingTxIds = useRef<Set<string> | null>(null);
@@ -489,6 +493,8 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       ? initialData.workers
       : (factoryId ? getStoredJson<Worker[]>(`fundflow_cached_workers_${factoryId}`, []) : []),
     enabled: !!factoryId,
+    staleTime: 60 * 1000,
+    refetchOnWindowFocus: false,
   });
 
   const [cachedWorkers, setCachedWorkers] = useState<Worker[]>([]);
@@ -529,6 +535,8 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     initialData: (initialData?.otherSupervisors && initialData.otherSupervisors.length > 0)
       ? initialData.otherSupervisors
       : getStoredJson<Supervisor[]>('fundflow_cached_other_sups', []),
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
   });
 
   const [cachedSups, setCachedSups] = useState<Supervisor[]>([]);
@@ -558,6 +566,8 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     },
     initialData: initialData?.allTransactions,
     enabled: !!(supervisorId || factoryId),
+    staleTime: 60 * 1000,
+    refetchOnWindowFocus: false,
   });
 
   const [cachedAllTxs, setCachedAllTxs] = useState<{ transactions: any[]; refundedTxIds: string[] }>(
@@ -590,6 +600,8 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     },
     initialData: initialData?.expenses,
     enabled: !!factoryId,
+    staleTime: 60 * 1000,
+    refetchOnWindowFocus: false,
   });
 
   const [cachedExpenses, setCachedExpenses] = useState<FactoryExpense[]>(initialData?.expenses || []);
@@ -629,6 +641,12 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           label: 'Wages / Labour',
           icon: <Briefcase className="h-3 w-3" />,
           className: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+        };
+      case 'canteen':
+        return {
+          label: 'Canteen',
+          icon: <Utensils className="h-3 w-3" />,
+          className: 'bg-orange-50 text-orange-700 border-orange-200',
         };
       default:
         return {
@@ -982,7 +1000,8 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         showToast('success', 'Cash receipt confirmed successfully!');
       }
       setConfirmTx(null);
-      queryClient.invalidateQueries();
+      queryClient.invalidateQueries({ queryKey: ['incoming-pending', supervisorId] });
+      queryClient.invalidateQueries({ queryKey: ['supervisor-all-transactions'] });
     } catch (e: any) {
       showToast('error', e.message || 'Failed to confirm receipt.');
     } finally {
@@ -1005,7 +1024,8 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       }
       setDisputeTxId(null);
       setDisputeNote('');
-      queryClient.invalidateQueries();
+      queryClient.invalidateQueries({ queryKey: ['incoming-pending', supervisorId] });
+      queryClient.invalidateQueries({ queryKey: ['supervisor-all-transactions'] });
     } catch (e: any) {
       showToast('error', e.message || 'Failed to submit dispute.');
     } finally {
@@ -1213,7 +1233,8 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       setShowSettleModal(false);
       setSettleWorker(null);
       setSettleAmount('');
-      queryClient.invalidateQueries();
+      queryClient.invalidateQueries({ queryKey: ['workers', factoryId] });
+      queryClient.invalidateQueries({ queryKey: ['supervisor-all-transactions'] });
     } catch (err: any) {
       setSettleError(err.message || 'Failed to settle advance.');
     } finally {
@@ -1272,7 +1293,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       setShowPhoneModal(false);
       setPhoneModalWorker(null);
       setPhoneModalInput('');
-      queryClient.invalidateQueries();
+      queryClient.invalidateQueries({ queryKey: ['workers', factoryId] });
     } catch (e: any) {
       setPhoneModalError(e.message || 'Failed to update phone number.');
     } finally {
@@ -1495,10 +1516,8 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         setPhotoPreview(null);
         form.reset();
         queryClient.invalidateQueries({ queryKey: ['factory-expenses', factoryId] });
-        queryClient.invalidateQueries({ queryKey: ['supervisor-balance', supervisorId] });
+        queryClient.invalidateQueries({ queryKey: ['supervisor-all-transactions'] });
       }
-      
-      queryClient.invalidateQueries();
     } catch (e: any) {
       setActionMessage({ type: 'error', text: e.message });
     } finally {
@@ -2912,6 +2931,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                       <option value="materials">Materials</option>
                       <option value="transport">Transport</option>
                       <option value="maintenance">Maintenance</option>
+                      <option value="canteen">Canteen</option>
                       <option value="other">Other</option>
                     </select>
                   </div>

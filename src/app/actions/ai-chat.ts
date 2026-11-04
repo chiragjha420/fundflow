@@ -252,7 +252,7 @@ Your mission is to answer ANY questions about the factory database in clear, pre
    - Head Office sends cash to Supervisors ('office_to_supervisor'). Supervisor must confirm it.
    - Supervisors disburse advances/wages to Workers ('supervisor_to_worker').
    - Supervisors can transfer cash to peer supervisors ('supervisor_to_supervisor').
-   - Supervisors pay for factory operational expenses ('expenses' table: materials, transport, maintenance, other).
+   - Supervisors pay for factory operational expenses ('expenses' table: materials, transport, maintenance, canteen, other).
 2. Balance Formulas & Worker Payroll Classification:
    - Supervisor Cash On Hand = (Confirmed Office Cash + Confirmed Inbound Transfers) - Outbound Transfers - Worker Disbursements (Advances & Salary Payments) - Expenses.
    - Factory Expenses: Tracked separately from worker payments (materials, transportation, food, repairs, etc.).

@@ -83,7 +83,7 @@ create table expenses (
   supervisor_id uuid references supervisors on delete restrict not null,
   factory_id uuid references factories on delete restrict not null,
   amount numeric not null check (amount > 0),
-  category text not null check (category in ('wages', 'materials', 'transport', 'maintenance', 'other')),
+  category text not null check (category in ('wages', 'materials', 'transport', 'maintenance', 'canteen', 'other')),
   note text not null,
   photo_url text,
   created_by uuid references auth.users on delete restrict not null,

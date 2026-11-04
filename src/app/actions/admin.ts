@@ -110,7 +110,7 @@ export async function toggleSupervisorActive(supervisorId: string, currentStatus
 }
 
 export async function createOfficeDisbursement(state: any, formData: FormData) {
-  const supervisorId = formData.get('supervisorId') as string;
+  const supervisorId = ((formData.get('supervisorId') || formData.get('supervisor_id')) as string)?.trim();
   const amountStr = formData.get('amount') as string;
   const note = (formData.get('note') as string)?.trim();
 
@@ -130,14 +130,14 @@ export async function createOfficeDisbursement(state: any, formData: FormData) {
     return { error: 'Not authenticated.' };
   }
 
-  const { error } = await supabase.from('cash_transactions').insert({
+  const { data: insertedTx, error } = await supabase.from('cash_transactions').insert({
     type: 'office_to_supervisor',
     to_supervisor_id: supervisorId,
     amount,
     status: 'pending',
     note: note,
     created_by: user.id,
-  });
+  }).select('*, from:from_supervisor_id(name), to_sup:to_supervisor_id(name, factory_id), to_work:to_worker_id(name, factory_id, active)').single();
 
   if (error) {
     return { error: error.message };
@@ -158,8 +158,7 @@ export async function createOfficeDisbursement(state: any, formData: FormData) {
     note: note,
   }).catch((err) => console.warn('Broadcast notification failed:', err));
 
-  revalidatePath('/admin');
-  return { success: true };
+  return { success: true, transaction: insertedTx };
 }
 
 export async function deleteSupervisor(supervisorId: string) {

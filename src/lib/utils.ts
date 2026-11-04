@@ -20,16 +20,20 @@ export function formatINR(amount: number | string): string {
 /**
  * Parses transaction remarks/notes to extract any embedded handover photo proof URL.
  */
-export function parseHandoverNote(rawNote: string | null | undefined): { note: string; photoUrl: string | null } {
+export function parseHandoverNote(rawNote: string | null | undefined): { note: string; photoUrl: string | null; category?: string } {
   if (!rawNote) return { note: '', photoUrl: null };
   let photoUrl: string | null = null;
   const match = rawNote.match(/\[handover_photo:(https?:\/\/[^\]]+)\]/);
   if (match) {
     photoUrl = match[1];
   }
+  const catMatch = rawNote.match(/\[CATEGORY:([^\]]+)\]/i);
+  const category = catMatch ? catMatch[1] : undefined;
+
   const cleanNote = rawNote
     .replace(/\[handover_photo:https?:\/\/[^\]]+\]/g, '')
     .replace(/\[TYPE:[^\]]+\]/gi, '')
+    .replace(/\[CATEGORY:[^\]]+\]/gi, '')
     .trim();
-  return { note: cleanNote, photoUrl };
+  return { note: cleanNote, photoUrl, category };
 }

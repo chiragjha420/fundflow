@@ -46,6 +46,7 @@ export function SupervisorExpensesClientPage() {
       }
     },
     staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
   });
 
   const supervisorId = supervisor?.id;
@@ -67,6 +68,8 @@ export function SupervisorExpensesClientPage() {
       }
     },
     enabled: !!factoryId,
+    staleTime: 60 * 1000,
+    refetchOnWindowFocus: false,
   });
 
   const [cachedExpenses, setCachedExpenses] = useState<FactoryExpense[]>([]);

@@ -2,6 +2,7 @@
 
 import { createAdminClient } from '@/lib/supabase/admin-client';
 import { revalidatePath } from 'next/cache';
+import { parseHandoverNote } from '@/lib/utils';
 
 export interface FactoryExpense {
   id: string;
@@ -45,19 +46,30 @@ export async function getFactoryExpensesAction(factoryId?: string): Promise<Fact
         .order('changed_at', { ascending: false }),
     ]);
 
-    const cashExpenses: FactoryExpense[] = (dbRes.data || []).map((e: any) => ({
-      id: e.id,
-      supervisor_id: e.supervisor_id,
-      factory_id: e.factory_id,
-      amount: Number(e.amount || 0),
-      category: e.category,
-      note: e.note,
-      photo_url: e.photo_url || null,
-      created_at: e.created_at,
-      supervisors: e.supervisors || null,
-      factories: e.factories || null,
-      payment_method: 'cash' as const,
-    }));
+    const cashExpenses: FactoryExpense[] = (dbRes.data || []).map((e: any) => {
+      let cat = e.category;
+      let cleanNote = e.note;
+      if (e.note && (e.note.includes('[CATEGORY:') || e.note.includes('[handover_photo:'))) {
+        const parsed = parseHandoverNote(e.note);
+        if (parsed.category) {
+          cat = parsed.category.toLowerCase();
+        }
+        cleanNote = parsed.note;
+      }
+      return {
+        id: e.id,
+        supervisor_id: e.supervisor_id,
+        factory_id: e.factory_id,
+        amount: Number(e.amount || 0),
+        category: cat,
+        note: cleanNote,
+        photo_url: e.photo_url || null,
+        created_at: e.created_at,
+        supervisors: e.supervisors || null,
+        factories: e.factories || null,
+        payment_method: 'cash' as const,
+      };
+    });
 
     const onlineExpenses: FactoryExpense[] = (auditRes.data || [])
       .map((r: any) => r.new_data as any)

@@ -62,7 +62,7 @@ export async function broadcastNotificationAction(payload: NotificationBroadcast
       const timer = setTimeout(() => {
         try { admin.removeChannel(channel); } catch {}
         resolve();
-      }, 4000);
+      }, 500);
 
       channel.subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
@@ -76,11 +76,8 @@ export async function broadcastNotificationAction(payload: NotificationBroadcast
             console.error('[Broadcaster] Send error:', e);
           } finally {
             clearTimeout(timer);
-            // Brief flush delay before disconnecting channel
-            setTimeout(() => {
-              try { admin.removeChannel(channel); } catch {}
-              resolve();
-            }, 300);
+            try { admin.removeChannel(channel); } catch {}
+            resolve();
           }
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
           clearTimeout(timer);

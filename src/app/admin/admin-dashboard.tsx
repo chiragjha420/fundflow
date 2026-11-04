@@ -127,6 +127,12 @@ export function AdminDashboard({
   const [formError, setFormError] = useState<string | null>(null);
   const [formSuccess, setFormSuccess] = useState(false);
 
+  // Local Transactions state for instantaneous optimistic updates
+  const [localTransactions, setLocalTransactions] = useState<Transaction[]>(transactions);
+  useEffect(() => {
+    setLocalTransactions(transactions);
+  }, [transactions]);
+
   // Refund Advance States
   const [localRefundedMap, setLocalRefundedMap] = useState<Record<string, { refundedAt: string; reason: string; amount: number; workerName: string }>>(refundedTransactions || {});
   const [refundTargetTx, setRefundTargetTx] = useState<{ id: string; amount: number; workerName: string; supervisorName: string } | null>(null);
@@ -663,6 +669,32 @@ export function AdminDashboard({
       setFormError(result.error);
       setFormLoading(false);
     } else {
+      // Optimistically update transactions in local state immediately
+      if ((result as any)?.transaction) {
+        setLocalTransactions((prev) => [(result as any).transaction, ...prev]);
+      } else {
+        const targetSup = supervisors.find(s => s.id === targetSupId);
+        const newTx: Transaction = {
+          id: crypto.randomUUID(),
+          type: 'office_to_supervisor',
+          amount: amountVal,
+          status: 'pending',
+          confirmed_at: null,
+          confirmed_by: null,
+          note: noteVal,
+          created_at: new Date().toISOString(),
+          created_by: '',
+          from_supervisor_id: null,
+          to_supervisor_id: targetSupId,
+          to_worker_id: null,
+          to_sup: targetSup ? { name: targetSup.name, factory_id: targetSup.factory_id } : null,
+        };
+        setLocalTransactions((prev) => [newTx, ...prev]);
+      }
+
+      setFormSuccess(true);
+      setFormLoading(false);
+
       // Direct WebSocket broadcast to supervisor's phone
       try {
         supabase.channel('fundflow-notifications').send({
@@ -677,10 +709,8 @@ export function AdminDashboard({
         }).catch(() => {});
       } catch {}
 
-      setFormSuccess(true);
-      setFormLoading(false);
       if (activeRequestId) {
-        await updateCashRequestStatus(activeRequestId, 'approved');
+        updateCashRequestStatus(activeRequestId, 'approved').catch(() => {});
         setActiveRequestId(null);
         getCashRequests().then(setCashRequests);
       }
@@ -701,17 +731,17 @@ export function AdminDashboard({
       .map(s => s.id);
 
     // Office Sent (Confirmed or pending, excluding cancelled/disputed)
-    const sent = transactions
+    const sent = localTransactions
       .filter(t => t.type === 'office_to_supervisor' && t.to_supervisor_id && factorySupIds.includes(t.to_supervisor_id) && t.status !== 'disputed')
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
     // Office Confirmed
-    const confirmed = transactions
+    const confirmed = localTransactions
       .filter(t => t.type === 'office_to_supervisor' && t.to_supervisor_id && factorySupIds.includes(t.to_supervisor_id) && t.status === 'confirmed')
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
     // Disbursed to workers
-    const disbursed = transactions
+    const disbursed = localTransactions
       .filter(t => t.type === 'supervisor_to_worker' && t.from_supervisor_id && factorySupIds.includes(t.from_supervisor_id) && t.status === 'confirmed' && t.to_work?.active !== false && t.to_work?.name !== 'Deleted Worker')
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
@@ -719,22 +749,22 @@ export function AdminDashboard({
     let remaining = 0;
     factorySupIds.forEach(supId => {
       // Incoming office confirmed
-      const incOffice = transactions
+      const incOffice = localTransactions
         .filter(t => t.type === 'office_to_supervisor' && t.to_supervisor_id === supId && t.status === 'confirmed')
         .reduce((sum, t) => sum + Number(t.amount), 0);
 
       // Incoming supervisors confirmed
-      const incSup = transactions
+      const incSup = localTransactions
         .filter(t => t.type === 'supervisor_to_supervisor' && t.to_supervisor_id === supId && t.status === 'confirmed')
         .reduce((sum, t) => sum + Number(t.amount), 0);
 
       // Outgoing supervisors not disputed (meaning pending or confirmed)
-      const outSup = transactions
+      const outSup = localTransactions
         .filter(t => t.type === 'supervisor_to_supervisor' && t.from_supervisor_id === supId && t.status !== 'disputed')
         .reduce((sum, t) => sum + Number(t.amount), 0);
 
       // Outgoing workers confirmed
-      const outWorker = transactions
+      const outWorker = localTransactions
         .filter(t => t.type === 'supervisor_to_worker' && t.from_supervisor_id === supId && t.status === 'confirmed' && t.to_work?.active !== false && t.to_work?.name !== 'Deleted Worker')
         .reduce((sum, t) => sum + Number(t.amount), 0);
 
@@ -750,11 +780,11 @@ export function AdminDashboard({
       .filter(e => factorySupIds.includes(e.supervisor_id))
       .reduce((sum, e) => sum + Number(e.amount), 0);
 
-    const transfersReceived = transactions
+    const transfersReceived = localTransactions
       .filter(t => t.type === 'supervisor_to_supervisor' && t.to_supervisor_id && factorySupIds.includes(t.to_supervisor_id) && t.status === 'confirmed')
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
-    const transfersSent = transactions
+    const transfersSent = localTransactions
       .filter(t => t.type === 'supervisor_to_supervisor' && t.from_supervisor_id && factorySupIds.includes(t.from_supervisor_id) && t.status !== 'disputed')
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
@@ -785,11 +815,11 @@ export function AdminDashboard({
   // --- 2. Calculate Supervisor Leaderboard (by total cash handled) ---
   const supervisorLeaderboard = supervisors.map(sup => {
     // Total cash handled = confirmed office cash received + confirmed transfers received from other supervisors
-    const officeRec = transactions
+    const officeRec = localTransactions
       .filter(t => t.type === 'office_to_supervisor' && t.to_supervisor_id === sup.id && t.status === 'confirmed')
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
-    const supRec = transactions
+    const supRec = localTransactions
       .filter(t => t.type === 'supervisor_to_supervisor' && t.to_supervisor_id === sup.id && t.status === 'confirmed')
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
@@ -809,7 +839,7 @@ export function AdminDashboard({
 
   // --- 3. Combine and Filter Ledger Entries (Transactions + Expenses) ---
   const filteredLedger = [
-    ...transactions
+    ...localTransactions
       .filter(tx => {
         if (tx.type === 'supervisor_to_worker' && (tx.to_work?.active === false || tx.to_work?.name === 'Deleted Worker')) {
           return false;
@@ -1011,7 +1041,7 @@ export function AdminDashboard({
 
   const workerReports = activeWorkers.map(w => {
     // Total refunded for this worker
-    const workerRefundedAmt = transactions
+    const workerRefundedAmt = localTransactions
       .filter(t => t.type === 'supervisor_to_worker' && t.to_worker_id === w.worker_id && localRefundedMap[t.id])
       .reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
@@ -1020,7 +1050,7 @@ export function AdminDashboard({
     const adjustedUnpaidSalary = Math.max(0, Number(w.unpaid_salary || 0));
     const adjustedNetPayable = adjustedUnpaidSalary - adjustedRunningAdvance;
 
-    const allDisbursements = transactions.filter(
+    const allDisbursements = localTransactions.filter(
       t => t.type === 'supervisor_to_worker' && t.to_worker_id === w.worker_id && t.status === 'confirmed'
     );
     const periodDisbursements = allDisbursements.filter(t => 

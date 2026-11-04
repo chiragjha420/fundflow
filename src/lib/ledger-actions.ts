@@ -155,10 +155,24 @@ export async function logExpenseAction(
 
   if (isAppOnline()) {
     const userId = await getFastCurrentUserId();
-    const { data, error } = await supabase.rpc('log_expense', {
+    let { data, error } = await supabase.rpc('log_expense', {
       ...payload,
       p_created_by: userId,
     });
+
+    // Fallback if DB check constraint does not yet include 'canteen'
+    if (error && error.message.includes('expenses_category_check') && category.toLowerCase() === 'canteen') {
+      const fallbackPayload = {
+        ...payload,
+        p_category: 'other',
+        p_note: `[CATEGORY:canteen] ${cleanNote}`,
+        p_created_by: userId,
+      };
+      const fallbackRes = await supabase.rpc('log_expense', fallbackPayload);
+      data = fallbackRes.data;
+      error = fallbackRes.error;
+    }
+
     if (error) {
       if (error.message.includes('fetch') || error.message.includes('network')) {
         await queueAction('log_expense', payload);
