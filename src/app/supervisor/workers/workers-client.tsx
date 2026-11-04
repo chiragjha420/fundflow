@@ -57,6 +57,9 @@ interface Worker {
   net_payable?: number;
   total_advance_given?: number;
   total_advance_recovered?: number;
+  total_bonus_paid?: number;
+  cash_bonus_paid?: number;
+  online_bonus_paid?: number;
   active: boolean;
 }
 
@@ -966,6 +969,11 @@ export function SupervisorWorkersClientPage() {
                     </div>
                     <div className="flex items-center gap-3">
                       <div className="text-right space-y-1">
+                        {(w.total_bonus_paid || 0) > 0 ? (
+                          <div className="text-[11px] font-bold text-purple-800 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded">
+                            Bonus: {formatINR(w.total_bonus_paid || 0)}
+                          </div>
+                        ) : null}
                         {(w.unpaid_salary || 0) > 0 ? (
                           <div className="text-[11px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded">
                             Salary: {formatINR(w.unpaid_salary || 0)}

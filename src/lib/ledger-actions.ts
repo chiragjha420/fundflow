@@ -30,9 +30,13 @@ export async function disburseToWorkerAction(
   supervisorId: string,
   amount: number,
   note?: string,
-  paymentType: 'advance' | 'salary_payment' = 'advance'
+  paymentType: 'advance' | 'salary_payment' | 'bonus' = 'advance'
 ) {
-  const defaultLabel = paymentType === 'salary_payment' ? 'Salary Payment' : 'Cash Advance';
+  const defaultLabel = paymentType === 'salary_payment' 
+    ? 'Salary Payment' 
+    : paymentType === 'bonus' 
+      ? 'Cash Bonus' 
+      : 'Cash Advance';
   const rawNote = note?.trim() || defaultLabel;
   const cleanNote = rawNote.includes('[TYPE:') ? rawNote : `[TYPE:${paymentType}] ${rawNote}`;
 

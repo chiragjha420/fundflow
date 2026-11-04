@@ -38,11 +38,13 @@ import {
   Wrench,
   Bell,
   Banknote,
-  QrCode
+  QrCode,
+  Gift
 } from 'lucide-react';
 import { 
   FactoryWorkerBalance, 
   WorkerSalaryLedgerEntry, 
+  WorkerBonus,
   creditWorkerSalaryAction, 
   recoverWorkerAdvanceAction, 
   batchCreditMonthlySalariesAction, 
@@ -113,6 +115,7 @@ interface AdminDashboardProps {
   salaryLedgerEntries?: WorkerSalaryLedgerEntry[];
   hisaabRecords?: any[];
   onlineAdvances?: any[];
+  bonuses?: WorkerBonus[];
 }
 
 export function AdminDashboard({
@@ -125,6 +128,7 @@ export function AdminDashboard({
   salaryLedgerEntries = [],
   hisaabRecords = [],
   onlineAdvances = [],
+  bonuses = [],
 }: AdminDashboardProps) {
   const [formError, setFormError] = useState<string | null>(null);
   const [formSuccess, setFormSuccess] = useState(false);
@@ -416,6 +420,11 @@ export function AdminDashboard({
   const [workerSearchQuery, setWorkerSearchQuery] = useState<string>('');
   const [expandedWorkerId, setExpandedWorkerId] = useState<string | null>(null);
   const [isWorkerAdvancesCollapsed, setIsWorkerAdvancesCollapsed] = useState<boolean>(true);
+
+  // Worker Bonuses Section State
+  const [isBonusesCollapsed, setIsBonusesCollapsed] = useState<boolean>(false);
+  const [bonusSearchQuery, setBonusSearchQuery] = useState<string>('');
+  const [bonusFactoryFilter, setBonusFactoryFilter] = useState<string>('all');
 
   // Local Workers state for instantaneous optimistic updates
   const [localWorkers, setLocalWorkers] = useState<FactoryWorkerBalance[]>(workers);
@@ -802,7 +811,12 @@ export function AdminDashboard({
       .filter(a => a.factory_id === factory.id && Number(a.amount || 0) > 0)
       .reduce((sum, a) => sum + Number(a.amount || 0), 0);
 
-    const onlinePaid = hisaabOnlinePaid + advanceOnlinePaid;
+    // Online Bonuses for this factory
+    const bonusOnlinePaid = (bonuses || [])
+      .filter(b => b.factory_id === factory.id && b.payment_method === 'online' && Number(b.amount || 0) > 0)
+      .reduce((sum, b) => sum + Number(b.amount || 0), 0);
+
+    const onlinePaid = hisaabOnlinePaid + advanceOnlinePaid + bonusOnlinePaid;
 
     const totalSpend = disbursed + onlinePaid + factoryExpenses;
 
@@ -855,6 +869,10 @@ export function AdminDashboard({
         }
         // Exclude disputed / cancelled transactions from ledger log (only keep confirmed and pending)
         if (tx.status === 'disputed') {
+          return false;
+        }
+        // Exclude bonuses here: handled via bonuses mapping below
+        if (tx.note?.includes('[TYPE:bonus]')) {
           return false;
         }
         return true;
@@ -954,6 +972,29 @@ export function AdminDashboard({
           supervisorId: adv.supervisor_id,
           isFlagged: false,
           isOnline: true,
+          isRefunded,
+          refundInfo,
+        };
+      }),
+    ...(bonuses || [])
+      .map(b => {
+        const isOnline = b.payment_method === 'online';
+        const refundInfo = localRefundedMap[b.id] || (b.cash_tx_id ? localRefundedMap[b.cash_tx_id] : undefined);
+        const isRefunded = !!refundInfo;
+        return {
+          id: `bonus-${b.id}`,
+          created_at: b.created_at,
+          amount: Number(b.amount || 0),
+          status: isRefunded ? ('refunded' as any) : ('confirmed' as any),
+          note: `[Worker Bonus] Paid to worker (${isOnline ? 'Online Bank/UPI' : 'Cash in Hand'})${b.note ? ` • ${b.note}` : ''}`,
+          type: 'worker_bonus',
+          purpose: 'Wages' as const,
+          fromLabel: b.supervisor_name ? `${b.supervisor_name} (${isOnline ? 'Online' : 'Cash'})` : (isOnline ? 'Online / Bank' : 'Cash in Hand'),
+          toLabel: b.worker_name || 'Worker',
+          factoryId: b.factory_id,
+          supervisorId: b.supervisor_id,
+          isFlagged: false,
+          isOnline,
           isRefunded,
           refundInfo,
         };
@@ -2073,6 +2114,17 @@ export function AdminDashboard({
                           </div>
                         </div>
 
+                        {/* Bonus Stat (Separate Tracker) */}
+                        {(item.worker.total_bonus_paid || 0) > 0 && (
+                          <div className="flex items-center justify-between px-2.5 py-1 bg-purple-50 border border-purple-200 rounded-md text-[11px]">
+                            <span className="font-semibold text-purple-900 flex items-center gap-1">
+                              <Gift className="h-3 w-3 text-purple-600" />
+                              <span>Bonus Awarded:</span>
+                            </span>
+                            <span className="font-bold text-purple-700">{formatINR(item.worker.total_bonus_paid || 0)}</span>
+                          </div>
+                        )}
+
                         {/* Actions Row */}
                         <div className="flex items-center gap-1.5 pt-0.5">
                           <button
@@ -2241,6 +2293,7 @@ export function AdminDashboard({
                         <th className="px-3 py-3 text-right">Advance Given</th>
                         <th className="px-3 py-3 text-right">Advance Settled</th>
                         <th className="px-3 py-3 text-right">Advance Owed</th>
+                        <th className="px-3 py-3 text-right">Bonus Paid</th>
                         <th className="px-4 py-3 text-right">Net Payable</th>
                         <th className="px-4 py-3 text-center">Actions</th>
                       </tr>
@@ -2325,6 +2378,16 @@ export function AdminDashboard({
                                 <span className="bg-amber-50 text-amber-700 px-2 py-0.5 rounded border border-amber-200">
                                   {formatINR(item.worker.running_advance || 0)}
                                 </span>
+                              </td>
+
+                              <td className="px-3 py-3 text-right font-semibold">
+                                {(item.worker.total_bonus_paid || 0) > 0 ? (
+                                  <span className="bg-purple-50 text-purple-700 px-2 py-0.5 rounded border border-purple-200 font-bold">
+                                    {formatINR(item.worker.total_bonus_paid || 0)}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-400">₹0</span>
+                                )}
                               </td>
 
                               <td className="px-4 py-3 text-right whitespace-nowrap">
@@ -2535,6 +2598,201 @@ export function AdminDashboard({
           </>
         )}
       </div>
+
+      {/* 5. Dedicated Worker Bonuses Section */}
+      {(() => {
+        const bonusItemsFiltered = (bonuses || []).filter(b => {
+          if (bonusFactoryFilter !== 'all' && b.factory_id !== bonusFactoryFilter) return false;
+          if (bonusSearchQuery.trim()) {
+            const q = bonusSearchQuery.toLowerCase();
+            const matchWorker = b.worker_name?.toLowerCase().includes(q);
+            const matchNote = b.note?.toLowerCase().includes(q);
+            const matchSup = b.supervisor_name?.toLowerCase().includes(q);
+            if (!matchWorker && !matchNote && !matchSup) return false;
+          }
+          return true;
+        });
+
+        const totalBonusAmount = bonusItemsFiltered.reduce((sum, b) => sum + Number(b.amount || 0), 0);
+        const totalCashBonusAmount = bonusItemsFiltered
+          .filter(b => b.payment_method === 'cash')
+          .reduce((sum, b) => sum + Number(b.amount || 0), 0);
+        const totalOnlineBonusAmount = bonusItemsFiltered
+          .filter(b => b.payment_method === 'online')
+          .reduce((sum, b) => sum + Number(b.amount || 0), 0);
+        const uniqueBonusWorkersCount = new Set(bonusItemsFiltered.map(b => b.worker_id)).size;
+
+        return (
+          <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden space-y-0">
+            {/* Header */}
+            <div 
+              onClick={() => setIsBonusesCollapsed(!isBonusesCollapsed)}
+              className="px-4 sm:px-5 py-3.5 sm:py-4 border-b border-slate-200 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer hover:bg-slate-100/70 transition-colors select-none"
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="h-9 w-9 rounded-lg bg-purple-50 border border-purple-200 flex items-center justify-center text-purple-700 shrink-0">
+                  <Gift className="h-5 w-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-sm sm:text-base font-bold text-slate-900 tracking-tight">
+                      Worker Bonuses
+                    </h2>
+                    <span className="text-[10px] bg-purple-100 text-purple-800 font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
+                      Separate Tracker
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Total Bonuses Awarded: <span className="font-bold text-slate-800">{formatINR(totalBonusAmount)}</span> across {uniqueBonusWorkersCount} workers ({bonusItemsFiltered.length} records)
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 self-end sm:self-auto">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsBonusesCollapsed(!isBonusesCollapsed);
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-xs hover:bg-slate-50 transition-colors min-h-[36px]"
+                >
+                  {isBonusesCollapsed ? (
+                    <>
+                      <ChevronDown className="h-4 w-4 text-slate-500" />
+                      <span>Expand</span>
+                    </>
+                  ) : (
+                    <>
+                      <ChevronUp className="h-4 w-4 text-slate-500" />
+                      <span>Collapse</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {!isBonusesCollapsed && (
+              <div className="p-4 sm:p-5 space-y-4">
+                {/* 3 KPI Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="p-3.5 bg-purple-50/70 border border-purple-200 rounded-lg">
+                    <p className="text-[10px] font-bold text-purple-700 uppercase tracking-wider">Total Bonuses Paid</p>
+                    <p className="text-xl font-black text-purple-950 mt-1">{formatINR(totalBonusAmount)}</p>
+                    <p className="text-[11px] text-purple-700 mt-0.5">{uniqueBonusWorkersCount} workers rewarded</p>
+                  </div>
+                  <div className="p-3.5 bg-emerald-50/70 border border-emerald-200 rounded-lg">
+                    <p className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider">Paid in Cash</p>
+                    <p className="text-xl font-black text-emerald-950 mt-1">{formatINR(totalCashBonusAmount)}</p>
+                    <p className="text-[11px] text-emerald-700 mt-0.5">Deducted from supervisor cash</p>
+                  </div>
+                  <div className="p-3.5 bg-indigo-50/70 border border-indigo-200 rounded-lg">
+                    <p className="text-[10px] font-bold text-indigo-700 uppercase tracking-wider">Paid Online (Bank / UPI)</p>
+                    <p className="text-xl font-black text-indigo-950 mt-1">{formatINR(totalOnlineBonusAmount)}</p>
+                    <p className="text-[11px] text-indigo-700 mt-0.5">Direct bank / UPI transfers</p>
+                  </div>
+                </div>
+
+                {/* Filter and Search Bar */}
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                    <input
+                      type="text"
+                      placeholder="Search by worker name, note, or supervisor..."
+                      value={bonusSearchQuery}
+                      onChange={(e) => setBonusSearchQuery(e.target.value)}
+                      className="w-full pl-9 pr-3 py-1.5 text-xs rounded border border-slate-300 text-slate-900 bg-white min-h-[38px]"
+                    />
+                  </div>
+                  <select
+                    value={bonusFactoryFilter}
+                    onChange={(e) => setBonusFactoryFilter(e.target.value)}
+                    className="text-xs rounded border border-slate-300 py-1.5 px-3 text-slate-900 bg-white min-h-[38px] sm:w-48"
+                  >
+                    <option value="all">All Factories</option>
+                    {factories.map(f => (
+                      <option key={f.id} value={f.id}>{f.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Table of Bonuses */}
+                {bonusItemsFiltered.length === 0 ? (
+                  <div className="text-center py-8 text-xs text-slate-500 bg-slate-50 rounded-lg border border-slate-200">
+                    No worker bonuses match the current filter.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                    <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
+                      <thead className="bg-slate-50 text-slate-700 font-semibold uppercase tracking-wider">
+                        <tr>
+                          <th className="px-4 py-2.5">Worker</th>
+                          <th className="px-3 py-2.5">Factory / Supervisor</th>
+                          <th className="px-3 py-2.5 text-right">Amount</th>
+                          <th className="px-3 py-2.5">Payment Method</th>
+                          <th className="px-3 py-2.5">Reason / Note</th>
+                          <th className="px-3 py-2.5">Date</th>
+                          <th className="px-3 py-2.5 text-center">Proof</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 bg-white">
+                        {bonusItemsFiltered.map((b) => (
+                          <tr key={b.id} className="hover:bg-slate-50/70 transition-colors">
+                            <td className="px-4 py-2.5 font-bold text-slate-900">
+                              {b.worker_name}
+                            </td>
+                            <td className="px-3 py-2.5 text-slate-600">
+                              <div>
+                                <span className="font-medium text-slate-800">
+                                  {factories.find(f => f.id === b.factory_id)?.name || 'Factory'}
+                                </span>
+                                <span className="text-[10px] text-slate-400 block">By {b.supervisor_name || 'Supervisor'}</span>
+                              </div>
+                            </td>
+                            <td className="px-3 py-2.5 text-right font-black text-purple-700">
+                              {formatINR(b.amount)}
+                            </td>
+                            <td className="px-3 py-2.5">
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                b.payment_method === 'online'
+                                  ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                                  : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              }`}>
+                                {b.payment_method === 'online' ? 'Online' : 'Cash in Hand'}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2.5 text-slate-700">
+                              {b.note || '-'}
+                            </td>
+                            <td className="px-3 py-2.5 text-slate-500 text-[11px] whitespace-nowrap">
+                              {new Date(b.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                            </td>
+                            <td className="px-3 py-2.5 text-center">
+                              {b.photo_url ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setAdminViewingPhotoUrl(b.photo_url || null)}
+                                  className="text-emerald-700 font-semibold underline text-[11px] inline-flex items-center gap-1"
+                                >
+                                  <Camera className="h-3 w-3" />
+                                  <span>View</span>
+                                </button>
+                              ) : (
+                                <span className="text-slate-400 text-[10px]">-</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Transaction Feed Section with Filters */}
       <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">

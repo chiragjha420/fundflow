@@ -25,6 +25,10 @@ export interface FactoryWorkerBalance {
   unpaid_salary: number; // accumulated unpaid salary
   // Net Position (unpaid_salary - running_advance)
   net_payable: number;
+  // Bonus tracking (separate from advance and salary)
+  total_bonus_paid?: number;
+  cash_bonus_paid?: number;
+  online_bonus_paid?: number;
   active: boolean;
 }
 
@@ -774,6 +778,113 @@ export async function getWorkerOnlineAdvancesAction(factoryId?: string, workerId
   }
 }
 
+export interface WorkerBonus {
+  id: string;
+  worker_id: string;
+  worker_name: string;
+  factory_id: string;
+  supervisor_id: string | null;
+  supervisor_name: string;
+  amount: number;
+  note: string;
+  photo_url: string | null;
+  payment_method: 'cash' | 'online';
+  cash_tx_id?: string | null;
+  created_at: string;
+}
+
+export async function recordWorkerBonusAction(params: {
+  workerId: string;
+  supervisorId: string;
+  factoryId?: string;
+  amount: number;
+  paymentMethod: 'cash' | 'online';
+  note?: string;
+  photoUrl?: string | null;
+  cashTxId?: string | null;
+}): Promise<{ success: boolean; id?: string; error?: string }> {
+  try {
+    const { workerId, supervisorId, amount, paymentMethod, photoUrl, cashTxId } = params;
+    const cleanAmount = Math.max(1, Math.round(Number(amount) || 0));
+    if (!workerId) return { success: false, error: 'Worker is required.' };
+    if (cleanAmount <= 0) return { success: false, error: 'Valid amount is required.' };
+
+    const admin = createAdminClient();
+    const [workerRes, supRes] = await Promise.all([
+      admin.from('workers').select('name, factory_id').eq('id', workerId).single(),
+      admin.from('supervisors').select('name').eq('id', supervisorId).single(),
+    ]);
+
+    const workerName = workerRes.data?.name || 'Worker';
+    const supervisorName = supRes.data?.name || 'Supervisor';
+    const effectiveFactoryId = params.factoryId || workerRes.data?.factory_id || '';
+
+    const id = crypto.randomUUID();
+    const cleanNote = params.note?.trim() || `Bonus (${paymentMethod === 'online' ? 'Online' : 'Cash'})`;
+
+    const bonusPayload: WorkerBonus = {
+      id,
+      worker_id: workerId,
+      worker_name: workerName,
+      factory_id: effectiveFactoryId,
+      supervisor_id: supervisorId,
+      supervisor_name: supervisorName,
+      amount: cleanAmount,
+      note: cleanNote,
+      photo_url: photoUrl || null,
+      payment_method: paymentMethod,
+      cash_tx_id: cashTxId || null,
+      created_at: new Date().toISOString(),
+    };
+
+    const { error } = await admin.from('audit_log').insert({
+      table_name: 'worker_bonuses',
+      action: 'BONUS',
+      row_id: id,
+      new_data: bonusPayload,
+      changed_by: supervisorId,
+      changed_at: new Date().toISOString(),
+    });
+
+    if (error) {
+      console.error('recordWorkerBonusAction error:', error);
+      return { success: false, error: error.message };
+    }
+
+    revalidatePath('/admin');
+    revalidatePath('/supervisor');
+    revalidatePath('/supervisor/workers');
+
+    return { success: true, id };
+  } catch (err: any) {
+    console.error('recordWorkerBonusAction exception:', err);
+    return { success: false, error: err.message || 'Failed to record worker bonus.' };
+  }
+}
+
+export async function getWorkerBonusesAction(factoryId?: string, workerId?: string): Promise<WorkerBonus[]> {
+  try {
+    const admin = createAdminClient();
+    const { data: rows } = await admin
+      .from('audit_log')
+      .select('*')
+      .eq('table_name', 'worker_bonuses')
+      .eq('action', 'BONUS')
+      .order('changed_at', { ascending: false });
+
+    return (rows || [])
+      .map(r => r.new_data as WorkerBonus)
+      .filter(item => {
+        if (!item) return false;
+        if (workerId && item.worker_id !== workerId) return false;
+        if (factoryId && factoryId !== 'all' && item.factory_id !== factoryId) return false;
+        return true;
+      });
+  } catch {
+    return [];
+  }
+}
+
 export interface AdvanceCorrectionRequest {
   id: string;
   worker_id: string;
@@ -1221,7 +1332,7 @@ export async function getAllWorkersWithSalaryBalancesAction(factoryId?: string):
     const workerIds = workers.map(w => w.id);
     const workerIdSet = new Set(workerIds);
 
-    // 2. Fetch all confirmed worker cash transactions, refunds, reclassifications, salary ledger entries, and online advances in parallel
+    // 2. Fetch all confirmed worker cash transactions, refunds, reclassifications, salary ledger entries, online advances, and bonuses in parallel
     const [
       { data: cashTxs },
       { data: refundLogs },
@@ -1229,6 +1340,7 @@ export async function getAllWorkersWithSalaryBalancesAction(factoryId?: string):
       reclassMap,
       salaryLedgerEntries,
       onlineAdvances,
+      bonuses,
     ] = await Promise.all([
       admin
         .from('cash_transactions')
@@ -1249,6 +1361,7 @@ export async function getAllWorkersWithSalaryBalancesAction(factoryId?: string):
       getReclassifiedTransactions(),
       getSalaryLedgerEntries(factoryId),
       getWorkerOnlineAdvancesAction(factoryId),
+      getWorkerBonusesAction(factoryId),
     ]);
 
     // Build refund set
@@ -1261,6 +1374,8 @@ export async function getAllWorkersWithSalaryBalancesAction(factoryId?: string):
     // Aggregations per worker
     const workerCashAdvanceGiven: Record<string, number> = {};
     const workerOnlineAdvanceGiven: Record<string, number> = {};
+    const workerCashBonusGiven: Record<string, number> = {};
+    const workerOnlineBonusGiven: Record<string, number> = {};
     const workerSalaryPaid: Record<string, number> = {};
     const workerSalaryEarned: Record<string, number> = {};
     const workerAdvanceRecovered: Record<string, number> = {};
@@ -1273,11 +1388,14 @@ export async function getAllWorkersWithSalaryBalancesAction(factoryId?: string):
       const amount = Number(tx.amount || 0);
       const reclass = reclassMap[tx.id];
 
-      // Check if this cash disbursement is a salary payment or advance
+      // Check if this cash disbursement is a bonus, salary payment or advance
+      const isBonusPayment = (!reclass && (tx.note?.includes('[TYPE:bonus]') || false));
       const isSalaryPayment = reclass === 'salary_payment' || 
         (!reclass && (tx.note?.includes('[TYPE:salary_payment]') || false));
 
-      if (isSalaryPayment) {
+      if (isBonusPayment) {
+        workerCashBonusGiven[tx.to_worker_id] = (workerCashBonusGiven[tx.to_worker_id] || 0) + amount;
+      } else if (isSalaryPayment) {
         workerSalaryPaid[tx.to_worker_id] = (workerSalaryPaid[tx.to_worker_id] || 0) + amount;
       } else {
         workerCashAdvanceGiven[tx.to_worker_id] = (workerCashAdvanceGiven[tx.to_worker_id] || 0) + amount;
@@ -1290,6 +1408,21 @@ export async function getAllWorkersWithSalaryBalancesAction(factoryId?: string):
       if (refundedTxIds.has(adv.id)) return;
       const amount = Number(adv.amount || 0);
       workerOnlineAdvanceGiven[adv.worker_id] = (workerOnlineAdvanceGiven[adv.worker_id] || 0) + amount;
+    });
+
+    // Process Worker Bonuses (Cash & Online)
+    (bonuses || []).forEach(b => {
+      if (!b.worker_id || !workerIdSet.has(b.worker_id)) return;
+      if (refundedTxIds.has(b.id) || (b.cash_tx_id && refundedTxIds.has(b.cash_tx_id))) return;
+      const amount = Number(b.amount || 0);
+      if (b.payment_method === 'online') {
+        workerOnlineBonusGiven[b.worker_id] = (workerOnlineBonusGiven[b.worker_id] || 0) + amount;
+      } else {
+        // If not already recorded via cash_transactions
+        if (!b.cash_tx_id || !cashTxs?.some(t => t.id === b.cash_tx_id)) {
+          workerCashBonusGiven[b.worker_id] = (workerCashBonusGiven[b.worker_id] || 0) + amount;
+        }
+      }
     });
 
     // Process Non-Cash Salary Ledger Entries (Accruals & Recoveries)
@@ -1317,6 +1450,10 @@ export async function getAllWorkersWithSalaryBalancesAction(factoryId?: string):
       const salEarned = (workerSalaryEarned[w.id] || 0) + openingUnpaid;
       const salPaid = workerSalaryPaid[w.id] || 0;
 
+      const cashBonus = workerCashBonusGiven[w.id] || 0;
+      const onlineBonus = workerOnlineBonusGiven[w.id] || 0;
+      const totalBonusPaid = cashBonus + onlineBonus;
+
       const totalAdvanceGiven = openingAdv + advGiven;
       const totalAdvanceRecovered = advRecovered;
       const runningAdvance = Math.max(0, totalAdvanceGiven - totalAdvanceRecovered);
@@ -1325,7 +1462,7 @@ export async function getAllWorkersWithSalaryBalancesAction(factoryId?: string):
       const totalSalaryPaid = salPaid;
       const unpaidSalary = Math.max(0, totalSalaryEarned - totalSalaryPaid - totalAdvanceRecovered);
       const netPayable = unpaidSalary - runningAdvance;
-      const totalCashDisbursed = cashAdv + salPaid;
+      const totalCashDisbursed = cashAdv + salPaid + cashBonus;
 
       return {
         worker_id: w.id,
@@ -1345,6 +1482,9 @@ export async function getAllWorkersWithSalaryBalancesAction(factoryId?: string):
         total_salary_paid: totalSalaryPaid,
         unpaid_salary: unpaidSalary,
         net_payable: netPayable,
+        total_bonus_paid: totalBonusPaid,
+        cash_bonus_paid: cashBonus,
+        online_bonus_paid: onlineBonus,
         active: w.active !== false,
       };
     });
@@ -1390,6 +1530,7 @@ export async function getWorkerFullLedgerAction(workerId: string): Promise<{
       salaryEntries,
       hisaabRecords,
       onlineAdvances,
+      bonuses,
     ] = await Promise.all([
       admin
         .from('cash_transactions')
@@ -1411,6 +1552,7 @@ export async function getWorkerFullLedgerAction(workerId: string): Promise<{
       getSalaryLedgerEntries(undefined, workerId),
       getWorkerHisaabRecordsAction(undefined, workerId),
       getWorkerOnlineAdvancesAction(undefined, workerId),
+      getWorkerBonusesAction(undefined, workerId),
     ]);
 
     const refundedMap: Record<string, string> = {};
@@ -1465,6 +1607,11 @@ export async function getWorkerFullLedgerAction(workerId: string): Promise<{
       const amount = Number(tx.amount || 0);
       const isRefunded = !!refundedMap[tx.id];
       const reclass = reclassMap[tx.id];
+
+      // Skip bonuses here: handled via bonuses mapping below
+      const isBonus = (!reclass && (tx.note?.includes('[TYPE:bonus]') || false));
+      if (isBonus) return;
+
       const isSalary = reclass === 'salary_payment' || 
         (!reclass && (tx.note?.includes('[TYPE:salary_payment]') || false));
 
@@ -1588,6 +1735,31 @@ export async function getWorkerFullLedgerAction(workerId: string): Promise<{
       });
     });
 
+    // Worker Bonuses (Cash & Online)
+    (bonuses || []).forEach(b => {
+      const amount = Number(b.amount || 0);
+      const isRefunded = Boolean(refundedMap[b.id] || (b.cash_tx_id && refundedMap[b.cash_tx_id]));
+      const parsed = parseHandoverNote(b.note);
+      const supervisorName = b.supervisor_name ? `by ${b.supervisor_name}` : 'Supervisor';
+      const isCash = b.payment_method === 'cash';
+
+      ledger.push({
+        id: `bonus-${b.id}`,
+        date: b.created_at,
+        type: 'bonus_given' as any,
+        title: `Bonus (${supervisorName})`.trim(),
+        label: isCash ? 'Cash Bonus' : 'Online Bonus',
+        amount,
+        note: parsed.note || (isCash ? 'Bonus Paid in Cash' : 'Paid via Bank/UPI'),
+        isCash,
+        supervisorName,
+        photoUrl: parsed.photoUrl || b.photo_url || null,
+        effectOnAdvance: 0, // DOES NOT TOUCH WORKER ADVANCE
+        effectOnSalary: 0, // DOES NOT TOUCH WORKER SALARY
+        refunded: isRefunded,
+      });
+    });
+
     // Sort ascending, calculate running balances, then sort descending
     let runningUnpaid = 0;
     let runningAdv = 0;
@@ -1629,7 +1801,7 @@ export async function getFactoryWorkerDisbursementsAction(factoryId: string): Pr
     if (!workers || workers.length === 0) return [];
     const workerIds = workers.map(w => w.id);
 
-    const [{ data: txs, error }, onlineAdvances] = await Promise.all([
+    const [{ data: txs, error }, onlineAdvances, bonuses] = await Promise.all([
       admin
         .from('cash_transactions')
         .select('id, amount, note, created_at, status, to_worker_id, from_supervisor_id, to_work:to_worker_id(name, active)')
@@ -1637,12 +1809,15 @@ export async function getFactoryWorkerDisbursementsAction(factoryId: string): Pr
         .in('to_worker_id', workerIds)
         .order('created_at', { ascending: false }),
       getWorkerOnlineAdvancesAction(factoryId),
+      getWorkerBonusesAction(factoryId),
     ]);
 
     if (error) {
       console.error('getFactoryWorkerDisbursementsAction error:', error);
       return [];
     }
+
+    const filteredCashTxs = (txs || []).filter(tx => !tx.note?.includes('[TYPE:bonus]'));
 
     const onlineItems = (onlineAdvances || []).map(adv => ({
       id: `online-adv-${adv.id}`,
@@ -1656,7 +1831,20 @@ export async function getFactoryWorkerDisbursementsAction(factoryId: string): Pr
       is_online: true,
     }));
 
-    return [...(txs || []), ...onlineItems].sort(
+    const bonusItems = (bonuses || []).map(b => ({
+      id: `bonus-${b.id}`,
+      amount: b.amount,
+      note: b.note || `Bonus (${b.payment_method === 'online' ? 'Online' : 'Cash'})`,
+      created_at: b.created_at,
+      status: 'confirmed',
+      to_worker_id: b.worker_id,
+      from_supervisor_id: b.supervisor_id,
+      to_work: { name: b.worker_name, active: true },
+      is_online: b.payment_method === 'online',
+      is_bonus: true,
+    }));
+
+    return [...filteredCashTxs, ...onlineItems, ...bonusItems].sort(
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
   } catch (err) {
@@ -1673,7 +1861,7 @@ export async function getWorkerDisbursementsAction(workerId: string): Promise<an
     if (!workerId) return [];
     const admin = createAdminClient();
 
-    const [{ data: txs, error }, onlineAdvances] = await Promise.all([
+    const [{ data: txs, error }, onlineAdvances, bonuses] = await Promise.all([
       admin
         .from('cash_transactions')
         .select('id, amount, note, created_at, status, to_worker_id, from_supervisor_id')
@@ -1681,12 +1869,15 @@ export async function getWorkerDisbursementsAction(workerId: string): Promise<an
         .eq('to_worker_id', workerId)
         .order('created_at', { ascending: false }),
       getWorkerOnlineAdvancesAction(undefined, workerId),
+      getWorkerBonusesAction(undefined, workerId),
     ]);
 
     if (error) {
       console.error('getWorkerDisbursementsAction error:', error);
       return [];
     }
+
+    const filteredCashTxs = (txs || []).filter(tx => !tx.note?.includes('[TYPE:bonus]'));
 
     const onlineItems = (onlineAdvances || []).map(adv => ({
       id: `online-adv-${adv.id}`,
@@ -1699,7 +1890,19 @@ export async function getWorkerDisbursementsAction(workerId: string): Promise<an
       is_online: true,
     }));
 
-    return [...(txs || []), ...onlineItems].sort(
+    const bonusItems = (bonuses || []).map(b => ({
+      id: `bonus-${b.id}`,
+      amount: b.amount,
+      note: b.note || `Bonus (${b.payment_method === 'online' ? 'Online' : 'Cash'})`,
+      created_at: b.created_at,
+      status: 'confirmed',
+      to_worker_id: b.worker_id,
+      from_supervisor_id: b.supervisor_id,
+      is_online: b.payment_method === 'online',
+      is_bonus: true,
+    }));
+
+    return [...filteredCashTxs, ...onlineItems, ...bonusItems].sort(
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
   } catch (err) {
@@ -1988,7 +2191,7 @@ export async function getSupervisorAllTransactionsAction(
       }
     }
 
-    // 2. Fetch cash transactions, reclassifications, non-cash salary ledger entries, hisaab records, and online advances
+    // 2. Fetch cash transactions, reclassifications, non-cash salary ledger entries, hisaab records, online advances, and bonuses
     const [
       { data: txs, error },
       { data: refundLogs },
@@ -1996,6 +2199,7 @@ export async function getSupervisorAllTransactionsAction(
       salaryEntries,
       hisaabRecords,
       onlineAdvances,
+      bonuses,
     ] = await Promise.all([
       admin
         .from('cash_transactions')
@@ -2024,6 +2228,7 @@ export async function getSupervisorAllTransactionsAction(
       getSalaryLedgerEntries(factoryId),
       getWorkerHisaabRecordsAction(factoryId),
       getWorkerOnlineAdvancesAction(factoryId),
+      getWorkerBonusesAction(factoryId),
     ]);
 
     if (error) {
@@ -2042,19 +2247,21 @@ export async function getSupervisorAllTransactionsAction(
       }
     });
 
-    // 4. Augment cash transactions with calculated payment_type
-    const augmentedCashTxs = (txs || []).map(tx => {
-      if (tx.type === 'supervisor_to_worker') {
-        const reclass = reclassMap[tx.id];
-        const isSalary = reclass === 'salary_payment' || 
-          (!reclass && (tx.note?.includes('[TYPE:salary_payment]') || false));
-        return {
-          ...tx,
-          worker_payment_type: isSalary ? 'salary_payment' : 'advance',
-        };
-      }
-      return tx;
-    });
+    // 4. Augment cash transactions with calculated payment_type (filter out bonuses handled below)
+    const augmentedCashTxs = (txs || [])
+      .filter(tx => !tx.note?.includes('[TYPE:bonus]'))
+      .map(tx => {
+        if (tx.type === 'supervisor_to_worker') {
+          const reclass = reclassMap[tx.id];
+          const isSalary = reclass === 'salary_payment' || 
+            (!reclass && (tx.note?.includes('[TYPE:salary_payment]') || false));
+          return {
+            ...tx,
+            worker_payment_type: isSalary ? 'salary_payment' : 'advance',
+          };
+        }
+        return tx;
+      });
 
     // 5. Convert non-cash salary ledger events to transaction-like items for the unified feed
     const nonCashItems = salaryEntries.map(entry => {
@@ -2110,7 +2317,28 @@ export async function getSupervisorAllTransactionsAction(
       };
     });
 
-    const allCombined = [...augmentedCashTxs, ...nonCashItems, ...onlineHisaabItems, ...onlineAdvanceItems].sort(
+    // 8. Convert Worker Bonuses to transaction items for unified feed
+    const bonusItems = (bonuses || []).map(b => {
+      const isRefunded = refundedTxIds.has(b.id) || (b.cash_tx_id && refundedTxIds.has(b.cash_tx_id));
+      const isOnline = b.payment_method === 'online';
+      return {
+        id: `bonus-${b.id}`,
+        type: 'worker_bonus',
+        worker_payment_type: 'bonus',
+        amount: Number(b.amount || 0),
+        note: b.note || `Worker Bonus (${isOnline ? 'Online' : 'Cash'})`,
+        status: isRefunded ? 'refunded' : 'confirmed',
+        created_at: b.created_at,
+        to_worker_id: b.worker_id,
+        to_work: { name: b.worker_name || 'Worker', active: true },
+        from_supervisor_id: b.supervisor_id,
+        from: { name: b.supervisor_name || 'Supervisor' },
+        is_online: isOnline,
+        photo_url: b.photo_url,
+      };
+    });
+
+    const allCombined = [...augmentedCashTxs, ...nonCashItems, ...onlineHisaabItems, ...onlineAdvanceItems, ...bonusItems].sort(
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
 

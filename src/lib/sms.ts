@@ -23,7 +23,7 @@ export interface WorkerSmsPayload {
   supervisorName?: string;
   factoryName?: string;
   note?: string;
-  paymentType?: 'advance' | 'salary_payment';
+  paymentType?: 'advance' | 'salary_payment' | 'bonus';
 }
 
 /**
@@ -109,7 +109,11 @@ export async function sendWorkerDisbursementSms(payload: WorkerSmsPayload): Prom
     });
 
     const senderIdentifier = payload.factoryName || payload.supervisorName || 'JBB FundFlow';
-    const paymentLabel = payload.paymentType === 'salary_payment' ? 'Salary Payment' : 'Cash Advance';
+    const paymentLabel = payload.paymentType === 'salary_payment' 
+      ? 'Salary Payment' 
+      : payload.paymentType === 'bonus' 
+        ? 'Bonus' 
+        : 'Cash Advance';
     const messageText = `Received ₹${payload.amount.toLocaleString('en-IN')} (${paymentLabel}) on ${today} from ${senderIdentifier}.`;
 
     // 1. Check if Free Android SIM Gateway is configured (Primary & Fallback)

@@ -37,7 +37,8 @@ import {
   CalendarDays, 
   QrCode, 
   CreditCard,
-  Utensils
+  Utensils,
+  Gift
 } from 'lucide-react';
 import { sendWorkerDisbursementSms } from '@/lib/sms';
 import { createCashRequest } from '@/app/actions/cash-requests';
@@ -53,6 +54,9 @@ import {
   recoverWorkerAdvanceAction, 
   recordWorkerHisaabAction,
   recordWorkerOnlineAdvanceAction,
+  recordWorkerBonusAction,
+  getWorkerBonusesAction,
+  WorkerBonus,
   createAdvanceCorrectionRequestAction
 } from '@/app/actions/workers';
 import { getFactoryExpensesAction, logOnlineExpenseAction, FactoryExpense } from '@/app/actions/expenses';
@@ -74,6 +78,9 @@ interface Worker {
   net_payable?: number;
   total_advance_given?: number;
   total_advance_recovered?: number;
+  total_bonus_paid?: number;
+  cash_bonus_paid?: number;
+  online_bonus_paid?: number;
   active: boolean;
 }
 
@@ -113,9 +120,17 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const queryClient = useQueryClient();
 
   // Active Tab for Quick Actions
-  const [activeTab, setActiveTab] = useState<'advance' | 'hisaab' | 'expense' | 'transfer'>('advance');
+  const [activeTab, setActiveTab] = useState<'advance' | 'bonus' | 'hisaab' | 'expense' | 'transfer'>('advance');
   const [expensePaymentMethod, setExpensePaymentMethod] = useState<'cash' | 'online'>('cash');
   const [advancePaymentMethod, setAdvancePaymentMethod] = useState<'cash' | 'online'>('cash');
+
+  // Bonus States
+  const [bonusWorkerId, setBonusWorkerId] = useState<string>('');
+  const [bonusWorkerSearch, setBonusWorkerSearch] = useState<string>('');
+  const [bonusAmount, setBonusAmount] = useState<string>('');
+  const [bonusNote, setBonusNote] = useState<string>('');
+  const [bonusPaymentMethod, setBonusPaymentMethod] = useState<'cash' | 'online'>('cash');
+  const [isBonusesExpanded, setIsBonusesExpanded] = useState<boolean>(true);
 
   // Hisaab States
   const [hisaabWorkerId, setHisaabWorkerId] = useState<string>('');
@@ -160,7 +175,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     amount: number;
     note: string;
     overridePhone?: string;
-    paymentType?: 'advance';
+    paymentType?: 'advance' | 'bonus';
     paymentMethod?: 'cash' | 'online';
   } | null>(null);
   const [viewingPhotoUrl, setViewingPhotoUrl] = useState<string | null>(null);
@@ -176,7 +191,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   // Unified Transaction History States (All Transactions: Advances, Transfers, Expenses, Refunds)
   const [historySearchQuery, setHistorySearchQuery] = useState<string>('');
   const [historyChannelFilter, setHistoryChannelFilter] = useState<'all' | 'offline' | 'online'>('all');
-  const [historyTypeFilter, setHistoryTypeFilter] = useState<'all' | 'salary' | 'advances' | 'transfers' | 'expenses' | 'refunds'>('all');
+  const [historyTypeFilter, setHistoryTypeFilter] = useState<'all' | 'salary' | 'advances' | 'bonuses' | 'transfers' | 'expenses' | 'refunds'>('all');
   const [isHistoryExpanded, setIsHistoryExpanded] = useState<boolean>(false);
 
   // Form loading states
@@ -203,6 +218,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     workerId: string;
     amount: number;
     note: string;
+    paymentType?: 'advance' | 'bonus';
     paymentMethod?: 'cash' | 'online';
   } | null>(null);
   const [phoneModalInput, setPhoneModalInput] = useState<string>('');
@@ -521,6 +537,15 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
   const selectedWorker = activeWorkers.find(w => w.worker_id === selectedWorkerId);
 
+  // Real-time worker filtering for the Bonus selector
+  const filteredBonusWorkers = activeWorkers.filter(w => {
+    if (!bonusWorkerSearch.trim()) return true;
+    const q = bonusWorkerSearch.toLowerCase();
+    return w.worker_name.toLowerCase().includes(q) || (w.worker_phone && w.worker_phone.includes(q));
+  });
+
+  const selectedBonusWorker = activeWorkers.find(w => w.worker_id === bonusWorkerId);
+
   // 4. Fetch Active Supervisors (for transfer selection)
   const { data: otherSupervisors } = useQuery({
     queryKey: ['supervisors-list'],
@@ -619,6 +644,37 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
   const activeExpenses = expenses !== undefined ? expenses : cachedExpenses;
 
+  // 7. Fetch Worker Bonuses for this factory (unified bonus tracker)
+  const { data: factoryBonuses } = useQuery({
+    queryKey: ['worker-bonuses', factoryId],
+    queryFn: async () => {
+      if (!factoryId) return [];
+      try {
+        const data = await getWorkerBonusesAction(factoryId);
+        await setOfflineCache(`worker-bonuses-${factoryId}`, data);
+        return data;
+      } catch (err) {
+        console.warn('Failed to fetch worker bonuses, falling back to offline cache:', err);
+        const cached = await getOfflineCache<WorkerBonus[]>(`worker-bonuses-${factoryId}`);
+        return cached || [];
+      }
+    },
+    enabled: !!factoryId,
+    staleTime: 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+
+  const [cachedBonuses, setCachedBonuses] = useState<WorkerBonus[]>([]);
+  useEffect(() => {
+    if (factoryId) {
+      getOfflineCache<WorkerBonus[]>(`worker-bonuses-${factoryId}`).then(data => {
+        if (data) setCachedBonuses(data);
+      });
+    }
+  }, [factoryId, factoryBonuses]);
+
+  const activeBonuses = factoryBonuses !== undefined ? factoryBonuses : cachedBonuses;
+
   const getCategoryBadge = (category: string) => {
     const cat = (category || 'other').toLowerCase();
     switch (cat) {
@@ -674,7 +730,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
     const list: Array<{
       id: string;
-      kind: 'expense' | 'advance' | 'salary_payment' | 'transfer_sent' | 'transfer_received' | 'office_cash' | 'advance_refund' | 'advance_recovery' | 'salary_earned' | 'online_payment';
+      kind: 'expense' | 'advance' | 'salary_payment' | 'transfer_sent' | 'transfer_received' | 'office_cash' | 'advance_refund' | 'advance_recovery' | 'salary_earned' | 'online_payment' | 'bonus';
       direction: 'inflow' | 'outflow';
       amount: number;
       title: string;
@@ -850,6 +906,37 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           isOnline: true,
         });
       }
+      // (c3) Worker Bonus (Cash or Online)
+      else if (tx.type === 'worker_bonus' || tx.worker_payment_type === 'bonus') {
+        if (tx.from_supervisor_id && tx.from_supervisor_id !== supervisorId) return;
+        const targetWorker = activeWorkers.find(w => w.worker_id === tx.to_worker_id);
+        const workerName = tx.to_work?.name || targetWorker?.worker_name || 'Worker';
+        const isRefunded = refundedSet.has(tx.id) || tx.status === 'refunded';
+        const isOnline = !!tx.is_online;
+        const { note: cleanNote, photoUrl } = parseHandoverNote(tx.note);
+
+        list.push({
+          id: `bonus-${tx.id}`,
+          kind: 'bonus',
+          direction: 'outflow',
+          amount: Number(tx.amount || 0),
+          title: workerName,
+          subtitle: isRefunded ? 'Refunded by Admin' : (cleanNote || undefined),
+          categoryKey: isRefunded ? 'refund' : 'bonus',
+          categoryLabel: isRefunded ? 'Refunded' : (isOnline ? 'Bonus (Online)' : 'Bonus (Cash)'),
+          badgeClass: isRefunded ? 'bg-amber-100 text-amber-800' : 'bg-purple-50 text-purple-700',
+          badgeIcon: null,
+          note: cleanNote || '',
+          photoUrl: photoUrl || tx.photo_url || null,
+          photoTitle: `Bonus Proof: ${workerName}`,
+          photoButtonLabel: 'View Proof',
+          created_at: tx.created_at,
+          supervisorId: tx.from_supervisor_id || '',
+          supervisorName: 'You',
+          isOwn: true,
+          isOnline,
+        });
+      }
       // (d) Supervisor Transfer (Sent by this supervisor)
       else if (tx.type === 'supervisor_to_supervisor' && tx.from_supervisor_id === supervisorId) {
         const recipientName = tx.to_sup?.name || getSupervisorDisplayName(tx.to_supervisor_id);
@@ -984,6 +1071,9 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       if (historyTypeFilter === 'advances' && tx.kind !== 'advance' && tx.kind !== 'advance_recovery') {
         return false;
       }
+      if (historyTypeFilter === 'bonuses' && tx.kind !== 'bonus') {
+        return false;
+      }
       if (historyTypeFilter === 'transfers' && tx.kind !== 'transfer_sent' && tx.kind !== 'transfer_received') {
         return false;
       }
@@ -1104,6 +1194,43 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       });
   };
 
+  // 1-Tap Quick Add Worker right inside the Bonus selector
+  const handleQuickAddBonusWorker = async (name: string) => {
+    const cleanName = name.trim();
+    if (!cleanName || !factoryId || !supervisorId) return;
+    setIsQuickAddingWorker(true);
+    const newId = crypto.randomUUID();
+    const newWorker: Worker = {
+      worker_id: newId,
+      worker_name: cleanName,
+      worker_phone: null,
+      worker_photo_url: null,
+      factory_id: factoryId,
+      supervisor_id: supervisorId,
+      opening_advance: 0,
+      running_advance: 0,
+      active: true,
+    };
+
+    // Optimistically add to workers query data immediately (0ms)
+    queryClient.setQueryData(['workers', factoryId], (old: Worker[] | undefined) => {
+      return [newWorker, ...(old || [])];
+    });
+
+    // Select this new worker immediately
+    setBonusWorkerId(newId);
+    setBonusWorkerSearch('');
+    setIsQuickAddingWorker(false);
+    showToast('success', `Worker "${cleanName}" created! Enter amount to award bonus.`);
+
+    // Background DB insert
+    createWorkerAction(factoryId, supervisorId, cleanName, null, null, 0)
+      .catch((err) => {
+        console.warn('Background worker creation failed:', err);
+        showToast('error', `Failed to save worker to server: ${err.message}`);
+      });
+  };
+
   // Handler for Cash Handover Photo Capture or Skip (Optimistic 0ms UI)
   const handleHandoverCapture = async (file: File | null) => {
     if (!pendingDisburse) return;
@@ -1118,6 +1245,10 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     setSelectedWorkerId('');
     setDisburseNote('');
     setWorkerSearchTerm('');
+    setBonusAmount('');
+    setBonusWorkerId('');
+    setBonusNote('');
+    setBonusWorkerSearch('');
     setActionLoading(false);
     setLastDisburseSms(null);
 
@@ -1129,11 +1260,19 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       });
     }
 
-    // 4. OPTIMISTIC CACHE UPDATE: Update worker running advance
+    // 4. OPTIMISTIC CACHE UPDATE: Update worker running advance or bonus
     queryClient.setQueryData(['workers', factoryId], (old: Worker[] | undefined) => {
       if (!old) return old;
       return old.map(w => {
         if (w.worker_id !== targetWorker.worker_id) return w;
+        if (activePaymentType === 'bonus') {
+          return {
+            ...w,
+            total_bonus_paid: (w.total_bonus_paid || 0) + amount,
+            cash_bonus_paid: !isOnline ? (Number(w.cash_bonus_paid || 0) + amount) : w.cash_bonus_paid,
+            online_bonus_paid: isOnline ? (Number(w.online_bonus_paid || 0) + amount) : w.online_bonus_paid,
+          };
+        }
         const newAdv = Number(w.running_advance || 0) + amount;
         return {
           ...w,
@@ -1146,8 +1285,29 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
     // 5. OPTIMISTIC CACHE UPDATE: Prepend to recent disbursements and unified feed
     const tempTxId = `temp-${Date.now()}`;
-    const defaultLabel = isOnline ? 'Online Advance (Bank/UPI)' : 'Cash Advance';
+    const defaultLabel = activePaymentType === 'bonus'
+      ? (isOnline ? 'Online Bonus (Bank/UPI)' : 'Cash Bonus')
+      : (isOnline ? 'Online Advance (Bank/UPI)' : 'Cash Advance');
     const cleanNoteBase = note?.trim() || defaultLabel;
+
+    if (activePaymentType === 'bonus') {
+      queryClient.setQueryData(['worker-bonuses', factoryId], (old: WorkerBonus[] | undefined) => {
+        const optimisticBonus: WorkerBonus = {
+          id: `bonus-${tempTxId}`,
+          worker_id: targetWorker.worker_id,
+          worker_name: targetWorker.worker_name,
+          factory_id: factoryId || '',
+          supervisor_id: supervisorId || '',
+          supervisor_name: supervisor?.name || 'Supervisor',
+          amount,
+          note: cleanNoteBase,
+          photo_url: null,
+          payment_method: isOnline ? 'online' : 'cash',
+          created_at: new Date().toISOString(),
+        };
+        return [optimisticBonus, ...(old || [])];
+      });
+    }
 
     queryClient.setQueryData(['recent-disbursements', factoryId], (old: any[] | undefined) => {
       const optimisticTx = {
@@ -1159,39 +1319,60 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         to_work: { name: targetWorker.worker_name, active: true },
         from_supervisor_id: supervisorId,
         is_online: isOnline,
+        is_bonus: activePaymentType === 'bonus',
       };
       return [optimisticTx, ...(old || [])].slice(0, 50);
     });
 
     queryClient.setQueryData(['supervisor-all-transactions', supervisorId, factoryId], (old: any) => {
       if (!old || !old.transactions) return old;
-      const optimisticTx = isOnline ? {
-        id: `online-adv-${tempTxId}`,
-        type: 'online_advance',
-        worker_payment_type: 'online_advance',
-        amount,
-        note: cleanNoteBase,
-        status: 'confirmed',
-        created_at: new Date().toISOString(),
-        to_worker_id: targetWorker.worker_id,
-        to_work: { name: targetWorker.worker_name, active: true },
-        from_supervisor_id: supervisorId,
-        from: { name: supervisor?.name || 'Supervisor' },
-        is_online: true,
-      } : {
-        id: tempTxId,
-        type: 'supervisor_to_worker',
-        worker_payment_type: 'advance',
-        amount,
-        note: cleanNoteBase,
-        status: 'confirmed',
-        created_at: new Date().toISOString(),
-        to_worker_id: targetWorker.worker_id,
-        to_work: { name: targetWorker.worker_name, active: true },
-        from_supervisor_id: supervisorId,
-        from: { name: supervisor?.name || 'Supervisor' },
-        is_online: false,
-      };
+      let optimisticTx: any;
+      if (activePaymentType === 'bonus') {
+        optimisticTx = {
+          id: `bonus-${tempTxId}`,
+          type: 'worker_bonus',
+          worker_payment_type: 'bonus',
+          amount,
+          note: cleanNoteBase,
+          status: 'confirmed',
+          created_at: new Date().toISOString(),
+          to_worker_id: targetWorker.worker_id,
+          to_work: { name: targetWorker.worker_name, active: true },
+          from_supervisor_id: supervisorId,
+          from: { name: supervisor?.name || 'Supervisor' },
+          is_online: isOnline,
+        };
+      } else if (isOnline) {
+        optimisticTx = {
+          id: `online-adv-${tempTxId}`,
+          type: 'online_advance',
+          worker_payment_type: 'online_advance',
+          amount,
+          note: cleanNoteBase,
+          status: 'confirmed',
+          created_at: new Date().toISOString(),
+          to_worker_id: targetWorker.worker_id,
+          to_work: { name: targetWorker.worker_name, active: true },
+          from_supervisor_id: supervisorId,
+          from: { name: supervisor?.name || 'Supervisor' },
+          is_online: true,
+        };
+      } else {
+        optimisticTx = {
+          id: tempTxId,
+          type: 'supervisor_to_worker',
+          worker_payment_type: 'advance',
+          amount,
+          note: cleanNoteBase,
+          status: 'confirmed',
+          created_at: new Date().toISOString(),
+          to_worker_id: targetWorker.worker_id,
+          to_work: { name: targetWorker.worker_name, active: true },
+          from_supervisor_id: supervisorId,
+          from: { name: supervisor?.name || 'Supervisor' },
+          is_online: false,
+        };
+      }
       return {
         ...old,
         transactions: [optimisticTx, ...old.transactions],
@@ -1200,9 +1381,9 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
     // 6. INSTANT AUDIO & TOAST CONFIRMATION (0ms)
     playAlertSound('cash_in');
-    showToast('success', `₹${amount.toLocaleString('en-IN')} ${isOnline ? 'online ' : ''}advance paid to ${targetWorker.worker_name}!`);
+    showToast('success', `₹${amount.toLocaleString('en-IN')} ${isOnline ? 'online ' : ''}${activePaymentType === 'bonus' ? 'bonus awarded to' : 'advance paid to'} ${targetWorker.worker_name}!`);
 
-    // 7. ASYNCHRONOUS BACKGROUND WORK (Photo Upload + RPC / Online Advance Action + SMS + Silent Invalidation)
+    // 7. ASYNCHRONOUS BACKGROUND WORK (Photo Upload + RPC / Online Advance Action / Bonus Action + SMS + Silent Invalidation)
     (async () => {
       try {
         let finalNote = cleanNoteBase;
@@ -1224,7 +1405,23 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         }
 
         // Background Ledger action
-        if (isOnline) {
+        if (activePaymentType === 'bonus') {
+          let cashTxId: string | null = null;
+          if (!isOnline) {
+            const cashRes = await disburseToWorkerAction(targetWorker.worker_id, supervisorId!, amount, `${finalNote} [TYPE:bonus]`, 'bonus');
+            cashTxId = (cashRes as any)?.txId || (cashRes as any)?.id || null;
+          }
+          await recordWorkerBonusAction({
+            workerId: targetWorker.worker_id,
+            supervisorId: supervisorId!,
+            factoryId,
+            amount,
+            paymentMethod: isOnline ? 'online' : 'cash',
+            note: finalNote,
+            photoUrl,
+            cashTxId,
+          });
+        } else if (isOnline) {
           await recordWorkerOnlineAdvanceAction({
             workerId: targetWorker.worker_id,
             supervisorId: supervisorId!,
@@ -1265,6 +1462,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         setTimeout(() => {
           queryClient.invalidateQueries({ queryKey: ['recent-disbursements', factoryId] });
           queryClient.invalidateQueries({ queryKey: ['workers', factoryId] });
+          queryClient.invalidateQueries({ queryKey: ['worker-bonuses', factoryId] });
           queryClient.invalidateQueries({ queryKey: ['supervisor-balance', supervisorId] });
           queryClient.invalidateQueries({ queryKey: ['supervisor-all-transactions', supervisorId, factoryId] });
         }, 2500);
@@ -1275,6 +1473,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         // Revert optimistic cache on hard failure
         queryClient.invalidateQueries({ queryKey: ['supervisor-balance', supervisorId] });
         queryClient.invalidateQueries({ queryKey: ['workers', factoryId] });
+        queryClient.invalidateQueries({ queryKey: ['worker-bonuses', factoryId] });
         queryClient.invalidateQueries({ queryKey: ['recent-disbursements', factoryId] });
         queryClient.invalidateQueries({ queryKey: ['supervisor-all-transactions', supervisorId, factoryId] });
       }
@@ -1364,19 +1563,21 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         showToast('success', `Mobile number saved for ${phoneModalWorker.worker_name}!`);
       }
 
-      // If triggered during disbursement, prompt for handover photo now
+      // If triggered during disbursement or bonus, prompt for handover photo now
       if (phoneModalDisburseDetails) {
         setPendingDisburse({
           targetWorker: phoneModalWorker,
           amount: phoneModalDisburseDetails.amount,
           note: phoneModalDisburseDetails.note,
           overridePhone: savedPhone,
-          paymentType: 'advance',
+          paymentType: phoneModalDisburseDetails.paymentType || 'advance',
           paymentMethod: phoneModalDisburseDetails.paymentMethod || 'cash',
         });
         setShowHandoverModal(true);
         setDisburseAmount('');
         setSelectedWorkerId('');
+        setBonusAmount('');
+        setBonusWorkerId('');
         setPhoneModalDisburseDetails(null);
       }
 
@@ -1442,6 +1643,51 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           note,
           paymentType: 'advance',
           paymentMethod: advancePaymentMethod,
+        });
+        setShowHandoverModal(true);
+        setActionLoading(false);
+      } else if (activeTab === 'bonus') {
+        const workerId = bonusWorkerId || (formData.get('bonusWorkerId') as string);
+        const amount = parseFloat((formData.get('bonusAmount') as string) || bonusAmount);
+        const note = (formData.get('bonusNote') as string)?.trim() || bonusNote.trim() || 'Festival / Performance Bonus';
+
+        if (!workerId) {
+          throw new Error('Please choose a worker to give bonus to.');
+        }
+
+        if (isNaN(amount) || amount <= 0) {
+          throw new Error('Please enter a valid bonus amount.');
+        }
+
+        const targetWorker = activeWorkers.find(w => w.worker_id === workerId);
+        if (!targetWorker) {
+          throw new Error('Selected worker not found in active list.');
+        }
+
+        // If worker doesn't have a phone saved yet, prompt supervisor to enter it for SMS receipts
+        if (!targetWorker.worker_phone || targetWorker.worker_phone.trim() === '') {
+          setPhoneModalWorker(targetWorker);
+          setPhoneModalDisburseDetails({
+            workerId,
+            amount,
+            note,
+            paymentType: 'bonus',
+            paymentMethod: bonusPaymentMethod,
+          });
+          setPhoneModalInput('');
+          setPhoneModalError('');
+          setShowPhoneModal(true);
+          setActionLoading(false);
+          return;
+        }
+
+        // Prompt supervisor for Handover Photo proof
+        setPendingDisburse({
+          targetWorker,
+          amount,
+          note,
+          paymentType: 'bonus',
+          paymentMethod: bonusPaymentMethod,
         });
         setShowHandoverModal(true);
         setActionLoading(false);
@@ -2103,7 +2349,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
         {/* Quick Action Tabs */}
         <div className="p-2 border-b border-slate-100 bg-slate-50/60">
-          <div className="grid grid-cols-4 gap-1 bg-slate-200/70 p-1 rounded-xl text-xs font-bold">
+          <div className="grid grid-cols-5 gap-1 bg-slate-200/70 p-1 rounded-xl text-xs font-bold">
             <button
               type="button"
               onClick={() => { setActiveTab('advance'); setActionMessage(null); setLastDisburseSms(null); }}
@@ -2113,7 +2359,18 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/40'
               }`}
             >
-              <span className="hidden sm:inline">Add </span>Advance
+              Advance
+            </button>
+            <button
+              type="button"
+              onClick={() => { setActiveTab('bonus'); setActionMessage(null); setLastDisburseSms(null); }}
+              className={`py-2 px-1 text-center rounded-lg transition-all min-h-[38px] flex items-center justify-center ${
+                activeTab === 'bonus'
+                  ? 'bg-white text-slate-950 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/40'
+              }`}
+            >
+              Bonus
             </button>
             <button
               type="button"
@@ -2452,6 +2709,283 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                       </button>
                     ))}
                   </div>
+                </div>
+              </>
+            )}
+
+            {/* ADD BONUS FORM */}
+            {activeTab === 'bonus' && (
+              <>
+                {/* Worker Selector with Live Search & 1-Tap Quick Add */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                      Select Worker for Bonus
+                    </label>
+                    {bonusWorkerId && (
+                      <button
+                        type="button"
+                        onClick={() => { setBonusWorkerId(''); setBonusWorkerSearch(''); }}
+                        className="text-[11px] text-indigo-600 hover:text-indigo-800 font-bold"
+                      >
+                        Change Worker
+                      </button>
+                    )}
+                  </div>
+
+                  {!bonusWorkerId ? (
+                    <div className="space-y-2">
+                      {/* Search / Filter Input */}
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={bonusWorkerSearch}
+                          onChange={(e) => setBonusWorkerSearch(e.target.value)}
+                          placeholder="Search worker name to give bonus..."
+                          className="w-full pl-9 pr-3 py-2.5 rounded border border-slate-300 text-sm min-h-[44px] text-slate-950 bg-white focus:ring-2 focus:ring-slate-900 focus:border-slate-900 placeholder:text-slate-400"
+                        />
+                      </div>
+
+                      {/* Filtered Dropdown / Quick List - Only shown when supervisor types */}
+                      {bonusWorkerSearch.trim().length > 0 && (
+                        <div className="border border-slate-200 rounded-lg max-h-56 overflow-y-auto divide-y divide-slate-100 bg-white shadow-lg">
+                          {/* 1-Tap Quick Add Button if typed name isn't an exact match */}
+                          {bonusWorkerSearch.trim().length > 1 && !activeWorkers.some(w => w.worker_name.toLowerCase() === bonusWorkerSearch.trim().toLowerCase()) && (
+                            <div className="p-2 bg-indigo-50/70 border-b border-indigo-100">
+                              <button
+                                type="button"
+                                onClick={() => handleQuickAddBonusWorker(bonusWorkerSearch.trim())}
+                                disabled={isQuickAddingWorker}
+                                className="w-full flex items-center justify-between p-2 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors min-h-[40px]"
+                              >
+                                <span className="flex items-center gap-1.5">
+                                  <UserPlus className="h-4 w-4 shrink-0" />
+                                  <span>Add new worker: "{bonusWorkerSearch.trim()}"</span>
+                                </span>
+                                <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded">Create & Award</span>
+                              </button>
+                            </div>
+                          )}
+
+                          {filteredBonusWorkers.length === 0 && bonusWorkerSearch.trim().length <= 1 ? (
+                            <div className="p-4 text-center text-xs text-slate-500">
+                              No workers match "{bonusWorkerSearch}".
+                            </div>
+                          ) : (
+                            filteredBonusWorkers.map((w) => (
+                              <button
+                                key={w.worker_id}
+                                type="button"
+                                onClick={() => {
+                                  setBonusWorkerId(w.worker_id);
+                                  setBonusWorkerSearch('');
+                                }}
+                                className="w-full p-2.5 flex items-center justify-between text-left hover:bg-slate-50 transition-colors"
+                              >
+                                <div className="flex items-center gap-2.5">
+                                  <div className="h-8 w-8 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center shrink-0">
+                                    {w.worker_photo_url ? (
+                                      <img src={w.worker_photo_url} alt="" className="h-full w-full object-cover rounded-full" />
+                                    ) : (
+                                      <User className="h-4 w-4 text-slate-500" />
+                                    )}
+                                  </div>
+                                  <div>
+                                    <p className="text-xs font-bold text-slate-900">{w.worker_name}</p>
+                                    <p className="text-[10px] text-slate-500">
+                                      {w.worker_phone ? `+91 ${w.worker_phone}` : 'No phone linked'}
+                                    </p>
+                                  </div>
+                                </div>
+                                <div className="text-right">
+                                  {(w.total_bonus_paid || 0) > 0 ? (
+                                    <span className="text-[10px] font-bold text-purple-700 bg-purple-50 border border-purple-200 px-1.5 py-0.5 rounded">
+                                      Bonus: {formatINR(w.total_bonus_paid || 0)}
+                                    </span>
+                                  ) : (
+                                    <span className="text-[10px] text-slate-400">0 Bonus so far</span>
+                                  )}
+                                </div>
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    /* Selected Worker Card */
+                    <div className="border border-slate-200 rounded-lg p-3 bg-white space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <div className="h-10 w-10 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center shrink-0">
+                            {selectedBonusWorker?.worker_photo_url ? (
+                              <img src={selectedBonusWorker.worker_photo_url} alt="" className="h-full w-full object-cover rounded-full" />
+                            ) : (
+                              <User className="h-5 w-5 text-slate-500" />
+                            )}
+                          </div>
+                          <div>
+                            <p className="text-sm font-bold text-slate-900">{selectedBonusWorker?.worker_name}</p>
+                            <p className="text-xs text-slate-500">
+                              {selectedBonusWorker?.worker_phone ? `+91 ${selectedBonusWorker.worker_phone}` : 'No phone linked'}
+                            </p>
+                          </div>
+                        </div>
+                        <input type="hidden" name="bonusWorkerId" value={bonusWorkerId} />
+                      </div>
+
+                      {/* Bonus Status Pill */}
+                      <div className="rounded-lg p-2.5 bg-purple-50 border border-purple-200 text-xs text-purple-900 flex items-center justify-between">
+                        <div className="flex items-center gap-1.5 font-medium">
+                          <Gift className="h-4 w-4 text-purple-600 shrink-0" />
+                          <span>Total Bonus Awarded:</span>
+                        </div>
+                        <span className="font-bold text-purple-950">
+                          {formatINR(selectedBonusWorker?.total_bonus_paid || 0)}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Amount Input with Quick Preset Chips */}
+                <div>
+                  <label htmlFor="bonusAmount" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                    Bonus Amount (INR)
+                  </label>
+                  <div className="relative mt-1 rounded shadow-sm">
+                    <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                      <span className="text-slate-500 text-sm">₹</span>
+                    </div>
+                    <input
+                      id="bonusAmount"
+                      name="bonusAmount"
+                      type="number"
+                      required
+                      min="1"
+                      value={bonusAmount}
+                      onChange={(e) => setBonusAmount(e.target.value)}
+                      disabled={actionLoading}
+                      placeholder="0"
+                      className="block w-full rounded border border-slate-300 pl-7 pr-3 py-2 text-slate-950 text-sm min-h-[44px]"
+                    />
+                  </div>
+                  {/* Quick Preset Amount Chips */}
+                  <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                    {[500, 1000, 2000, 5000].map((val) => (
+                      <button
+                        key={val}
+                        type="button"
+                        onClick={() => setBonusAmount(prev => String((Number(prev) || 0) + val))}
+                        className="px-2.5 py-1 text-xs font-semibold rounded bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 transition-colors"
+                      >
+                        +₹{val.toLocaleString('en-IN')}
+                      </button>
+                    ))}
+                    {bonusAmount && (
+                      <button
+                        type="button"
+                        onClick={() => setBonusAmount('')}
+                        className="px-2 py-1 text-xs font-semibold text-slate-400 hover:text-slate-600 ml-auto"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Payment Method Selector (Cash in Hand vs Online Bank / UPI) */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Payment Method
+                  </label>
+                  <div className="grid grid-cols-2 gap-2 bg-slate-100 p-1 rounded-lg">
+                    <button
+                      type="button"
+                      onClick={() => setBonusPaymentMethod('cash')}
+                      className={`py-2 px-3 rounded-md text-xs font-bold transition-all text-center min-h-[38px] ${
+                        bonusPaymentMethod === 'cash'
+                          ? 'bg-white text-slate-950 shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Cash in Hand
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBonusPaymentMethod('online')}
+                      className={`py-2 px-3 rounded-md text-xs font-bold transition-all text-center min-h-[38px] ${
+                        bonusPaymentMethod === 'online'
+                          ? 'bg-white text-slate-950 shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Online (Bank / UPI)
+                    </button>
+                  </div>
+                  {bonusPaymentMethod === 'online' ? (
+                    <p className="mt-1.5 text-[11px] text-indigo-700 font-medium">
+                      Online bonus will NOT deduct from your cash in hand balance. It is tracked separately.
+                    </p>
+                  ) : (
+                    <p className="mt-1.5 text-[11px] text-slate-500">
+                      Paid directly from physical cash. Deducts from your cash in hand balance.
+                    </p>
+                  )}
+                </div>
+
+                {/* Notes / Reason with Preset Chips */}
+                <div>
+                  <div className="flex items-center justify-between">
+                    <label htmlFor="bonusNote" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                      Bonus Reason / Occasion <span className="text-slate-400 font-normal">(Optional)</span>
+                    </label>
+                    {bonusNote && (
+                      <button
+                        type="button"
+                        onClick={() => setBonusNote('')}
+                        className="text-[11px] text-slate-400 hover:text-slate-600 font-semibold"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    id="bonusNote"
+                    name="bonusNote"
+                    type="text"
+                    value={bonusNote}
+                    onChange={(e) => setBonusNote(e.target.value)}
+                    disabled={actionLoading}
+                    placeholder="e.g. Festival / Performance Bonus"
+                    className="mt-1 block w-full rounded border border-slate-300 px-3 py-2 text-slate-950 text-sm min-h-[44px]"
+                  />
+                  {/* Preset Chips */}
+                  <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                    {['Diwali Bonus', 'Eid Bonus', 'Performance Bonus', 'Attendance Bonus', 'Overtime Bonus', 'Festival Gift'].map((chip) => (
+                      <button
+                        key={chip}
+                        type="button"
+                        onClick={() => setBonusNote(chip)}
+                        className={`px-2.5 py-1 text-xs font-semibold rounded transition-colors ${
+                          bonusNote === chip
+                            ? 'bg-slate-900 text-white'
+                            : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200'
+                        }`}
+                      >
+                        {chip}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Clear Notice */}
+                <div className="p-3 bg-purple-50/70 border border-purple-200 rounded-lg text-xs text-purple-900 flex items-start gap-2">
+                  <Gift className="h-4 w-4 text-purple-600 mt-0.5 shrink-0" />
+                  <span>
+                    <strong>Bonus Isolation Notice:</strong> Bonuses are tracked separately. They will <strong>NOT</strong> be added to the worker's running advance or reduce unpaid salary.
+                  </span>
                 </div>
               </>
             )}
@@ -3198,6 +3732,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
               disabled={
                 actionLoading || 
                 (activeTab === 'advance' && (!selectedWorkerId || !disburseAmount)) ||
+                (activeTab === 'bonus' && (!bonusWorkerId || !bonusAmount || parseFloat(bonusAmount) <= 0)) ||
                 (activeTab === 'hisaab' && (!hisaabWorkerId || !hisaabTotalWages || parseFloat(hisaabTotalWages) <= 0))
               }
               className="w-full flex justify-center items-center rounded-md bg-slate-900 py-3 text-sm font-semibold text-white shadow hover:bg-slate-800 disabled:opacity-50 min-h-[46px] gap-2 transition-all"
@@ -3207,6 +3742,10 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
               ) : activeTab === 'advance' ? (
                 <span>
                   Disburse {advancePaymentMethod === 'online' ? 'Online' : 'Cash'} Advance {disburseAmount ? formatINR(Number(disburseAmount)) : ''}
+                </span>
+              ) : activeTab === 'bonus' ? (
+                <span>
+                  Award {bonusPaymentMethod === 'online' ? 'Online' : 'Cash'} Bonus {bonusAmount ? formatINR(Number(bonusAmount)) : ''}
                 </span>
               ) : activeTab === 'hisaab' ? (
                 <span>
@@ -3223,6 +3762,127 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           </form>
         </div>
       </div>
+
+      {/* 2.5 Dedicated Worker Bonuses Section */}
+      {(() => {
+        const bonusList = (activeBonuses || []);
+        const totalBonusGiven = bonusList.reduce((sum, b) => sum + Number(b.amount || 0), 0);
+        const cashBonusTotal = bonusList.filter(b => b.payment_method === 'cash').reduce((sum, b) => sum + Number(b.amount || 0), 0);
+        const onlineBonusTotal = bonusList.filter(b => b.payment_method === 'online').reduce((sum, b) => sum + Number(b.amount || 0), 0);
+        const uniqueWorkersCount = new Set(bonusList.map(b => b.worker_id)).size;
+
+        return (
+          <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
+            {/* Header */}
+            <div 
+              onClick={() => setIsBonusesExpanded(!isBonusesExpanded)}
+              className="px-4 py-3 bg-slate-50/60 border-b border-slate-100 flex items-center justify-between cursor-pointer hover:bg-slate-100/60 transition-colors"
+            >
+              <div className="flex items-center gap-2">
+                <Gift className="h-4 w-4 text-purple-600" />
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-xs font-bold uppercase tracking-wider text-slate-800">
+                      Worker Bonuses
+                    </h2>
+                    <span className="text-[10px] bg-purple-100 text-purple-800 font-bold px-1.5 py-0.2 rounded-full uppercase">
+                      Separate Tracker
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    {formatINR(totalBonusGiven)} total awarded across {uniqueWorkersCount} workers ({bonusList.length} payouts)
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="text-xs font-semibold text-slate-600 hover:text-slate-900 px-2 py-1 rounded border border-slate-200 bg-white"
+              >
+                {isBonusesExpanded ? 'Collapse' : 'View Bonuses'}
+              </button>
+            </div>
+
+            {/* Collapsible Content */}
+            {isBonusesExpanded && (
+              <div className="p-4 space-y-4">
+                {/* KPI Stat Cards */}
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-center">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Total Bonuses</p>
+                    <p className="text-sm font-black text-slate-900 mt-0.5">{formatINR(totalBonusGiven)}</p>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-center">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">Cash in Hand</p>
+                    <p className="text-sm font-black text-emerald-950 mt-0.5">{formatINR(cashBonusTotal)}</p>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-indigo-50 border border-indigo-200 text-center">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-indigo-700">Online UPI</p>
+                    <p className="text-sm font-black text-indigo-950 mt-0.5">{formatINR(onlineBonusTotal)}</p>
+                  </div>
+                </div>
+
+                {/* Bonus Payouts List */}
+                {bonusList.length === 0 ? (
+                  <div className="py-6 text-center text-xs text-slate-500 bg-slate-50/70 rounded-lg border border-slate-200">
+                    <Gift className="h-5 w-5 text-slate-400 mx-auto mb-1.5" />
+                    <p className="font-semibold text-slate-700">No worker bonuses recorded yet.</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">Use the "Bonus" tab above to award festive or performance bonuses.</p>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg overflow-hidden bg-white">
+                    {bonusList.map((b) => {
+                      const isOnline = b.payment_method === 'online';
+                      return (
+                        <div key={b.id} className="p-3 flex items-center justify-between hover:bg-slate-50 transition-colors">
+                          <div className="space-y-0.5">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold text-slate-900">{b.worker_name}</span>
+                              <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded-full border ${
+                                isOnline 
+                                  ? 'bg-indigo-50 text-indigo-700 border-indigo-200' 
+                                  : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              }`}>
+                                {isOnline ? 'Online (Bank/UPI)' : 'Cash in Hand'}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-600">{b.note || 'Bonus'}</p>
+                            <p className="text-[10px] text-slate-400">
+                              {new Date(b.created_at).toLocaleDateString('en-IN', {
+                                day: 'numeric',
+                                month: 'short',
+                                year: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                              })}
+                            </p>
+                          </div>
+                          <div className="text-right space-y-1">
+                            <span className="text-xs font-black text-purple-700 block">
+                              +{formatINR(Number(b.amount || 0))}
+                            </span>
+                            {b.photo_url && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setViewingPhotoUrl(b.photo_url!);
+                                  setViewingPhotoTitle(`Bonus Proof: ${b.worker_name}`);
+                                }}
+                                className="text-[10px] text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-2 py-0.5 rounded font-semibold transition-colors inline-block"
+                              >
+                                View Proof
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* 3. Transaction History Section */}
       <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
@@ -3295,6 +3955,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
             {[
               { id: 'all', label: 'All' },
               { id: 'advances', label: 'Advances' },
+              { id: 'bonuses', label: 'Bonuses' },
               { id: 'salary', label: 'Hisaab' },
               { id: 'expenses', label: 'Expenses' },
               { id: 'transfers', label: 'Transfers' },
