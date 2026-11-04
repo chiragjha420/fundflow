@@ -3,13 +3,14 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, Users, Coins } from 'lucide-react';
+import { LayoutDashboard, Users, Coins, Contact } from 'lucide-react';
 
 export function AdminNav() {
   const pathname = usePathname();
 
   const isDashboard = pathname === '/admin';
   const isSupervisors = pathname.startsWith('/admin/supervisors');
+  const isWorkers = pathname.startsWith('/admin/workers');
   const isOpeningAdvances = pathname.startsWith('/admin/opening-advances');
 
   return (
@@ -39,6 +40,18 @@ export function AdminNav() {
         <span>Supervisors</span>
       </Link>
       <Link
+        href="/admin/workers"
+        prefetch={true}
+        className={`flex items-center gap-2 py-2 px-3 rounded-lg text-sm font-semibold transition-all ${
+          isWorkers
+            ? 'bg-slate-900 text-white shadow-xs'
+            : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+        }`}
+      >
+        <Contact className="h-4 w-4" />
+        <span>Workers</span>
+      </Link>
+      <Link
         href="/admin/opening-advances"
         prefetch={true}
         className={`flex items-center gap-2 py-2 px-3 rounded-lg text-sm font-semibold transition-all ${
@@ -59,10 +72,11 @@ export function AdminMobileNav() {
 
   const isDashboard = pathname === '/admin';
   const isSupervisors = pathname.startsWith('/admin/supervisors');
+  const isWorkers = pathname.startsWith('/admin/workers');
   const isOpeningAdvances = pathname.startsWith('/admin/opening-advances');
 
   return (
-    <nav className="md:hidden border-t border-slate-200 bg-white grid grid-cols-3 divide-x divide-slate-100">
+    <nav className="md:hidden border-t border-slate-200 bg-white grid grid-cols-4 divide-x divide-slate-100">
       <Link
         href="/admin"
         prefetch={true}
@@ -86,6 +100,18 @@ export function AdminMobileNav() {
       >
         <Users className="h-4 w-4 shrink-0" />
         <span className="truncate">Supervisors</span>
+      </Link>
+      <Link
+        href="/admin/workers"
+        prefetch={true}
+        className={`py-2 px-1 text-center text-[11px] font-bold flex flex-col items-center justify-center gap-1 transition-colors min-h-[44px] ${
+          isWorkers
+            ? 'text-emerald-700 bg-emerald-50/70 border-b-2 border-emerald-600'
+            : 'text-slate-600 hover:bg-slate-50'
+        }`}
+      >
+        <Contact className="h-4 w-4 shrink-0" />
+        <span className="truncate">Workers</span>
       </Link>
       <Link
         href="/admin/opening-advances"

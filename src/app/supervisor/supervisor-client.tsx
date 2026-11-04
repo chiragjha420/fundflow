@@ -130,7 +130,6 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const [bonusAmount, setBonusAmount] = useState<string>('');
   const [bonusNote, setBonusNote] = useState<string>('');
   const [bonusPaymentMethod, setBonusPaymentMethod] = useState<'cash' | 'online'>('cash');
-  const [isBonusesExpanded, setIsBonusesExpanded] = useState<boolean>(true);
 
   // Hisaab States
   const [hisaabWorkerId, setHisaabWorkerId] = useState<string>('');
@@ -2980,13 +2979,6 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                   </div>
                 </div>
 
-                {/* Clear Notice */}
-                <div className="p-3 bg-purple-50/70 border border-purple-200 rounded-lg text-xs text-purple-900 flex items-start gap-2">
-                  <Gift className="h-4 w-4 text-purple-600 mt-0.5 shrink-0" />
-                  <span>
-                    <strong>Bonus Isolation Notice:</strong> Bonuses are tracked separately. They will <strong>NOT</strong> be added to the worker's running advance or reduce unpaid salary.
-                  </span>
-                </div>
               </>
             )}
 
@@ -3762,127 +3754,6 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           </form>
         </div>
       </div>
-
-      {/* 2.5 Dedicated Worker Bonuses Section */}
-      {(() => {
-        const bonusList = (activeBonuses || []);
-        const totalBonusGiven = bonusList.reduce((sum, b) => sum + Number(b.amount || 0), 0);
-        const cashBonusTotal = bonusList.filter(b => b.payment_method === 'cash').reduce((sum, b) => sum + Number(b.amount || 0), 0);
-        const onlineBonusTotal = bonusList.filter(b => b.payment_method === 'online').reduce((sum, b) => sum + Number(b.amount || 0), 0);
-        const uniqueWorkersCount = new Set(bonusList.map(b => b.worker_id)).size;
-
-        return (
-          <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
-            {/* Header */}
-            <div 
-              onClick={() => setIsBonusesExpanded(!isBonusesExpanded)}
-              className="px-4 py-3 bg-slate-50/60 border-b border-slate-100 flex items-center justify-between cursor-pointer hover:bg-slate-100/60 transition-colors"
-            >
-              <div className="flex items-center gap-2">
-                <Gift className="h-4 w-4 text-purple-600" />
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-xs font-bold uppercase tracking-wider text-slate-800">
-                      Worker Bonuses
-                    </h2>
-                    <span className="text-[10px] bg-purple-100 text-purple-800 font-bold px-1.5 py-0.2 rounded-full uppercase">
-                      Separate Tracker
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-500 mt-0.5">
-                    {formatINR(totalBonusGiven)} total awarded across {uniqueWorkersCount} workers ({bonusList.length} payouts)
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                className="text-xs font-semibold text-slate-600 hover:text-slate-900 px-2 py-1 rounded border border-slate-200 bg-white"
-              >
-                {isBonusesExpanded ? 'Collapse' : 'View Bonuses'}
-              </button>
-            </div>
-
-            {/* Collapsible Content */}
-            {isBonusesExpanded && (
-              <div className="p-4 space-y-4">
-                {/* KPI Stat Cards */}
-                <div className="grid grid-cols-3 gap-2">
-                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-center">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Total Bonuses</p>
-                    <p className="text-sm font-black text-slate-900 mt-0.5">{formatINR(totalBonusGiven)}</p>
-                  </div>
-                  <div className="p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-center">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">Cash in Hand</p>
-                    <p className="text-sm font-black text-emerald-950 mt-0.5">{formatINR(cashBonusTotal)}</p>
-                  </div>
-                  <div className="p-2.5 rounded-lg bg-indigo-50 border border-indigo-200 text-center">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-indigo-700">Online UPI</p>
-                    <p className="text-sm font-black text-indigo-950 mt-0.5">{formatINR(onlineBonusTotal)}</p>
-                  </div>
-                </div>
-
-                {/* Bonus Payouts List */}
-                {bonusList.length === 0 ? (
-                  <div className="py-6 text-center text-xs text-slate-500 bg-slate-50/70 rounded-lg border border-slate-200">
-                    <Gift className="h-5 w-5 text-slate-400 mx-auto mb-1.5" />
-                    <p className="font-semibold text-slate-700">No worker bonuses recorded yet.</p>
-                    <p className="text-[11px] text-slate-400 mt-0.5">Use the "Bonus" tab above to award festive or performance bonuses.</p>
-                  </div>
-                ) : (
-                  <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg overflow-hidden bg-white">
-                    {bonusList.map((b) => {
-                      const isOnline = b.payment_method === 'online';
-                      return (
-                        <div key={b.id} className="p-3 flex items-center justify-between hover:bg-slate-50 transition-colors">
-                          <div className="space-y-0.5">
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs font-bold text-slate-900">{b.worker_name}</span>
-                              <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded-full border ${
-                                isOnline 
-                                  ? 'bg-indigo-50 text-indigo-700 border-indigo-200' 
-                                  : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                              }`}>
-                                {isOnline ? 'Online (Bank/UPI)' : 'Cash in Hand'}
-                              </span>
-                            </div>
-                            <p className="text-[11px] text-slate-600">{b.note || 'Bonus'}</p>
-                            <p className="text-[10px] text-slate-400">
-                              {new Date(b.created_at).toLocaleDateString('en-IN', {
-                                day: 'numeric',
-                                month: 'short',
-                                year: 'numeric',
-                                hour: '2-digit',
-                                minute: '2-digit'
-                              })}
-                            </p>
-                          </div>
-                          <div className="text-right space-y-1">
-                            <span className="text-xs font-black text-purple-700 block">
-                              +{formatINR(Number(b.amount || 0))}
-                            </span>
-                            {b.photo_url && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setViewingPhotoUrl(b.photo_url!);
-                                  setViewingPhotoTitle(`Bonus Proof: ${b.worker_name}`);
-                                }}
-                                className="text-[10px] text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-2 py-0.5 rounded font-semibold transition-colors inline-block"
-                              >
-                                View Proof
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        );
-      })()}
 
       {/* 3. Transaction History Section */}
       <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">

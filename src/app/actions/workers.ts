@@ -2017,11 +2017,79 @@ export async function updateWorkerServer(
     revalidatePath('/supervisor');
     revalidatePath('/supervisor/workers');
     revalidatePath('/admin');
+    revalidatePath('/admin/workers');
 
     return { success: true };
   } catch (err: any) {
     console.error('updateWorkerServer exception:', err);
     return { success: false, error: err.message || 'Failed to update worker.' };
+  }
+}
+
+/**
+ * Update worker details with full Admin authority.
+ * Admin can freely change/set phone numbers, profile photos, names, and active status.
+ */
+export async function adminUpdateWorkerProfileAction(params: {
+  workerId: string;
+  name: string;
+  phone?: string | null;
+  photoUrl?: string | null;
+  active?: boolean;
+}): Promise<{ success: boolean; formattedPhone?: string | null; error?: string }> {
+  try {
+    const admin = createAdminClient();
+    const cleanName = params.name.trim();
+    if (!cleanName) return { success: false, error: 'Worker name is required.' };
+
+    let finalPhone: string | null = null;
+    if (params.phone !== undefined) {
+      if (params.phone && params.phone.trim()) {
+        const clean = params.phone.trim().replace(/[^\d+]/g, '');
+        if (clean.length === 10) {
+          finalPhone = `+91${clean}`;
+        } else if (clean.length > 10) {
+          finalPhone = clean.startsWith('+') ? clean : `+${clean}`;
+        } else {
+          return { success: false, error: 'Mobile number must be at least 10 digits.' };
+        }
+      } else {
+        finalPhone = null;
+      }
+    }
+
+    const updatePayload: Record<string, any> = {
+      name: cleanName,
+    };
+    if (params.phone !== undefined) {
+      updatePayload.phone = finalPhone;
+    }
+    if (params.photoUrl !== undefined) {
+      updatePayload.photo_url = params.photoUrl || null;
+    }
+    if (params.active !== undefined) {
+      updatePayload.active = params.active;
+    }
+
+    const { error } = await admin
+      .from('workers')
+      .update(updatePayload)
+      .eq('id', params.workerId);
+
+    if (error) {
+      console.error('adminUpdateWorkerProfileAction error:', error);
+      return { success: false, error: error.message };
+    }
+
+    revalidatePath('/admin');
+    revalidatePath('/admin/workers');
+    revalidatePath('/supervisor');
+    revalidatePath('/supervisor/workers');
+
+    return { success: true, formattedPhone: finalPhone };
+  } catch (err: any) {
+    console.error('adminUpdateWorkerProfileAction exception:', err);
+    return { success: false, error: err.message || 'Failed to update worker profile.' };
   }
 }
 

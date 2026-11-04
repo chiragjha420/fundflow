@@ -9,7 +9,7 @@ import { getCashRequests, updateCashRequestStatus, CashRequest } from '@/app/act
 import { playAlertSound, sendFundFlowNotification } from '@/lib/notifications';
 import { registerDeviceForWebPush } from '@/lib/push-client';
 import { createBrowserClient } from '@/lib/supabase/browser-client';
-import { HandCoins, Coins, Edit2, Phone } from 'lucide-react';
+import { HandCoins, Coins, Edit2, Phone, Contact } from 'lucide-react';
 import { formatINR, parseHandoverNote } from '@/lib/utils';
 import { 
   Building2, 
@@ -425,6 +425,7 @@ export function AdminDashboard({
   const [isBonusesCollapsed, setIsBonusesCollapsed] = useState<boolean>(false);
   const [bonusSearchQuery, setBonusSearchQuery] = useState<string>('');
   const [bonusFactoryFilter, setBonusFactoryFilter] = useState<string>('all');
+  const [isLedgerLogCollapsed, setIsLedgerLogCollapsed] = useState<boolean>(false);
 
   // Local Workers state for instantaneous optimistic updates
   const [localWorkers, setLocalWorkers] = useState<FactoryWorkerBalance[]>(workers);
@@ -1740,6 +1741,15 @@ export function AdminDashboard({
           </div>
 
           <div className="flex flex-wrap items-center gap-2 self-start xl:self-auto" onClick={(e) => e.stopPropagation()}>
+            <Link
+              href="/admin/workers"
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 sm:py-2 text-xs font-bold text-slate-800 shadow-xs hover:bg-slate-50 transition-colors min-h-[36px]"
+              title="Manage worker profiles, phone numbers, profile photos, and history"
+            >
+              <Contact className="h-3.5 w-3.5 text-indigo-600" />
+              <span>Manage Worker Profiles</span>
+            </Link>
+
             <button
               type="button"
               onClick={() => {
@@ -2796,14 +2806,44 @@ export function AdminDashboard({
 
       {/* Transaction Feed Section with Filters */}
       <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">
-        {/* Header and filters */}
-        <div className="px-5 py-4 border-b border-slate-200 bg-slate-50 space-y-4">
+        {/* Header */}
+        <div 
+          onClick={() => setIsLedgerLogCollapsed(!isLedgerLogCollapsed)}
+          className="px-5 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between flex-wrap gap-2 cursor-pointer hover:bg-slate-100/60 transition-colors"
+        >
           <div className="flex items-center gap-2">
             <History className="h-5 w-5 text-slate-600" />
             <h2 className="text-sm font-bold uppercase tracking-wider text-slate-900">Ledger Transactions Log</h2>
+            <span className="text-xs text-slate-500 font-medium">({filteredLedger.length} records)</span>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsLedgerLogCollapsed(!isLedgerLogCollapsed);
+            }}
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-xs hover:bg-slate-50 transition-colors min-h-[34px]"
+          >
+            {isLedgerLogCollapsed ? (
+              <>
+                <ChevronDown className="h-3.5 w-3.5" />
+                <span>Expand Log</span>
+              </>
+            ) : (
+              <>
+                <ChevronUp className="h-3.5 w-3.5" />
+                <span>Collapse</span>
+              </>
+            )}
+          </button>
+        </div>
+
+        {!isLedgerLogCollapsed && (
+          <>
+            {/* Filters */}
+            <div className="px-5 py-3 border-b border-slate-200 bg-slate-50/70">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             {/* Factory Filter */}
             <div>
               <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">Factory</label>
@@ -3130,7 +3170,9 @@ export function AdminDashboard({
             </div>
           </>
         )}
-      </div>
+      </>
+    )}
+  </div>
 
       {/* Full-Screen Handover Photo Viewer Modal */}
       {adminViewingPhotoUrl && (
