@@ -671,6 +671,109 @@ export async function getWorkerHisaabRecordsAction(factoryId?: string, workerId?
   }
 }
 
+export interface WorkerOnlineAdvance {
+  id: string;
+  worker_id: string;
+  worker_name: string;
+  factory_id: string;
+  supervisor_id: string | null;
+  supervisor_name: string;
+  amount: number;
+  note: string;
+  photo_url: string | null;
+  payment_method: 'online';
+  created_at: string;
+}
+
+export async function recordWorkerOnlineAdvanceAction(params: {
+  workerId: string;
+  supervisorId: string;
+  factoryId?: string;
+  amount: number;
+  note?: string;
+  photoUrl?: string | null;
+}): Promise<{ success: boolean; id?: string; error?: string }> {
+  try {
+    const { workerId, supervisorId, amount, photoUrl } = params;
+    const cleanAmount = Math.max(1, Math.round(Number(amount) || 0));
+    if (!workerId) return { success: false, error: 'Worker is required.' };
+    if (cleanAmount <= 0) return { success: false, error: 'Valid amount is required.' };
+
+    const admin = createAdminClient();
+    const [workerRes, supRes] = await Promise.all([
+      admin.from('workers').select('name, factory_id').eq('id', workerId).single(),
+      admin.from('supervisors').select('name').eq('id', supervisorId).single(),
+    ]);
+
+    const workerName = workerRes.data?.name || 'Worker';
+    const supervisorName = supRes.data?.name || 'Supervisor';
+    const effectiveFactoryId = params.factoryId || workerRes.data?.factory_id || '';
+
+    const id = crypto.randomUUID();
+    const cleanNote = params.note?.trim() || 'Online Advance (Bank/UPI)';
+
+    const advancePayload: WorkerOnlineAdvance = {
+      id,
+      worker_id: workerId,
+      worker_name: workerName,
+      factory_id: effectiveFactoryId,
+      supervisor_id: supervisorId,
+      supervisor_name: supervisorName,
+      amount: cleanAmount,
+      note: cleanNote,
+      photo_url: photoUrl || null,
+      payment_method: 'online',
+      created_at: new Date().toISOString(),
+    };
+
+    const { error } = await admin.from('audit_log').insert({
+      table_name: 'worker_online_advances',
+      action: 'ONLINE_ADVANCE',
+      row_id: id,
+      new_data: advancePayload,
+      changed_by: supervisorId,
+      changed_at: new Date().toISOString(),
+    });
+
+    if (error) {
+      console.error('recordWorkerOnlineAdvanceAction error:', error);
+      return { success: false, error: error.message };
+    }
+
+    revalidatePath('/admin');
+    revalidatePath('/supervisor');
+    revalidatePath('/supervisor/workers');
+
+    return { success: true, id };
+  } catch (err: any) {
+    console.error('recordWorkerOnlineAdvanceAction exception:', err);
+    return { success: false, error: err.message || 'Failed to record online advance.' };
+  }
+}
+
+export async function getWorkerOnlineAdvancesAction(factoryId?: string, workerId?: string): Promise<WorkerOnlineAdvance[]> {
+  try {
+    const admin = createAdminClient();
+    const { data: rows } = await admin
+      .from('audit_log')
+      .select('*')
+      .eq('table_name', 'worker_online_advances')
+      .eq('action', 'ONLINE_ADVANCE')
+      .order('changed_at', { ascending: false });
+
+    return (rows || [])
+      .map(r => r.new_data as WorkerOnlineAdvance)
+      .filter(item => {
+        if (!item) return false;
+        if (workerId && item.worker_id !== workerId) return false;
+        if (factoryId && factoryId !== 'all' && item.factory_id !== factoryId) return false;
+        return true;
+      });
+  } catch {
+    return [];
+  }
+}
+
 export interface AdvanceCorrectionRequest {
   id: string;
   worker_id: string;
@@ -1118,13 +1221,14 @@ export async function getAllWorkersWithSalaryBalancesAction(factoryId?: string):
     const workerIds = workers.map(w => w.id);
     const workerIdSet = new Set(workerIds);
 
-    // 2. Fetch all confirmed worker cash transactions, refunds, reclassifications, and salary ledger entries in parallel
+    // 2. Fetch all confirmed worker cash transactions, refunds, reclassifications, salary ledger entries, and online advances in parallel
     const [
       { data: cashTxs },
       { data: refundLogs },
       { data: refundNotes },
       reclassMap,
       salaryLedgerEntries,
+      onlineAdvances,
     ] = await Promise.all([
       admin
         .from('cash_transactions')
@@ -1144,6 +1248,7 @@ export async function getAllWorkersWithSalaryBalancesAction(factoryId?: string):
         .ilike('note', '%[REFUND:%'),
       getReclassifiedTransactions(),
       getSalaryLedgerEntries(factoryId),
+      getWorkerOnlineAdvancesAction(factoryId),
     ]);
 
     // Build refund set
@@ -1154,7 +1259,8 @@ export async function getAllWorkersWithSalaryBalancesAction(factoryId?: string):
     });
 
     // Aggregations per worker
-    const workerAdvanceGiven: Record<string, number> = {};
+    const workerCashAdvanceGiven: Record<string, number> = {};
+    const workerOnlineAdvanceGiven: Record<string, number> = {};
     const workerSalaryPaid: Record<string, number> = {};
     const workerSalaryEarned: Record<string, number> = {};
     const workerAdvanceRecovered: Record<string, number> = {};
@@ -1174,8 +1280,16 @@ export async function getAllWorkersWithSalaryBalancesAction(factoryId?: string):
       if (isSalaryPayment) {
         workerSalaryPaid[tx.to_worker_id] = (workerSalaryPaid[tx.to_worker_id] || 0) + amount;
       } else {
-        workerAdvanceGiven[tx.to_worker_id] = (workerAdvanceGiven[tx.to_worker_id] || 0) + amount;
+        workerCashAdvanceGiven[tx.to_worker_id] = (workerCashAdvanceGiven[tx.to_worker_id] || 0) + amount;
       }
+    });
+
+    // Process Online Advances (Bank / UPI QR payments to workers)
+    (onlineAdvances || []).forEach(adv => {
+      if (!adv.worker_id || !workerIdSet.has(adv.worker_id)) return;
+      if (refundedTxIds.has(adv.id)) return;
+      const amount = Number(adv.amount || 0);
+      workerOnlineAdvanceGiven[adv.worker_id] = (workerOnlineAdvanceGiven[adv.worker_id] || 0) + amount;
     });
 
     // Process Non-Cash Salary Ledger Entries (Accruals & Recoveries)
@@ -1196,7 +1310,9 @@ export async function getAllWorkersWithSalaryBalancesAction(factoryId?: string):
       const openingUnpaid = Number(w.opening_unpaid_salary || 0);
       const monthlyWage = Number(w.monthly_salary || 0);
 
-      const advGiven = workerAdvanceGiven[w.id] || 0;
+      const cashAdv = workerCashAdvanceGiven[w.id] || 0;
+      const onlineAdv = workerOnlineAdvanceGiven[w.id] || 0;
+      const advGiven = cashAdv + onlineAdv;
       const advRecovered = workerAdvanceRecovered[w.id] || 0;
       const salEarned = (workerSalaryEarned[w.id] || 0) + openingUnpaid;
       const salPaid = workerSalaryPaid[w.id] || 0;
@@ -1209,7 +1325,7 @@ export async function getAllWorkersWithSalaryBalancesAction(factoryId?: string):
       const totalSalaryPaid = salPaid;
       const unpaidSalary = Math.max(0, totalSalaryEarned - totalSalaryPaid - totalAdvanceRecovered);
       const netPayable = unpaidSalary - runningAdvance;
-      const totalCashDisbursed = advGiven + salPaid;
+      const totalCashDisbursed = cashAdv + salPaid;
 
       return {
         worker_id: w.id,
@@ -1273,6 +1389,7 @@ export async function getWorkerFullLedgerAction(workerId: string): Promise<{
       reclassMap,
       salaryEntries,
       hisaabRecords,
+      onlineAdvances,
     ] = await Promise.all([
       admin
         .from('cash_transactions')
@@ -1293,6 +1410,7 @@ export async function getWorkerFullLedgerAction(workerId: string): Promise<{
       getReclassifiedTransactions(),
       getSalaryLedgerEntries(undefined, workerId),
       getWorkerHisaabRecordsAction(undefined, workerId),
+      getWorkerOnlineAdvancesAction(undefined, workerId),
     ]);
 
     const refundedMap: Record<string, string> = {};
@@ -1446,6 +1564,30 @@ export async function getWorkerFullLedgerAction(workerId: string): Promise<{
       }
     });
 
+    // Online Advances (Bank / UPI)
+    (onlineAdvances || []).forEach(adv => {
+      const amount = Number(adv.amount || 0);
+      const isRefunded = !!refundedMap[adv.id];
+      const parsed = parseHandoverNote(adv.note);
+      const supervisorName = adv.supervisor_name ? `by ${adv.supervisor_name}` : 'Supervisor';
+
+      ledger.push({
+        id: `online-adv-${adv.id}`,
+        date: adv.created_at,
+        type: 'advance_given',
+        title: `Online Advance (${supervisorName})`.trim(),
+        label: 'Online Advance',
+        amount,
+        note: parsed.note || 'Paid via Bank/UPI',
+        isCash: false,
+        supervisorName,
+        photoUrl: parsed.photoUrl || adv.photo_url || null,
+        effectOnAdvance: isRefunded ? 0 : amount,
+        effectOnSalary: 0,
+        refunded: isRefunded,
+      });
+    });
+
     // Sort ascending, calculate running balances, then sort descending
     let runningUnpaid = 0;
     let runningAdv = 0;
@@ -1487,19 +1629,36 @@ export async function getFactoryWorkerDisbursementsAction(factoryId: string): Pr
     if (!workers || workers.length === 0) return [];
     const workerIds = workers.map(w => w.id);
 
-    const { data: txs, error } = await admin
-      .from('cash_transactions')
-      .select('id, amount, note, created_at, status, to_worker_id, from_supervisor_id, to_work:to_worker_id(name, active)')
-      .eq('type', 'supervisor_to_worker')
-      .in('to_worker_id', workerIds)
-      .order('created_at', { ascending: false });
+    const [{ data: txs, error }, onlineAdvances] = await Promise.all([
+      admin
+        .from('cash_transactions')
+        .select('id, amount, note, created_at, status, to_worker_id, from_supervisor_id, to_work:to_worker_id(name, active)')
+        .eq('type', 'supervisor_to_worker')
+        .in('to_worker_id', workerIds)
+        .order('created_at', { ascending: false }),
+      getWorkerOnlineAdvancesAction(factoryId),
+    ]);
 
     if (error) {
       console.error('getFactoryWorkerDisbursementsAction error:', error);
       return [];
     }
 
-    return txs || [];
+    const onlineItems = (onlineAdvances || []).map(adv => ({
+      id: `online-adv-${adv.id}`,
+      amount: adv.amount,
+      note: adv.note || 'Online Advance (Bank/UPI)',
+      created_at: adv.created_at,
+      status: 'confirmed',
+      to_worker_id: adv.worker_id,
+      from_supervisor_id: adv.supervisor_id,
+      to_work: { name: adv.worker_name, active: true },
+      is_online: true,
+    }));
+
+    return [...(txs || []), ...onlineItems].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
   } catch (err) {
     console.error('getFactoryWorkerDisbursementsAction exception:', err);
     return [];
@@ -1514,19 +1673,35 @@ export async function getWorkerDisbursementsAction(workerId: string): Promise<an
     if (!workerId) return [];
     const admin = createAdminClient();
 
-    const { data: txs, error } = await admin
-      .from('cash_transactions')
-      .select('id, amount, note, created_at, status, to_worker_id, from_supervisor_id')
-      .eq('type', 'supervisor_to_worker')
-      .eq('to_worker_id', workerId)
-      .order('created_at', { ascending: false });
+    const [{ data: txs, error }, onlineAdvances] = await Promise.all([
+      admin
+        .from('cash_transactions')
+        .select('id, amount, note, created_at, status, to_worker_id, from_supervisor_id')
+        .eq('type', 'supervisor_to_worker')
+        .eq('to_worker_id', workerId)
+        .order('created_at', { ascending: false }),
+      getWorkerOnlineAdvancesAction(undefined, workerId),
+    ]);
 
     if (error) {
       console.error('getWorkerDisbursementsAction error:', error);
       return [];
     }
 
-    return txs || [];
+    const onlineItems = (onlineAdvances || []).map(adv => ({
+      id: `online-adv-${adv.id}`,
+      amount: adv.amount,
+      note: adv.note || 'Online Advance (Bank/UPI)',
+      created_at: adv.created_at,
+      status: 'confirmed',
+      to_worker_id: adv.worker_id,
+      from_supervisor_id: adv.supervisor_id,
+      is_online: true,
+    }));
+
+    return [...(txs || []), ...onlineItems].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
   } catch (err) {
     console.error('getWorkerDisbursementsAction exception:', err);
     return [];
@@ -1813,13 +1988,14 @@ export async function getSupervisorAllTransactionsAction(
       }
     }
 
-    // 2. Fetch cash transactions, reclassifications, non-cash salary ledger entries, and hisaab records
+    // 2. Fetch cash transactions, reclassifications, non-cash salary ledger entries, hisaab records, and online advances
     const [
       { data: txs, error },
       { data: refundLogs },
       reclassMap,
       salaryEntries,
       hisaabRecords,
+      onlineAdvances,
     ] = await Promise.all([
       admin
         .from('cash_transactions')
@@ -1847,6 +2023,7 @@ export async function getSupervisorAllTransactionsAction(
       getReclassifiedTransactions(),
       getSalaryLedgerEntries(factoryId),
       getWorkerHisaabRecordsAction(factoryId),
+      getWorkerOnlineAdvancesAction(factoryId),
     ]);
 
     if (error) {
@@ -1914,7 +2091,26 @@ export async function getSupervisorAllTransactionsAction(
         is_online: true,
       }));
 
-    const allCombined = [...augmentedCashTxs, ...nonCashItems, ...onlineHisaabItems].sort(
+    // 7. Convert Online Advances to transaction items for unified feed
+    const onlineAdvanceItems = (onlineAdvances || []).map(adv => {
+      const isRefunded = refundedTxIds.has(adv.id);
+      return {
+        id: `online-adv-${adv.id}`,
+        type: 'online_advance',
+        worker_payment_type: 'online_advance',
+        amount: Number(adv.amount || 0),
+        note: adv.note || 'Online Advance (Bank/UPI)',
+        status: isRefunded ? 'refunded' : 'confirmed',
+        created_at: adv.created_at,
+        to_worker_id: adv.worker_id,
+        to_work: { name: adv.worker_name || 'Worker', active: true },
+        from_supervisor_id: adv.supervisor_id,
+        from: { name: adv.supervisor_name || 'Supervisor' },
+        is_online: true,
+      };
+    });
+
+    const allCombined = [...augmentedCashTxs, ...nonCashItems, ...onlineHisaabItems, ...onlineAdvanceItems].sort(
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
 

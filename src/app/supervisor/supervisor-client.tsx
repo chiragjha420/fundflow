@@ -52,6 +52,7 @@ import {
   getSupervisorAllTransactionsAction, 
   recoverWorkerAdvanceAction, 
   recordWorkerHisaabAction,
+  recordWorkerOnlineAdvanceAction,
   createAdvanceCorrectionRequestAction
 } from '@/app/actions/workers';
 import { getFactoryExpensesAction, logOnlineExpenseAction, FactoryExpense } from '@/app/actions/expenses';
@@ -114,6 +115,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   // Active Tab for Quick Actions
   const [activeTab, setActiveTab] = useState<'advance' | 'hisaab' | 'expense' | 'transfer'>('advance');
   const [expensePaymentMethod, setExpensePaymentMethod] = useState<'cash' | 'online'>('cash');
+  const [advancePaymentMethod, setAdvancePaymentMethod] = useState<'cash' | 'online'>('cash');
 
   // Hisaab States
   const [hisaabWorkerId, setHisaabWorkerId] = useState<string>('');
@@ -159,6 +161,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     note: string;
     overridePhone?: string;
     paymentType?: 'advance';
+    paymentMethod?: 'cash' | 'online';
   } | null>(null);
   const [viewingPhotoUrl, setViewingPhotoUrl] = useState<string | null>(null);
   const [viewingPhotoTitle, setViewingPhotoTitle] = useState<string>('Proof of Handover');
@@ -200,6 +203,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     workerId: string;
     amount: number;
     note: string;
+    paymentMethod?: 'cash' | 'online';
   } | null>(null);
   const [phoneModalInput, setPhoneModalInput] = useState<string>('');
   const [phoneModalError, setPhoneModalError] = useState<string>('');
@@ -816,6 +820,36 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           isOnline: true,
         });
       }
+      // (c2) Online Advance to Worker
+      else if (tx.type === 'online_advance' || tx.worker_payment_type === 'online_advance') {
+        if (tx.from_supervisor_id && tx.from_supervisor_id !== supervisorId) return;
+        const targetWorker = activeWorkers.find(w => w.worker_id === tx.to_worker_id);
+        const workerName = tx.to_work?.name || targetWorker?.worker_name || 'Worker';
+        const isRefunded = refundedSet.has(tx.id) || tx.status === 'refunded';
+        const { note: cleanNote, photoUrl } = parseHandoverNote(tx.note);
+
+        list.push({
+          id: `online-adv-${tx.id}`,
+          kind: 'advance',
+          direction: 'outflow',
+          amount: Number(tx.amount || 0),
+          title: workerName,
+          subtitle: isRefunded ? 'Refunded by Admin' : (cleanNote || undefined),
+          categoryKey: isRefunded ? 'refund' : 'advance',
+          categoryLabel: isRefunded ? 'Refunded' : 'Advance (Online)',
+          badgeClass: isRefunded ? 'bg-amber-100 text-amber-800' : 'bg-indigo-50 text-indigo-700',
+          badgeIcon: null,
+          note: cleanNote || '',
+          photoUrl: photoUrl || null,
+          photoTitle: `Online Advance Proof: ${workerName}`,
+          photoButtonLabel: 'View Proof',
+          created_at: tx.created_at,
+          supervisorId: tx.from_supervisor_id || '',
+          supervisorName: 'You',
+          isOwn: true,
+          isOnline: true,
+        });
+      }
       // (d) Supervisor Transfer (Sent by this supervisor)
       else if (tx.type === 'supervisor_to_supervisor' && tx.from_supervisor_id === supervisorId) {
         const recipientName = tx.to_sup?.name || getSupervisorDisplayName(tx.to_supervisor_id);
@@ -1075,6 +1109,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     if (!pendingDisburse) return;
     const { targetWorker, amount, note, overridePhone } = pendingDisburse;
     const activePaymentType = pendingDisburse.paymentType || 'advance';
+    const isOnline = pendingDisburse.paymentMethod === 'online';
     
     // 1. Immediately close modal, unblock UI, and reset form inputs (0ms)
     setShowHandoverModal(false);
@@ -1086,11 +1121,13 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
     setActionLoading(false);
     setLastDisburseSms(null);
 
-    // 2. OPTIMISTIC CACHE UPDATE: Deduct supervisor available balance
-    queryClient.setQueryData(['supervisor-balance', supervisorId], (old: number | undefined) => {
-      if (typeof old === 'number') return Math.max(0, old - amount);
-      return old;
-    });
+    // 2. OPTIMISTIC CACHE UPDATE: Deduct supervisor available balance ONLY IF CASH
+    if (!isOnline) {
+      queryClient.setQueryData(['supervisor-balance', supervisorId], (old: number | undefined) => {
+        if (typeof old === 'number') return Math.max(0, old - amount);
+        return old;
+      });
+    }
 
     // 4. OPTIMISTIC CACHE UPDATE: Update worker running advance
     queryClient.setQueryData(['workers', factoryId], (old: Worker[] | undefined) => {
@@ -1102,15 +1139,16 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           ...w,
           running_advance: newAdv,
           total_advance_given: (w.total_advance_given || 0) + amount,
-          total_cash_disbursed: (Number(w.total_cash_disbursed) || 0) + amount,
+          total_cash_disbursed: isOnline ? (Number(w.total_cash_disbursed) || 0) : (Number(w.total_cash_disbursed) || 0) + amount,
         };
       });
     });
 
-    // 5. OPTIMISTIC CACHE UPDATE: Prepend to recent disbursements
+    // 5. OPTIMISTIC CACHE UPDATE: Prepend to recent disbursements and unified feed
     const tempTxId = `temp-${Date.now()}`;
-    const defaultLabel = 'Cash Advance';
+    const defaultLabel = isOnline ? 'Online Advance (Bank/UPI)' : 'Cash Advance';
     const cleanNoteBase = note?.trim() || defaultLabel;
+
     queryClient.setQueryData(['recent-disbursements', factoryId], (old: any[] | undefined) => {
       const optimisticTx = {
         id: tempTxId,
@@ -1120,18 +1158,55 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         to_worker_id: targetWorker.worker_id,
         to_work: { name: targetWorker.worker_name, active: true },
         from_supervisor_id: supervisorId,
+        is_online: isOnline,
       };
       return [optimisticTx, ...(old || [])].slice(0, 50);
     });
 
+    queryClient.setQueryData(['supervisor-all-transactions', supervisorId, factoryId], (old: any) => {
+      if (!old || !old.transactions) return old;
+      const optimisticTx = isOnline ? {
+        id: `online-adv-${tempTxId}`,
+        type: 'online_advance',
+        worker_payment_type: 'online_advance',
+        amount,
+        note: cleanNoteBase,
+        status: 'confirmed',
+        created_at: new Date().toISOString(),
+        to_worker_id: targetWorker.worker_id,
+        to_work: { name: targetWorker.worker_name, active: true },
+        from_supervisor_id: supervisorId,
+        from: { name: supervisor?.name || 'Supervisor' },
+        is_online: true,
+      } : {
+        id: tempTxId,
+        type: 'supervisor_to_worker',
+        worker_payment_type: 'advance',
+        amount,
+        note: cleanNoteBase,
+        status: 'confirmed',
+        created_at: new Date().toISOString(),
+        to_worker_id: targetWorker.worker_id,
+        to_work: { name: targetWorker.worker_name, active: true },
+        from_supervisor_id: supervisorId,
+        from: { name: supervisor?.name || 'Supervisor' },
+        is_online: false,
+      };
+      return {
+        ...old,
+        transactions: [optimisticTx, ...old.transactions],
+      };
+    });
+
     // 6. INSTANT AUDIO & TOAST CONFIRMATION (0ms)
     playAlertSound('cash_in');
-    showToast('success', `₹${amount.toLocaleString('en-IN')} advance paid to ${targetWorker.worker_name}!`);
+    showToast('success', `₹${amount.toLocaleString('en-IN')} ${isOnline ? 'online ' : ''}advance paid to ${targetWorker.worker_name}!`);
 
-    // 7. ASYNCHRONOUS BACKGROUND WORK (Photo Upload + RPC + SMS + Silent Invalidation)
+    // 7. ASYNCHRONOUS BACKGROUND WORK (Photo Upload + RPC / Online Advance Action + SMS + Silent Invalidation)
     (async () => {
       try {
         let finalNote = cleanNoteBase;
+        let photoUrl: string | null = null;
 
         // Background photo upload if file was captured
         if (file && navigator.onLine) {
@@ -1140,6 +1215,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
             formData.append('file', file);
             const uploadRes = await uploadHandoverPhotoAction(formData);
             if (uploadRes.success && uploadRes.publicUrl) {
+              photoUrl = uploadRes.publicUrl;
               finalNote = `${finalNote} [handover_photo:${uploadRes.publicUrl}]`;
             }
           } catch (uploadErr) {
@@ -1147,8 +1223,19 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           }
         }
 
-        // Background Ledger RPC
-        await disburseToWorkerAction(targetWorker.worker_id, supervisorId!, amount, finalNote, activePaymentType);
+        // Background Ledger action
+        if (isOnline) {
+          await recordWorkerOnlineAdvanceAction({
+            workerId: targetWorker.worker_id,
+            supervisorId: supervisorId!,
+            factoryId,
+            amount,
+            note: finalNote,
+            photoUrl,
+          });
+        } else {
+          await disburseToWorkerAction(targetWorker.worker_id, supervisorId!, amount, finalNote, activePaymentType);
+        }
 
         // Background Free SMS Dispatch (Fire-and-forget)
         const phoneToUse = overridePhone || targetWorker.worker_phone;
@@ -1179,6 +1266,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           queryClient.invalidateQueries({ queryKey: ['recent-disbursements', factoryId] });
           queryClient.invalidateQueries({ queryKey: ['workers', factoryId] });
           queryClient.invalidateQueries({ queryKey: ['supervisor-balance', supervisorId] });
+          queryClient.invalidateQueries({ queryKey: ['supervisor-all-transactions', supervisorId, factoryId] });
         }, 2500);
 
       } catch (e: any) {
@@ -1188,6 +1276,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         queryClient.invalidateQueries({ queryKey: ['supervisor-balance', supervisorId] });
         queryClient.invalidateQueries({ queryKey: ['workers', factoryId] });
         queryClient.invalidateQueries({ queryKey: ['recent-disbursements', factoryId] });
+        queryClient.invalidateQueries({ queryKey: ['supervisor-all-transactions', supervisorId, factoryId] });
       }
     })();
   };
@@ -1283,6 +1372,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           note: phoneModalDisburseDetails.note,
           overridePhone: savedPhone,
           paymentType: 'advance',
+          paymentMethod: phoneModalDisburseDetails.paymentMethod || 'cash',
         });
         setShowHandoverModal(true);
         setDisburseAmount('');
@@ -1336,6 +1426,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
             workerId,
             amount,
             note,
+            paymentMethod: advancePaymentMethod,
           });
           setPhoneModalInput('');
           setPhoneModalError('');
@@ -1350,6 +1441,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           amount,
           note,
           paymentType: 'advance',
+          paymentMethod: advancePaymentMethod,
         });
         setShowHandoverModal(true);
         setActionLoading(false);
@@ -2277,6 +2369,46 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                   </div>
                 </div>
 
+                {/* Payment Method Selector (Cash vs Online) */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Payment Method
+                  </label>
+                  <div className="grid grid-cols-2 gap-2 bg-slate-100 p-1 rounded-lg">
+                    <button
+                      type="button"
+                      onClick={() => setAdvancePaymentMethod('cash')}
+                      className={`py-2 px-3 rounded-md text-xs font-bold transition-all text-center min-h-[38px] ${
+                        advancePaymentMethod === 'cash'
+                          ? 'bg-white text-slate-950 shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Cash in Hand
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAdvancePaymentMethod('online')}
+                      className={`py-2 px-3 rounded-md text-xs font-bold transition-all text-center min-h-[38px] ${
+                        advancePaymentMethod === 'online'
+                          ? 'bg-white text-slate-950 shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Online (Bank / UPI)
+                    </button>
+                  </div>
+                  {advancePaymentMethod === 'online' ? (
+                    <p className="mt-1.5 text-[11px] text-indigo-700 font-medium">
+                      Online advance will be added to worker's advance balance without deducting from your cash in hand.
+                    </p>
+                  ) : (
+                    <p className="mt-1.5 text-[11px] text-slate-500">
+                      Paid directly from physical cash. Deducts from your cash in hand balance.
+                    </p>
+                  )}
+                </div>
+
                 {/* Notes / Remarks Input with 1-Tap Preset Remark Chips */}
                 <div>
                   <div className="flex items-center justify-between">
@@ -3074,7 +3206,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                 <RefreshCw className="h-4 w-4 animate-spin" />
               ) : activeTab === 'advance' ? (
                 <span>
-                  Disburse Advance {disburseAmount ? formatINR(Number(disburseAmount)) : ''}
+                  Disburse {advancePaymentMethod === 'online' ? 'Online' : 'Cash'} Advance {disburseAmount ? formatINR(Number(disburseAmount)) : ''}
                 </span>
               ) : activeTab === 'hisaab' ? (
                 <span>
@@ -3526,8 +3658,8 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         onCapture={(file) => handleHandoverCapture(file)}
         onSkip={() => handleHandoverCapture(null)}
         skipLabel="Skip Photo"
-        title="Cash Handover Photo"
-        subtitle={pendingDisburse ? `Handing ${formatINR(pendingDisburse.amount)} to ${pendingDisburse.targetWorker.worker_name}` : undefined}
+        title={pendingDisburse?.paymentMethod === 'online' ? 'Online Payment Proof' : 'Cash Handover Photo'}
+        subtitle={pendingDisburse ? `${pendingDisburse.paymentMethod === 'online' ? 'Paying online' : 'Handing'} ${formatINR(pendingDisburse.amount)} to ${pendingDisburse.targetWorker.worker_name}` : undefined}
         defaultFacingMode="environment"
       />
 

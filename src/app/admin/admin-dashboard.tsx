@@ -112,6 +112,7 @@ interface AdminDashboardProps {
   refundedTransactions?: Record<string, { refundedAt: string; reason: string; amount: number; workerName: string }>;
   salaryLedgerEntries?: WorkerSalaryLedgerEntry[];
   hisaabRecords?: any[];
+  onlineAdvances?: any[];
 }
 
 export function AdminDashboard({
@@ -123,6 +124,7 @@ export function AdminDashboard({
   refundedTransactions = {},
   salaryLedgerEntries = [],
   hisaabRecords = [],
+  onlineAdvances = [],
 }: AdminDashboardProps) {
   const [formError, setFormError] = useState<string | null>(null);
   const [formSuccess, setFormSuccess] = useState(false);
@@ -791,9 +793,16 @@ export function AdminDashboard({
     const transfers = transfersReceived - transfersSent;
 
     // Online QR payouts during Hisaab for this factory
-    const onlinePaid = (hisaabRecords || [])
+    const hisaabOnlinePaid = (hisaabRecords || [])
       .filter(h => h.factory_id === factory.id && Number(h.online_paid || 0) > 0)
       .reduce((sum, h) => sum + Number(h.online_paid || 0), 0);
+
+    // Online Advances for this factory
+    const advanceOnlinePaid = (onlineAdvances || [])
+      .filter(a => a.factory_id === factory.id && Number(a.amount || 0) > 0)
+      .reduce((sum, a) => sum + Number(a.amount || 0), 0);
+
+    const onlinePaid = hisaabOnlinePaid + advanceOnlinePaid;
 
     const totalSpend = disbursed + onlinePaid + factoryExpenses;
 
@@ -925,6 +934,28 @@ export function AdminDashboard({
           isOnline: true,
           isRefunded: false,
           refundInfo: undefined,
+        };
+      }),
+    ...(onlineAdvances || [])
+      .map(adv => {
+        const refundInfo = localRefundedMap[adv.id];
+        const isRefunded = !!refundInfo;
+        return {
+          id: `online-adv-${adv.id}`,
+          created_at: adv.created_at,
+          amount: Number(adv.amount || 0),
+          status: isRefunded ? ('refunded' as any) : ('confirmed' as any),
+          note: `[Online Advance] Paid to worker (${adv.payment_method || 'Bank/UPI'})${adv.note ? ` • ${adv.note}` : ''}`,
+          type: 'online_advance',
+          purpose: 'Wages' as const,
+          fromLabel: adv.supervisor_name ? `${adv.supervisor_name} (Online)` : 'Online / Bank',
+          toLabel: adv.worker_name || 'Worker',
+          factoryId: adv.factory_id,
+          supervisorId: adv.supervisor_id,
+          isFlagged: false,
+          isOnline: true,
+          isRefunded,
+          refundInfo,
         };
       })
   ].filter(entry => {

@@ -2,7 +2,7 @@ import React from 'react';
 import { createServerClient } from '@/lib/supabase/server-client';
 import { AdminDashboard } from './admin-dashboard';
 import { getRefundedTransactionsAction } from '@/app/actions/admin';
-import { getAllWorkersWithSalaryBalancesAction, getSalaryLedgerEntries, getWorkerHisaabRecordsAction } from '@/app/actions/workers';
+import { getAllWorkersWithSalaryBalancesAction, getSalaryLedgerEntries, getWorkerHisaabRecordsAction, getWorkerOnlineAdvancesAction } from '@/app/actions/workers';
 import { getFactoryExpensesAction } from '@/app/actions/expenses';
 
 export const revalidate = 0; // Disable caching for active dashboard
@@ -20,6 +20,7 @@ export default async function AdminDashboardPage() {
     refundedTransactions,
     salaryLedgerEntries,
     hisaabRecords,
+    onlineAdvances,
   ] = await Promise.all([
     supabase
       .from('factories')
@@ -38,6 +39,7 @@ export default async function AdminDashboardPage() {
     getRefundedTransactionsAction(),
     getSalaryLedgerEntries(),
     getWorkerHisaabRecordsAction(),
+    getWorkerOnlineAdvancesAction(),
   ]);
 
   return (
@@ -50,6 +52,7 @@ export default async function AdminDashboardPage() {
       refundedTransactions={refundedTransactions || {}}
       salaryLedgerEntries={salaryLedgerEntries || []}
       hisaabRecords={hisaabRecords || []}
+      onlineAdvances={onlineAdvances || []}
     />
   );
 }
