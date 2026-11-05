@@ -231,6 +231,7 @@ export function AdminWorkersClient({
       netWages: number;
       note: string;
       supervisorName: string;
+      photoUrl?: string | null;
     }> = [];
 
     hisaabRecords.forEach((h: any) => {
@@ -254,6 +255,7 @@ export function AdminWorkersClient({
         netWages: net,
         note: h.note || '',
         supervisorName: supName,
+        photoUrl: h.photo_url || null,
       });
     });
 
@@ -944,6 +946,22 @@ export function AdminWorkersClient({
 
                           {h.note && (
                             <p className="text-[11px] text-slate-600 italic">"{h.note}"</p>
+                          )}
+
+                          {h.photoUrl && (
+                            <div className="pt-0.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setViewingProofUrl(h.photoUrl || null);
+                                  setViewingProofTitle(`Paper Hisaab Photo: ${selectedWorker?.worker_name || 'Worker'} (${h.fromDate} to ${h.toDate})`);
+                                }}
+                                className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 rounded-md border border-indigo-200 transition-colors"
+                              >
+                                <Camera className="h-3.5 w-3.5 text-indigo-600" />
+                                <span>View Paper Hisaab Photo</span>
+                              </button>
+                            </div>
                           )}
                         </div>
                       ))}

@@ -47,7 +47,7 @@ import { registerDeviceForWebPush } from '@/lib/push-client';
 import { NotificationBanner } from '@/components/notification-banner';
 import { compressImage } from '@/lib/image-compressor';
 import { CameraCaptureModal } from '@/components/camera-capture-modal';
-import { uploadHandoverPhotoAction, uploadWorkerPhotoAction, uploadExpensePhotoAction } from '@/app/actions/upload-actions';
+import { uploadHandoverPhotoAction, uploadWorkerPhotoAction, uploadExpensePhotoAction, uploadHisaabPhotoAction } from '@/app/actions/upload-actions';
 import { 
   getFactoryWorkersAction, 
   getSupervisorAllTransactionsAction, 
@@ -145,6 +145,8 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const [hisaabOnlineAmount, setHisaabOnlineAmount] = useState<string>('');
   const [hisaabPayCashNow, setHisaabPayCashNow] = useState<boolean>(false);
   const [hisaabNote, setHisaabNote] = useState<string>('');
+  const [hisaabPhotoFile, setHisaabPhotoFile] = useState<File | null>(null);
+  const [hisaabPhotoPreview, setHisaabPhotoPreview] = useState<string | null>(null);
   const [hisaabLoading, setHisaabLoading] = useState<boolean>(false);
   const [hisaabError, setHisaabError] = useState<string>('');
 
@@ -807,8 +809,8 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           badgeIcon: null,
           note: cleanNote || '',
           photoUrl: photoUrl || null,
-          photoTitle: `Handover Proof: ${workerName}`,
-          photoButtonLabel: 'View Proof',
+          photoTitle: isSalary ? `Paper Hisaab Proof: ${workerName}` : `Handover Proof: ${workerName}`,
+          photoButtonLabel: isSalary ? 'View Paper Hisaab' : 'View Proof',
           created_at: tx.created_at,
           supervisorId: tx.from_supervisor_id,
           supervisorName: 'You',
@@ -822,6 +824,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         const isEarned = tx.worker_payment_type === 'salary_earned';
         const targetWorker = activeWorkers.find(w => w.worker_id === tx.to_worker_id);
         const workerName = targetWorker?.worker_name || 'Worker';
+        const { note: cleanNote, photoUrl } = parseHandoverNote(tx.note);
 
         list.push({
           id: `ledger-${tx.id}`,
@@ -829,17 +832,17 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           direction: 'inflow',
           amount: Number(tx.amount || 0),
           title: workerName,
-          subtitle: tx.note || (isEarned ? 'Salary Accrued' : 'Advance Settled from Salary'),
+          subtitle: cleanNote || (isEarned ? 'Salary Accrued' : 'Advance Settled from Salary'),
           categoryKey: isEarned ? 'salary' : 'recovery',
           categoryLabel: isEarned ? 'Salary Earned' : 'Advance Recovered',
           badgeClass: isEarned 
             ? 'bg-purple-50 text-purple-800' 
             : 'bg-blue-50 text-blue-800',
           badgeIcon: null,
-          note: tx.note || '',
-          photoUrl: null,
-          photoTitle: '',
-          photoButtonLabel: '',
+          note: cleanNote || '',
+          photoUrl: photoUrl || null,
+          photoTitle: `Paper Hisaab Proof: ${workerName}`,
+          photoButtonLabel: 'View Paper Hisaab',
           created_at: tx.created_at,
           supervisorId: '',
           supervisorName: 'Factory Ledger',
@@ -849,9 +852,10 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       }
       // (c) Online QR Payments from Hisaab
       else if (tx.type === 'online_qr_payout' || tx.worker_payment_type === 'online_qr_payment') {
-        if (tx.from_supervisor_id !== supervisorId) return;
+        if (tx.from_supervisor_id && tx.from_supervisor_id !== supervisorId) return;
         const targetWorker = activeWorkers.find(w => w.worker_id === tx.to_worker_id);
         const workerName = tx.to_work?.name || targetWorker?.worker_name || 'Worker';
+        const { note: cleanNote, photoUrl } = parseHandoverNote(tx.note);
 
         list.push({
           id: `online-${tx.id}`,
@@ -859,15 +863,15 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           direction: 'outflow',
           amount: Number(tx.amount || 0),
           title: workerName,
-          subtitle: tx.note || undefined,
+          subtitle: cleanNote || undefined,
           categoryKey: 'salary',
           categoryLabel: 'Online Hisaab',
           badgeClass: 'bg-indigo-50 text-indigo-700',
           badgeIcon: null,
-          note: tx.note || '',
-          photoUrl: null,
-          photoTitle: '',
-          photoButtonLabel: '',
+          note: cleanNote || '',
+          photoUrl: photoUrl || tx.photo_url || null,
+          photoTitle: `Paper Hisaab Proof: ${workerName}`,
+          photoButtonLabel: 'View Paper Hisaab',
           created_at: tx.created_at,
           supervisorId: tx.from_supervisor_id || '',
           supervisorName: 'You',
@@ -1729,6 +1733,54 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           throw new Error(`Total payout (Cash: ₹${cashPaid.toLocaleString('en-IN')} + Online: ₹${onlinePaid.toLocaleString('en-IN')}) cannot exceed net wages of ₹${netWages.toLocaleString('en-IN')}.`);
         }
 
+        // Upload Paper Hisaab photo proof if attached
+        let hisaabPhotoUrl: string | null = null;
+        if (hisaabPhotoFile) {
+          try {
+            const uploadData = new FormData();
+            uploadData.append('file', hisaabPhotoFile);
+            const uploadRes = await uploadHisaabPhotoAction(uploadData);
+            if (uploadRes.success && uploadRes.publicUrl) {
+              hisaabPhotoUrl = uploadRes.publicUrl;
+            }
+          } catch (pErr) {
+            console.warn('Paper Hisaab photo upload error:', pErr);
+          }
+        }
+
+        // OPTIMISTIC UPDATE: Deduct supervisor physical cash immediately if cash was paid
+        if (cashPaid > 0 && supervisorId) {
+          queryClient.setQueryData(['supervisor-balance', supervisorId], (old: number | undefined) => {
+            if (typeof old === 'number') return Math.max(0, old - cashPaid);
+            return old;
+          });
+          try {
+            const curCached = localStorage.getItem(`fundflow_cached_balance_${supervisorId}`);
+            if (curCached) {
+              const parsed = JSON.parse(curCached);
+              if (typeof parsed === 'number') {
+                const newBal = Math.max(0, parsed - cashPaid);
+                localStorage.setItem(`fundflow_cached_balance_${supervisorId}`, JSON.stringify(newBal));
+                setOfflineCache(`balance-${supervisorId}`, newBal);
+              }
+            }
+          } catch {}
+        }
+
+        // OPTIMISTIC UPDATE: Deduct worker running advance immediately
+        if (advanceDeduct > 0) {
+          queryClient.setQueryData(['workers', factoryId], (old: Worker[] | undefined) => {
+            if (!old) return old;
+            return old.map(w => {
+              if (w.worker_id !== targetWorker.worker_id) return w;
+              return {
+                ...w,
+                running_advance: Math.max(0, (w.running_advance || 0) - advanceDeduct),
+              };
+            });
+          });
+        }
+
         const res = await recordWorkerHisaabAction({
           workerId,
           factoryId: factoryId || targetWorker.factory_id,
@@ -1740,6 +1792,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           cashPaid,
           onlinePaid,
           note,
+          photoUrl: hisaabPhotoUrl,
         });
 
         if (!res.success) {
@@ -1771,6 +1824,11 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         setHisaabOnlineAmount('');
         setHisaabNote('');
         setHisaabPayCashNow(false);
+        setHisaabPhotoFile(null);
+        if (hisaabPhotoPreview && hisaabPhotoPreview.startsWith('blob:')) {
+          URL.revokeObjectURL(hisaabPhotoPreview);
+        }
+        setHisaabPhotoPreview(null);
       } else if (activeTab === 'transfer') {
         const toSupervisorId = formData.get('toSupervisorId') as string;
         const amount = parseFloat(formData.get('amount') as string);
@@ -1983,6 +2041,31 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         console.warn('Image compression error, using original:', err);
         setPhotoFile(originalFile);
         setPhotoPreview((prev) => {
+          if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+          return URL.createObjectURL(originalFile);
+        });
+      }
+    }
+  };
+
+  const handleHisaabPhotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const originalFile = e.target.files[0];
+      try {
+        const compressed = await compressImage(originalFile, {
+          maxWidth: 1200,
+          maxHeight: 1200,
+          quality: 0.8,
+        });
+        setHisaabPhotoFile(compressed);
+        setHisaabPhotoPreview((prev) => {
+          if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+          return URL.createObjectURL(compressed);
+        });
+      } catch (err) {
+        console.warn('Paper Hisaab photo compression error, using original:', err);
+        setHisaabPhotoFile(originalFile);
+        setHisaabPhotoPreview((prev) => {
           if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
           return URL.createObjectURL(originalFile);
         });
@@ -3515,6 +3598,50 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                     placeholder="e.g. Weekly settlement, machine work, etc."
                     className="block w-full rounded border border-slate-300 px-3 py-2 text-slate-950 text-xs min-h-[40px]"
                   />
+                </div>
+
+                {/* Paper Hisaab Photo Attachment */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                    Paper Hisaab Photo <span className="text-slate-400 font-normal">(Optional)</span>
+                  </label>
+                  <p className="text-[11px] text-slate-500 mb-1.5">
+                    Attach a photo of your paper-written Hisaab or notebook page for records.
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <label className="flex items-center justify-center border border-dashed border-slate-300 rounded-md p-3 bg-slate-50 hover:bg-slate-100 cursor-pointer min-h-[44px] flex-1 transition-colors">
+                      <Camera className="h-4 w-4 text-slate-500 mr-2" />
+                      <span className="text-xs text-slate-700 font-semibold">
+                        {hisaabPhotoFile ? 'Change Paper Hisaab Photo' : 'Take Photo / Upload Written Hisaab'}
+                      </span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        onChange={handleHisaabPhotoChange}
+                        className="hidden"
+                      />
+                    </label>
+                    {hisaabPhotoPreview && (
+                      <div className="relative h-12 w-12 border border-slate-300 rounded-md overflow-hidden shrink-0 group">
+                        <img src={hisaabPhotoPreview} alt="Paper Hisaab preview" className="object-cover h-full w-full" />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setHisaabPhotoFile(null);
+                            if (hisaabPhotoPreview && hisaabPhotoPreview.startsWith('blob:')) {
+                              URL.revokeObjectURL(hisaabPhotoPreview);
+                            }
+                            setHisaabPhotoPreview(null);
+                          }}
+                          className="absolute inset-0 bg-black/60 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                          title="Remove photo"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </>
             )}

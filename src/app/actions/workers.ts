@@ -1,6 +1,7 @@
 'use server';
 
 import { createAdminClient } from '@/lib/supabase/admin-client';
+import { createServerClient } from '@/lib/supabase/server-client';
 import { revalidatePath } from 'next/cache';
 import { parseHandoverNote } from '@/lib/utils';
 
@@ -458,6 +459,7 @@ export async function recordWorkerHisaabAction(params: {
   onlinePaid?: number;
   payNetCashNow?: boolean;
   note?: string;
+  photoUrl?: string | null;
 }): Promise<HisaabResult> {
   try {
     const { workerId } = params;
@@ -536,11 +538,29 @@ export async function recordWorkerHisaabAction(params: {
       }
     }
 
-    // Get supervisor name if available
+    // Get supervisor name and user_id for cash_transactions foreign key
     let supervisorName = 'Supervisor';
+    let supervisorUserId: string | null = null;
     if (params.supervisorId) {
-      const { data: sup } = await admin.from('supervisors').select('name').eq('id', params.supervisorId).single();
+      const { data: sup } = await admin
+        .from('supervisors')
+        .select('name, user_id')
+        .eq('id', params.supervisorId)
+        .single();
       if (sup?.name) supervisorName = sup.name;
+      if (sup?.user_id) supervisorUserId = sup.user_id;
+    }
+
+    if (!supervisorUserId && params.supervisorId) {
+      try {
+        const authClient = createServerClient();
+        const { data: { user } } = await authClient.auth.getUser();
+        if (user?.id) supervisorUserId = user.id;
+      } catch {}
+      if (!supervisorUserId) {
+        const { data: profile } = await admin.from('profiles').select('id').limit(1).maybeSingle();
+        if (profile?.id) supervisorUserId = profile.id;
+      }
     }
 
     const hisaabId = crypto.randomUUID();
@@ -568,6 +588,7 @@ export async function recordWorkerHisaabAction(params: {
       previous_advance: currentAdv,
       new_advance: Math.max(0, currentAdv - cleanDeduct),
       note: hisaabNote,
+      photo_url: params.photoUrl || null,
       created_at: new Date().toISOString(),
     };
 
@@ -582,20 +603,29 @@ export async function recordWorkerHisaabAction(params: {
 
     // 2. If advance deduction > 0, record advance_recovery to reduce running_advance
     if (cleanDeduct > 0) {
+      let recoveryNote = `Advance deducted during Hisaab (${periodStr})`;
+      if (params.photoUrl) {
+        recoveryNote = `${recoveryNote} [handover_photo:${params.photoUrl}]`;
+      }
       await insertSalaryLedgerEntry({
         worker_id: workerId,
         factory_id: factoryId,
         type: 'advance_recovery',
         amount: cleanDeduct,
         period_month: periodStr,
-        note: `Advance deducted during Hisaab (${periodStr})`,
+        note: recoveryNote,
         created_by: params.supervisorId || null,
       });
     }
 
     // 3. If supervisor paid cash portion now -> deduct from supervisor physical cash in hand
     if (cleanCashPaid > 0 && params.supervisorId) {
-      await admin.from('cash_transactions').insert({
+      let cashTxNote = `[TYPE:salary_payment] [HISAAB_CASH_PAID] Cash Handed Over (Hisaab: ${periodStr})${params.note ? ` • ${params.note}` : ''}`;
+      if (params.photoUrl) {
+        cashTxNote = `${cashTxNote} [handover_photo:${params.photoUrl}]`;
+      }
+
+      const txInsert: any = {
         id: crypto.randomUUID(),
         type: 'supervisor_to_worker',
         from_supervisor_id: params.supervisorId,
@@ -603,14 +633,29 @@ export async function recordWorkerHisaabAction(params: {
         amount: cleanCashPaid,
         status: 'confirmed',
         confirmed_at: new Date().toISOString(),
-        note: `[HISAAB_CASH_PAID] Cash Handed Over (Hisaab: ${periodStr})${params.note ? ` • ${params.note}` : ''}`,
+        note: cashTxNote,
         created_at: new Date().toISOString(),
-      });
+      };
+      if (supervisorUserId) {
+        txInsert.created_by = supervisorUserId;
+        txInsert.confirmed_by = supervisorUserId;
+      }
+
+      const { error: txErr } = await admin.from('cash_transactions').insert(txInsert);
+      if (txErr) {
+        console.error('Error inserting cash transaction for Hisaab:', txErr);
+        throw new Error(`Failed to deduct physical cash from supervisor: ${txErr.message}`);
+      }
     }
 
     // 4. If online QR payment was made, record in audit_log
     // (This does NOT touch supervisor physical cash balance, but is tracked in factory spends and analytics)
     if (cleanOnlinePaid > 0) {
+      let onlineNote = `[HISAAB_ONLINE_PAID] Online QR Payment (Hisaab: ${periodStr})${params.note ? ` • ${params.note}` : ''}`;
+      if (params.photoUrl) {
+        onlineNote = `${onlineNote} [handover_photo:${params.photoUrl}]`;
+      }
+
       await admin.from('audit_log').insert({
         table_name: 'worker_online_payments',
         action: 'ONLINE_QR_PAYOUT',
@@ -625,7 +670,8 @@ export async function recordWorkerHisaabAction(params: {
           supervisor_name: supervisorName,
           amount: cleanOnlinePaid,
           period: periodStr,
-          note: `[HISAAB_ONLINE_PAID] Online QR Payment (Hisaab: ${periodStr})${params.note ? ` • ${params.note}` : ''}`,
+          photo_url: params.photoUrl || null,
+          note: onlineNote,
           created_at: new Date().toISOString(),
         },
         changed_by: params.supervisorId || null,
@@ -1063,7 +1109,12 @@ export async function reviewAdvanceCorrectionAction(params: {
       const diff = targetAdvance - currentAdvance;
       if (diff !== 0) {
         if (diff > 0) {
-          await admin.from('cash_transactions').insert({
+          let creatorId = params.adminId;
+          if (!creatorId) {
+            const { data: prof } = await admin.from('profiles').select('id').limit(1).maybeSingle();
+            if (prof?.id) creatorId = prof.id;
+          }
+          const txRow: any = {
             id: crypto.randomUUID(),
             type: 'supervisor_to_worker',
             from_supervisor_id: payload.supervisor_id,
@@ -1073,7 +1124,12 @@ export async function reviewAdvanceCorrectionAction(params: {
             confirmed_at: new Date().toISOString(),
             note: `[ADVANCE_ADJUSTMENT:ADD] Admin corrected advance by +₹${diff.toLocaleString('en-IN')}: ${params.adminNote || payload.reason}`,
             created_at: new Date().toISOString(),
-          });
+          };
+          if (creatorId) {
+            txRow.created_by = creatorId;
+            txRow.confirmed_by = creatorId;
+          }
+          await admin.from('cash_transactions').insert(txRow);
         } else {
           const reduceAmount = Math.abs(diff);
           await insertSalaryLedgerEntry({
@@ -2356,7 +2412,8 @@ export async function getSupervisorAllTransactionsAction(
         type: 'online_qr_payout',
         worker_payment_type: 'online_qr_payment',
         amount: Number(h.online_paid),
-        note: `[HISAAB_ONLINE_PAID] Online QR Payment (${h.from_date || ''} to ${h.to_date || ''})${h.note ? ` • ${h.note}` : ''}`,
+        note: `[HISAAB_ONLINE_PAID] Online QR Payment (${h.from_date || ''} to ${h.to_date || ''})${h.note ? ` • ${h.note}` : ''}${h.photo_url ? ` [handover_photo:${h.photo_url}]` : ''}`,
+        photo_url: h.photo_url || null,
         status: 'confirmed',
         created_at: h.created_at,
         to_worker_id: h.worker_id,

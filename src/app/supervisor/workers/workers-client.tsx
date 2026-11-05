@@ -6,7 +6,7 @@ import { createBrowserClient } from '@/lib/supabase/browser-client';
 import { getOfflineCache, setOfflineCache } from '@/lib/offline-db';
 import { formatINR, parseHandoverNote } from '@/lib/utils';
 import { updateWorkerAction } from '@/lib/ledger-actions';
-import { uploadWorkerPhotoAction } from '@/app/actions/upload-actions';
+import { uploadWorkerPhotoAction, uploadHisaabPhotoAction } from '@/app/actions/upload-actions';
 import { 
   getFactoryWorkersAction, 
   getFactoryWorkerDisbursementsAction,
@@ -107,8 +107,35 @@ export function SupervisorWorkersClientPage() {
   const [hisaabCashAmount, setHisaabCashAmount] = useState<string>('');
   const [hisaabOnlineAmount, setHisaabOnlineAmount] = useState<string>('');
   const [hisaabNote, setHisaabNote] = useState<string>('');
+  const [hisaabPhotoFile, setHisaabPhotoFile] = useState<File | null>(null);
+  const [hisaabPhotoPreview, setHisaabPhotoPreview] = useState<string | null>(null);
   const [hisaabLoading, setHisaabLoading] = useState<boolean>(false);
   const [hisaabError, setHisaabError] = useState<string>('');
+
+  const handleHisaabPhotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const originalFile = e.target.files[0];
+      try {
+        const compressed = await compressImage(originalFile, {
+          maxWidth: 1200,
+          maxHeight: 1200,
+          quality: 0.8,
+        });
+        setHisaabPhotoFile(compressed);
+        setHisaabPhotoPreview((prev) => {
+          if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+          return URL.createObjectURL(compressed);
+        });
+      } catch (err) {
+        console.warn('Paper Hisaab photo compression error, using original:', err);
+        setHisaabPhotoFile(originalFile);
+        setHisaabPhotoPreview((prev) => {
+          if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+          return URL.createObjectURL(originalFile);
+        });
+      }
+    }
+  };
 
   // Advance Correction Modal States (Supervisor -> Admin)
   const [showCorrectionModal, setShowCorrectionModal] = useState<boolean>(false);
@@ -159,6 +186,40 @@ export function SupervisorWorkersClientPage() {
     setHisaabLoading(true);
     setHisaabError('');
     try {
+      // Upload paper hisaab photo if attached
+      let hisaabPhotoUrl: string | null = null;
+      if (hisaabPhotoFile) {
+        try {
+          const uploadData = new FormData();
+          uploadData.append('file', hisaabPhotoFile);
+          const uploadRes = await uploadHisaabPhotoAction(uploadData);
+          if (uploadRes.success && uploadRes.publicUrl) {
+            hisaabPhotoUrl = uploadRes.publicUrl;
+          }
+        } catch (pErr) {
+          console.warn('Paper Hisaab photo upload error:', pErr);
+        }
+      }
+
+      // Optimistic balance deduction if cash paid
+      if (cashNum > 0 && supervisor?.id) {
+        queryClient.setQueryData(['supervisor-balance', supervisor.id], (old: number | undefined) => {
+          if (typeof old === 'number') return Math.max(0, old - cashNum);
+          return old;
+        });
+        try {
+          const curCached = localStorage.getItem(`fundflow_cached_balance_${supervisor.id}`);
+          if (curCached) {
+            const parsed = JSON.parse(curCached);
+            if (typeof parsed === 'number') {
+              const newBal = Math.max(0, parsed - cashNum);
+              localStorage.setItem(`fundflow_cached_balance_${supervisor.id}`, JSON.stringify(newBal));
+              setOfflineCache(`balance-${supervisor.id}`, newBal);
+            }
+          }
+        } catch {}
+      }
+
       const res = await recordWorkerHisaabAction({
         workerId: hisaabWorker.worker_id,
         factoryId,
@@ -170,6 +231,7 @@ export function SupervisorWorkersClientPage() {
         cashPaid: cashNum,
         onlinePaid: onlineNum,
         note: hisaabNote || undefined,
+        photoUrl: hisaabPhotoUrl,
       });
 
       if (!res.success) {
@@ -184,6 +246,11 @@ export function SupervisorWorkersClientPage() {
       setHisaabCashAmount('');
       setHisaabOnlineAmount('');
       setHisaabNote('');
+      setHisaabPhotoFile(null);
+      if (hisaabPhotoPreview && hisaabPhotoPreview.startsWith('blob:')) {
+        URL.revokeObjectURL(hisaabPhotoPreview);
+      }
+      setHisaabPhotoPreview(null);
       queryClient.invalidateQueries();
     } catch (err: any) {
       setHisaabError(err.message || 'Error recording Hisaab.');
@@ -1557,6 +1624,47 @@ export function SupervisorWorkersClientPage() {
                   placeholder="e.g. Weekly settlement"
                   className="block w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-950 text-xs min-h-[40px]"
                 />
+              </div>
+
+              {/* Paper Hisaab Photo Attachment */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                  Paper Hisaab Photo <span className="text-slate-400 font-normal">(Optional)</span>
+                </label>
+                <div className="flex items-center gap-2">
+                  <label className="flex items-center justify-center border border-dashed border-slate-300 rounded-lg p-2.5 bg-slate-50 hover:bg-slate-100 cursor-pointer min-h-[40px] flex-1 transition-colors">
+                    <Camera className="h-4 w-4 text-slate-500 mr-1.5" />
+                    <span className="text-xs text-slate-700 font-medium truncate">
+                      {hisaabPhotoFile ? 'Change Paper Photo' : 'Take / Upload Paper Photo'}
+                    </span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      onChange={handleHisaabPhotoChange}
+                      className="hidden"
+                    />
+                  </label>
+                  {hisaabPhotoPreview && (
+                    <div className="relative h-10 w-10 border border-slate-300 rounded-lg overflow-hidden shrink-0 group">
+                      <img src={hisaabPhotoPreview} alt="Paper Hisaab preview" className="object-cover h-full w-full" />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setHisaabPhotoFile(null);
+                          if (hisaabPhotoPreview && hisaabPhotoPreview.startsWith('blob:')) {
+                            URL.revokeObjectURL(hisaabPhotoPreview);
+                          }
+                          setHisaabPhotoPreview(null);
+                        }}
+                        className="absolute inset-0 bg-black/60 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="Remove photo"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 

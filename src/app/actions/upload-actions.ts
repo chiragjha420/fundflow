@@ -154,3 +154,51 @@ export async function uploadExpensePhotoAction(formData: FormData): Promise<{
     return { success: false, error: err?.message || 'Failed to upload expense receipt.' };
   }
 }
+
+/**
+ * Server action to upload paper-written Hisaab photo proof using admin service role.
+ */
+export async function uploadHisaabPhotoAction(formData: FormData): Promise<{
+  success: boolean;
+  publicUrl?: string;
+  error?: string;
+}> {
+  try {
+    const file = formData.get('file') as File;
+    if (!file) {
+      return { success: false, error: 'No photo provided.' };
+    }
+
+    const adminSupabase = getAdminClient();
+
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const fileName = `hisaab-${Date.now()}-${Math.random().toString(36).substring(2, 7)}.jpg`;
+    const storagePath = `hisaabs/${fileName}`;
+
+    const { error } = await adminSupabase.storage
+      .from('receipt-photos')
+      .upload(storagePath, buffer, {
+        contentType: file.type || 'image/jpeg',
+        upsert: true,
+      });
+
+    if (error) {
+      console.error('[Upload Hisaab Photo] Storage error:', error);
+      return { success: false, error: error.message };
+    }
+
+    const { data: { publicUrl } } = adminSupabase.storage
+      .from('receipt-photos')
+      .getPublicUrl(storagePath);
+
+    return {
+      success: true,
+      publicUrl,
+    };
+  } catch (err: any) {
+    console.error('[Upload Hisaab Photo] Exception:', err);
+    return { success: false, error: err?.message || 'Failed to upload paper hisaab photo.' };
+  }
+}
+
