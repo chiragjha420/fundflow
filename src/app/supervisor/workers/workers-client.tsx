@@ -177,11 +177,8 @@ export function SupervisorWorkersClientPage() {
     const netWages = Math.max(0, wagesNum - deductNum);
     const cashNum = Math.max(0, parseFloat(hisaabCashAmount || '0'));
     const onlineNum = Math.max(0, parseFloat(hisaabOnlineAmount || '0'));
-
-    if (cashNum + onlineNum > netWages) {
-      setHisaabError(`Total payout (Cash: ₹${cashNum.toLocaleString('en-IN')} + Online: ₹${onlineNum.toLocaleString('en-IN')}) cannot exceed net wages of ₹${netWages.toLocaleString('en-IN')}.`);
-      return;
-    }
+    const totalPayout = cashNum + onlineNum;
+    const extraAdvanceAdded = Math.max(0, totalPayout - netWages);
 
     setHisaabLoading(true);
     setHisaabError('');
@@ -1476,7 +1473,7 @@ export function SupervisorWorkersClientPage() {
                     </div>
 
                     {/* 1-Tap Preset Chips */}
-                    {netPayable > 0 && (
+                    {netPayable > 0 ? (
                       <div className="flex flex-wrap items-center gap-1.5">
                         <button
                           type="button"
@@ -1522,6 +1519,49 @@ export function SupervisorWorkersClientPage() {
                           No Payout Now (₹0)
                         </button>
                       </div>
+                    ) : (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setHisaabCashAmount('500');
+                            setHisaabOnlineAmount('0');
+                          }}
+                          className="text-xs px-2.5 py-1 rounded border border-emerald-300 bg-emerald-50 text-emerald-900 font-bold hover:bg-emerald-100 transition-colors"
+                        >
+                          +₹500 Cash Adv
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setHisaabCashAmount('1000');
+                            setHisaabOnlineAmount('0');
+                          }}
+                          className="text-xs px-2.5 py-1 rounded border border-emerald-300 bg-emerald-50 text-emerald-900 font-bold hover:bg-emerald-100 transition-colors"
+                        >
+                          +₹1,000 Cash Adv
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setHisaabCashAmount('0');
+                            setHisaabOnlineAmount('1000');
+                          }}
+                          className="text-xs px-2.5 py-1 rounded border border-indigo-300 bg-indigo-50 text-indigo-900 font-bold hover:bg-indigo-100 transition-colors"
+                        >
+                          +₹1,000 Online Adv
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setHisaabCashAmount('0');
+                            setHisaabOnlineAmount('0');
+                          }}
+                          className="text-xs px-2.5 py-1 rounded border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition-colors"
+                        >
+                          No Payout Now (₹0)
+                        </button>
+                      </div>
                     )}
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-0.5">
@@ -1538,7 +1578,6 @@ export function SupervisorWorkersClientPage() {
                             id="hisaabCashAmountModal"
                             type="number"
                             min="0"
-                            max={netPayable}
                             value={hisaabCashAmount}
                             onChange={(e) => setHisaabCashAmount(e.target.value)}
                             disabled={hisaabLoading}
@@ -1565,7 +1604,6 @@ export function SupervisorWorkersClientPage() {
                             id="hisaabOnlineAmountModal"
                             type="number"
                             min="0"
-                            max={netPayable}
                             value={hisaabOnlineAmount}
                             onChange={(e) => setHisaabOnlineAmount(e.target.value)}
                             disabled={hisaabLoading}
@@ -1580,31 +1618,58 @@ export function SupervisorWorkersClientPage() {
                     </div>
 
                     {/* Summary Row */}
-                    <div className="bg-white rounded border border-slate-200 p-2.5 text-xs space-y-1">
-                      <div className="flex justify-between items-center text-slate-600">
-                        <span>Physical Cash Handover:</span>
-                        <span className="font-bold text-slate-900">{formatINR(cashNum)}</span>
-                      </div>
-                      <div className="flex justify-between items-center text-indigo-700">
-                        <span>Online QR Payment:</span>
-                        <span className="font-bold">{formatINR(onlineNum)}</span>
-                      </div>
-                      <div className="border-t border-slate-100 pt-1 flex justify-between items-center font-bold">
-                        <span className="text-slate-800">Total Payout Now:</span>
-                        <span className={isOver ? 'text-red-600 font-black' : 'text-slate-950'}>{formatINR(totalPayout)}</span>
-                      </div>
-                      {remainingUnpaid > 0 && !isOver && (
-                        <div className="flex justify-between items-center text-[11px] text-amber-700">
-                          <span>Remaining Unpaid (Accumulates):</span>
-                          <span className="font-semibold">{formatINR(remainingUnpaid)}</span>
-                        </div>
-                      )}
-                    </div>
+                    {(() => {
+                      const extraAdv = Math.max(0, totalPayout - netPayable);
+                      const baseAdvLeft = Math.max(0, (hisaabWorker.running_advance || 0) - deductNum);
+                      const finalAdvTotal = baseAdvLeft + extraAdv;
 
-                    {isOver && (
-                      <div className="rounded p-2 bg-red-50 border border-red-200 text-xs text-red-700 font-semibold flex items-center gap-1.5">
-                        <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-                        <span>Total payout ({formatINR(totalPayout)}) exceeds net wages ({formatINR(netPayable)}).</span>
+                      return (
+                        <div className="bg-white rounded border border-slate-200 p-2.5 text-xs space-y-1">
+                          <div className="flex justify-between items-center text-slate-600">
+                            <span>Physical Cash Handover:</span>
+                            <span className="font-bold text-slate-900">{formatINR(cashNum)}</span>
+                          </div>
+                          <div className="flex justify-between items-center text-indigo-700">
+                            <span>Online QR Payment:</span>
+                            <span className="font-bold">{formatINR(onlineNum)}</span>
+                          </div>
+                          <div className="border-t border-slate-100 pt-1 flex justify-between items-center font-bold">
+                            <span className="text-slate-800">Total Payout Now:</span>
+                            <span className="text-slate-950">{formatINR(totalPayout)}</span>
+                          </div>
+                          {extraAdv > 0 && (
+                            <div className="flex justify-between items-center text-blue-700 font-bold">
+                              <span>Extra Advance Added:</span>
+                              <span>+{formatINR(extraAdv)}</span>
+                            </div>
+                          )}
+                          <div className="flex justify-between items-center text-[11px] text-slate-600 pt-0.5 border-t border-slate-50">
+                            <span>New Advance Balance:</span>
+                            <span className="font-bold text-slate-900">{formatINR(finalAdvTotal)}</span>
+                          </div>
+                          {remainingUnpaid > 0 && (
+                            <div className="flex justify-between items-center text-[11px] text-amber-700">
+                              <span>Remaining Unpaid Wages:</span>
+                              <span className="font-semibold">{formatINR(remainingUnpaid)}</span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+
+                    {totalPayout > netPayable && (
+                      <div className="rounded p-2.5 bg-blue-50 border border-blue-200 text-xs text-blue-900 space-y-0.5">
+                        <div className="flex items-center gap-1.5 font-bold">
+                          <Coins className="h-3.5 w-3.5 text-blue-600 shrink-0" />
+                          <span>
+                            {netPayable === 0
+                              ? `Net wages is ₹0. Full payout of ${formatINR(totalPayout)} will be added as advance.`
+                              : `Payout exceeds net wages by ${formatINR(totalPayout - netPayable)} (added as advance).`}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-blue-700">
+                          Worker's running advance will increase accordingly.
+                        </p>
                       </div>
                     )}
                   </div>

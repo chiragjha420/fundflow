@@ -431,6 +431,7 @@ export interface HisaabResult {
   previousAdvance?: number;
   advanceDeducted?: number;
   newAdvanceRemaining?: number;
+  extraAdvanceAdded?: number;
   netWages?: number;
   cashPaid?: number;
   onlinePaid?: number;
@@ -473,8 +474,8 @@ export async function recordWorkerHisaabAction(params: {
     if (!params.fromDate || !params.toDate) {
       return { success: false, error: 'Please specify both From and To dates.' };
     }
-    if (cleanWages <= 0) {
-      return { success: false, error: 'Please enter a valid total wage amount earned by the worker.' };
+    if (cleanWages < 0) {
+      return { success: false, error: 'Total wages earned cannot be negative.' };
     }
 
     const admin = createAdminClient();
@@ -516,10 +517,10 @@ export async function recordWorkerHisaabAction(params: {
     const cleanOnlinePaid = Math.max(0, Math.round(Number(params.onlinePaid) || 0));
     const totalPayout = cleanCashPaid + cleanOnlinePaid;
 
-    if (totalPayout > netWages) {
+    if (cleanWages === 0 && cleanDeduct === 0 && totalPayout === 0) {
       return {
         success: false,
-        error: `Total payout (Cash: ₹${cleanCashPaid.toLocaleString('en-IN')} + Online: ₹${cleanOnlinePaid.toLocaleString('en-IN')} = ₹${totalPayout.toLocaleString('en-IN')}) cannot exceed net wages of ₹${netWages.toLocaleString('en-IN')}.`,
+        error: 'Please enter wages earned, advance deduction, or payout amount.',
       };
     }
 
@@ -537,6 +538,21 @@ export async function recordWorkerHisaabAction(params: {
         console.warn('Supervisor balance RPC check failed, proceeding:', balErr);
       }
     }
+
+    // Split payout into net wages settlement vs extra advance:
+    // Any amount paid beyond netWages (or when netWages === 0) is added as advance to worker's running advance!
+    const wagesPaidFromCash = Math.min(cleanCashPaid, netWages);
+    const remainingNetWages = netWages - wagesPaidFromCash;
+    const wagesPaidFromOnline = Math.min(cleanOnlinePaid, remainingNetWages);
+    const totalWagesPaid = wagesPaidFromCash + wagesPaidFromOnline;
+    const unpaidRemaining = Math.max(0, netWages - totalWagesPaid);
+
+    const extraCashAdvance = cleanCashPaid - wagesPaidFromCash;
+    const extraOnlineAdvance = cleanOnlinePaid - wagesPaidFromOnline;
+    const totalExtraAdvance = extraCashAdvance + extraOnlineAdvance;
+
+    const baseAdvanceRemaining = Math.max(0, currentAdv - cleanDeduct);
+    const finalAdvance = baseAdvanceRemaining + totalExtraAdvance;
 
     // Get supervisor name and user_id for cash_transactions foreign key
     let supervisorName = 'Supervisor';
@@ -566,7 +582,6 @@ export async function recordWorkerHisaabAction(params: {
     const hisaabId = crypto.randomUUID();
     const periodStr = `${params.fromDate} to ${params.toDate}`;
     const hisaabNote = params.note?.trim() || `Hisaab settlement for ${periodStr}`;
-    const unpaidRemaining = Math.max(0, netWages - totalPayout);
 
     // 1. Record Hisaab master entry in audit_log
     const hisaabPayload = {
@@ -584,9 +599,14 @@ export async function recordWorkerHisaabAction(params: {
       cash_paid: cleanCashPaid,
       online_paid: cleanOnlinePaid,
       total_paid: totalPayout,
+      wages_paid_cash: wagesPaidFromCash,
+      wages_paid_online: wagesPaidFromOnline,
+      extra_advance_added: totalExtraAdvance,
+      extra_cash_advance: extraCashAdvance,
+      extra_online_advance: extraOnlineAdvance,
       unpaid_remaining: unpaidRemaining,
       previous_advance: currentAdv,
-      new_advance: Math.max(0, currentAdv - cleanDeduct),
+      new_advance: finalAdvance,
       note: hisaabNote,
       photo_url: params.photoUrl || null,
       created_at: new Date().toISOString(),
@@ -620,63 +640,129 @@ export async function recordWorkerHisaabAction(params: {
 
     // 3. If supervisor paid cash portion now -> deduct from supervisor physical cash in hand
     if (cleanCashPaid > 0 && params.supervisorId) {
-      let cashTxNote = `[TYPE:salary_payment] [HISAAB_CASH_PAID] Cash Handed Over (Hisaab: ${periodStr})${params.note ? ` • ${params.note}` : ''}`;
-      if (params.photoUrl) {
-        cashTxNote = `${cashTxNote} [handover_photo:${params.photoUrl}]`;
+      // 3a. Wages salary payment portion
+      if (wagesPaidFromCash > 0) {
+        let cashTxNote = `[TYPE:salary_payment] [HISAAB_CASH_PAID] Cash Handed Over (Hisaab: ${periodStr})${params.note ? ` • ${params.note}` : ''}`;
+        if (params.photoUrl) {
+          cashTxNote = `${cashTxNote} [handover_photo:${params.photoUrl}]`;
+        }
+
+        const txInsert: any = {
+          id: crypto.randomUUID(),
+          type: 'supervisor_to_worker',
+          from_supervisor_id: params.supervisorId,
+          to_worker_id: workerId,
+          amount: wagesPaidFromCash,
+          status: 'confirmed',
+          confirmed_at: new Date().toISOString(),
+          note: cashTxNote,
+          created_at: new Date().toISOString(),
+        };
+        if (supervisorUserId) {
+          txInsert.created_by = supervisorUserId;
+          txInsert.confirmed_by = supervisorUserId;
+        }
+
+        const { error: txErr } = await admin.from('cash_transactions').insert(txInsert);
+        if (txErr) {
+          console.error('Error inserting cash transaction for Hisaab salary payout:', txErr);
+          throw new Error(`Failed to deduct physical cash from supervisor: ${txErr.message}`);
+        }
       }
 
-      const txInsert: any = {
-        id: crypto.randomUUID(),
-        type: 'supervisor_to_worker',
-        from_supervisor_id: params.supervisorId,
-        to_worker_id: workerId,
-        amount: cleanCashPaid,
-        status: 'confirmed',
-        confirmed_at: new Date().toISOString(),
-        note: cashTxNote,
-        created_at: new Date().toISOString(),
-      };
-      if (supervisorUserId) {
-        txInsert.created_by = supervisorUserId;
-        txInsert.confirmed_by = supervisorUserId;
-      }
+      // 3b. Extra advance portion (added to worker's running advance)
+      if (extraCashAdvance > 0) {
+        let advTxNote = `[TYPE:advance] [HISAAB_EXTRA_ADVANCE] Cash Advance Handed Over (Hisaab: ${periodStr})${params.note ? ` • ${params.note}` : ''}`;
+        if (params.photoUrl) {
+          advTxNote = `${advTxNote} [handover_photo:${params.photoUrl}]`;
+        }
 
-      const { error: txErr } = await admin.from('cash_transactions').insert(txInsert);
-      if (txErr) {
-        console.error('Error inserting cash transaction for Hisaab:', txErr);
-        throw new Error(`Failed to deduct physical cash from supervisor: ${txErr.message}`);
+        const advTxInsert: any = {
+          id: crypto.randomUUID(),
+          type: 'supervisor_to_worker',
+          from_supervisor_id: params.supervisorId,
+          to_worker_id: workerId,
+          amount: extraCashAdvance,
+          status: 'confirmed',
+          confirmed_at: new Date().toISOString(),
+          note: advTxNote,
+          created_at: new Date().toISOString(),
+        };
+        if (supervisorUserId) {
+          advTxInsert.created_by = supervisorUserId;
+          advTxInsert.confirmed_by = supervisorUserId;
+        }
+
+        const { error: advErr } = await admin.from('cash_transactions').insert(advTxInsert);
+        if (advErr) {
+          console.error('Error inserting cash transaction for Hisaab extra advance:', advErr);
+          throw new Error(`Failed to deduct physical cash from supervisor: ${advErr.message}`);
+        }
       }
     }
 
-    // 4. If online QR payment was made, record in audit_log
-    // (This does NOT touch supervisor physical cash balance, but is tracked in factory spends and analytics)
+    // 4. Online QR payment portions
     if (cleanOnlinePaid > 0) {
-      let onlineNote = `[HISAAB_ONLINE_PAID] Online QR Payment (Hisaab: ${periodStr})${params.note ? ` • ${params.note}` : ''}`;
-      if (params.photoUrl) {
-        onlineNote = `${onlineNote} [handover_photo:${params.photoUrl}]`;
+      // 4a. Wages salary payment portion
+      if (wagesPaidFromOnline > 0) {
+        let onlineNote = `[HISAAB_ONLINE_PAID] Online QR Payment (Hisaab: ${periodStr})${params.note ? ` • ${params.note}` : ''}`;
+        if (params.photoUrl) {
+          onlineNote = `${onlineNote} [handover_photo:${params.photoUrl}]`;
+        }
+
+        await admin.from('audit_log').insert({
+          table_name: 'worker_online_payments',
+          action: 'ONLINE_QR_PAYOUT',
+          row_id: crypto.randomUUID(),
+          new_data: {
+            id: crypto.randomUUID(),
+            hisaab_id: hisaabId,
+            worker_id: workerId,
+            worker_name: currentWorker.worker_name,
+            factory_id: factoryId,
+            supervisor_id: params.supervisorId || null,
+            supervisor_name: supervisorName,
+            amount: wagesPaidFromOnline,
+            period: periodStr,
+            photo_url: params.photoUrl || null,
+            note: onlineNote,
+            created_at: new Date().toISOString(),
+          },
+          changed_by: params.supervisorId || null,
+          changed_at: new Date().toISOString(),
+        });
       }
 
-      await admin.from('audit_log').insert({
-        table_name: 'worker_online_payments',
-        action: 'ONLINE_QR_PAYOUT',
-        row_id: crypto.randomUUID(),
-        new_data: {
-          id: crypto.randomUUID(),
-          hisaab_id: hisaabId,
-          worker_id: workerId,
-          worker_name: currentWorker.worker_name,
-          factory_id: factoryId,
-          supervisor_id: params.supervisorId || null,
-          supervisor_name: supervisorName,
-          amount: cleanOnlinePaid,
-          period: periodStr,
-          photo_url: params.photoUrl || null,
-          note: onlineNote,
-          created_at: new Date().toISOString(),
-        },
-        changed_by: params.supervisorId || null,
-        changed_at: new Date().toISOString(),
-      });
+      // 4b. Extra online advance portion (added to worker's running advance)
+      if (extraOnlineAdvance > 0) {
+        const advId = crypto.randomUUID();
+        let advOnlineNote = `[HISAAB_ONLINE_ADVANCE] Online Advance (Hisaab: ${periodStr})${params.note ? ` • ${params.note}` : ''}`;
+        if (params.photoUrl) {
+          advOnlineNote = `${advOnlineNote} [handover_photo:${params.photoUrl}]`;
+        }
+
+        await admin.from('audit_log').insert({
+          table_name: 'worker_online_advances',
+          action: 'ONLINE_ADVANCE',
+          row_id: advId,
+          new_data: {
+            id: advId,
+            worker_id: workerId,
+            worker_name: currentWorker.worker_name,
+            factory_id: factoryId,
+            supervisor_id: params.supervisorId || null,
+            supervisor_name: supervisorName,
+            amount: extraOnlineAdvance,
+            period: periodStr,
+            photo_url: params.photoUrl || null,
+            note: advOnlineNote,
+            payment_method: 'online',
+            created_at: new Date().toISOString(),
+          },
+          changed_by: params.supervisorId || null,
+          changed_at: new Date().toISOString(),
+        });
+      }
     }
 
     revalidatePath('/admin');
@@ -688,7 +774,8 @@ export async function recordWorkerHisaabAction(params: {
       hisaabId,
       previousAdvance: currentAdv,
       advanceDeducted: cleanDeduct,
-      newAdvanceRemaining: Math.max(0, currentAdv - cleanDeduct),
+      newAdvanceRemaining: finalAdvance,
+      extraAdvanceAdded: totalExtraAdvance,
       netWages,
       cashPaid: cleanCashPaid,
       onlinePaid: cleanOnlinePaid,
@@ -2388,21 +2475,24 @@ export async function getSupervisorAllTransactionsAction(
       });
 
     // 5. Convert non-cash salary ledger events to transaction-like items for the unified feed
-    const nonCashItems = salaryEntries.map(entry => {
-      return {
-        id: entry.id,
-        type: 'salary_ledger_entry',
-        worker_payment_type: entry.type, // 'salary_earned' | 'advance_recovery'
-        amount: entry.amount,
-        note: entry.note || (entry.type === 'salary_earned' ? `Salary Credited (${entry.period_month || 'Period'})` : 'Advance recovered from salary'),
-        status: 'confirmed',
-        created_at: entry.created_at,
-        to_worker_id: entry.worker_id,
-        from_supervisor_id: null,
-        to_supervisor_id: null,
-        is_non_cash: true,
-      };
-    });
+    // Exclude advance_recovery completely so it NEVER appears in supervisor transaction feed
+    const nonCashItems = salaryEntries
+      .filter(entry => entry.type !== 'advance_recovery')
+      .map(entry => {
+        return {
+          id: entry.id,
+          type: 'salary_ledger_entry',
+          worker_payment_type: entry.type, // 'salary_earned'
+          amount: entry.amount,
+          note: entry.note || `Salary Credited (${entry.period_month || 'Period'})`,
+          status: 'confirmed',
+          created_at: entry.created_at,
+          to_worker_id: entry.worker_id,
+          from_supervisor_id: null,
+          to_supervisor_id: null,
+          is_non_cash: true,
+        };
+      });
 
     // 6. Convert Hisaab online QR payments to transaction items for unified feed
     const onlineHisaabItems = (hisaabRecords || [])
