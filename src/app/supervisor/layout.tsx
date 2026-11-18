@@ -99,6 +99,8 @@ export default function SupervisorLayout({
     },
     initialData: activeSup?.id ? getStoredJson<number | undefined>(`fundflow_cached_balance_${activeSup.id}`, undefined) : undefined,
     enabled: !!activeSup?.id,
+    staleTime: 60 * 1000,
+    refetchOnWindowFocus: false,
   });
 
   const [cachedBalance, setCachedBalance] = React.useState<number | null>(() => {
@@ -203,7 +205,7 @@ export default function SupervisorLayout({
           className="flex-1 flex flex-col items-center justify-center text-slate-600 hover:text-slate-900 border-r border-slate-100 min-h-[44px]"
         >
           <IndianRupee className="h-5 w-5" />
-          <span className="text-[10px] font-semibold mt-1">Expenses</span>
+          <span className="text-[10px] font-semibold mt-1">Factory Kharcha</span>
         </Link>
         <Link
           href="/supervisor/transfers"

@@ -148,11 +148,13 @@ export async function logExpenseAction(
     throw new Error('Notes/remarks are required for expense entry.');
   }
 
+  const safeCategory = category.toLowerCase() === 'material' ? 'materials' : category;
+
   const payload = {
     p_supervisor_id: supervisorId,
     p_factory_id: factoryId,
     p_amount: amount,
-    p_category: category,
+    p_category: safeCategory,
     p_note: cleanNote,
     p_photo_url: photoUrl,
   };

@@ -91,8 +91,7 @@ export function SupervisorExpensesClientPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-xl font-bold tracking-tight text-slate-900">Factory Expense Log</h1>
-        <p className="text-xs text-slate-500 mt-0.5">View previously submitted expenses and receipts across your factory.</p>
+        <h1 className="text-xl font-bold tracking-tight text-slate-900">Factory Kharcha</h1>
       </div>
 
       {/* Expenses List Panel */}
@@ -104,7 +103,7 @@ export function SupervisorExpensesClientPage() {
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search expenses by category or description..."
+            placeholder="Search Factory Kharcha..."
             className="w-full pl-9 pr-3 py-2 rounded border border-slate-300 text-xs focus:ring-slate-500 focus:border-slate-500 text-slate-950 min-h-[44px]"
           />
         </div>

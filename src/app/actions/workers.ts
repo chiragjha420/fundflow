@@ -455,12 +455,16 @@ export async function recordWorkerHisaabAction(params: {
   fromDate: string;
   toDate: string;
   totalWages: number;
-  advanceDeducted: number;
+  advanceDeducted?: number;
   cashPaid?: number;
   onlinePaid?: number;
   payNetCashNow?: boolean;
   note?: string;
   photoUrl?: string | null;
+  newAdvance?: number;
+  bonusAmount?: number;
+  bonusReason?: string;
+  bonusPaymentMethod?: 'cash' | 'online';
 }): Promise<HisaabResult> {
   try {
     const { workerId } = params;
@@ -500,7 +504,7 @@ export async function recordWorkerHisaabAction(params: {
     if (cleanDeduct > cleanWages) {
       return {
         success: false,
-        error: `Cannot deduct ₹${cleanDeduct.toLocaleString('en-IN')}. Total wages made is ₹${cleanWages.toLocaleString('en-IN')}.`,
+        error: `Cannot deduct ₹${cleanDeduct.toLocaleString('en-IN')}. Kitne paise diye is ₹${cleanWages.toLocaleString('en-IN')}.`,
       };
     }
 
@@ -765,6 +769,38 @@ export async function recordWorkerHisaabAction(params: {
       }
     }
 
+    // Optional bonus if provided (tracked separately from worker's advance)
+    if (params.bonusAmount && Number(params.bonusAmount) > 0) {
+      try {
+        await recordWorkerBonusAction({
+          workerId,
+          factoryId,
+          supervisorId: params.supervisorId,
+          amount: Number(params.bonusAmount),
+          note: params.bonusReason?.trim() || `Bonus (Hisaab: ${periodStr})`,
+          paymentMethod: params.bonusPaymentMethod || 'cash',
+          photoUrl: params.photoUrl || null,
+        });
+      } catch (bErr) {
+        console.warn('Optional bonus record failed during Hisaab:', bErr);
+      }
+    }
+
+    // Optional direct advance change if provided
+    if (params.newAdvance !== undefined && params.newAdvance !== null) {
+      try {
+        await recordWorkerAdvanceChangeAction({
+          workerId,
+          factoryId,
+          supervisorId: params.supervisorId,
+          newAdvance: Number(params.newAdvance),
+          reason: `Updated during Hisaab (${periodStr})`,
+        });
+      } catch (aErr) {
+        console.warn('Advance update failed during Hisaab:', aErr);
+      }
+    }
+
     revalidatePath('/admin');
     revalidatePath('/supervisor');
     revalidatePath('/supervisor/workers');
@@ -791,7 +827,7 @@ export async function getWorkerHisaabRecordsAction(factoryId?: string, workerId?
     const admin = createAdminClient();
     const { data: rows } = await admin
       .from('audit_log')
-      .select('*')
+      .select('new_data')
       .eq('table_name', 'worker_hisaab')
       .order('changed_at', { ascending: false });
 
@@ -893,7 +929,7 @@ export async function getWorkerOnlineAdvancesAction(factoryId?: string, workerId
     const admin = createAdminClient();
     const { data: rows } = await admin
       .from('audit_log')
-      .select('*')
+      .select('new_data')
       .eq('table_name', 'worker_online_advances')
       .eq('action', 'ONLINE_ADVANCE')
       .order('changed_at', { ascending: false });
@@ -1000,7 +1036,7 @@ export async function getWorkerBonusesAction(factoryId?: string, workerId?: stri
     const admin = createAdminClient();
     const { data: rows } = await admin
       .from('audit_log')
-      .select('*')
+      .select('new_data')
       .eq('table_name', 'worker_bonuses')
       .eq('action', 'BONUS')
       .order('changed_at', { ascending: false });
@@ -2429,7 +2465,8 @@ export async function getSupervisorAllTransactionsAction(
           to_work:to_worker_id(id, name, active)
         `)
         .or(`from_supervisor_id.in.(${supIds.join(',')}),to_supervisor_id.in.(${supIds.join(',')})`)
-        .order('created_at', { ascending: false }),
+        .order('created_at', { ascending: false })
+        .limit(150),
       admin
         .from('audit_log')
         .select('row_id')
@@ -2564,5 +2601,205 @@ export async function getSupervisorAllTransactionsAction(
   } catch (err) {
     console.error('getSupervisorAllTransactionsAction exception:', err);
     return { transactions: [], refundedTxIds: [] };
+  }
+}
+
+export interface WorkerAdvanceChange {
+  id: string;
+  worker_id: string;
+  worker_name: string;
+  worker_phone?: string | null;
+  factory_id: string;
+  supervisor_id?: string | null;
+  supervisor_name?: string;
+  old_advance: number;
+  new_advance: number;
+  difference: number;
+  reason?: string;
+  created_at: string;
+}
+
+/**
+ * Record a supervisor's direct change to a worker's running advance.
+ * Adjusts running advance immediately and logs the change to a separate advance changes history.
+ */
+export async function recordWorkerAdvanceChangeAction(params: {
+  workerId: string;
+  factoryId?: string;
+  supervisorId?: string;
+  newAdvance: number;
+  reason?: string;
+}): Promise<{
+  success: boolean;
+  oldAdvance?: number;
+  newAdvance?: number;
+  difference?: number;
+  error?: string;
+}> {
+  try {
+    const { workerId } = params;
+    const cleanNewAdvance = Math.max(0, Math.round(Number(params.newAdvance) || 0));
+
+    if (!workerId) {
+      return { success: false, error: 'Worker ID is required.' };
+    }
+
+    const admin = createAdminClient();
+    let factoryId = params.factoryId || '';
+    let workerName = 'Worker';
+    let workerPhone: string | null = null;
+
+    const { data: worker } = await admin
+      .from('workers')
+      .select('id, name, phone, factory_id')
+      .eq('id', workerId)
+      .single();
+
+    if (!worker) {
+      return { success: false, error: 'Worker not found.' };
+    }
+
+    workerName = worker.name;
+    workerPhone = worker.phone;
+    factoryId = factoryId || worker.factory_id;
+
+    // Fetch current running advance
+    const allWorkers = await getAllWorkersWithSalaryBalancesAction(factoryId || undefined);
+    const curWorker = allWorkers.find(w => w.worker_id === workerId);
+    const oldAdvance = curWorker ? (curWorker.running_advance || 0) : 0;
+    const diff = cleanNewAdvance - oldAdvance;
+
+    let supervisorName = 'Supervisor';
+    if (params.supervisorId) {
+      const { data: sup } = await admin
+        .from('supervisors')
+        .select('name')
+        .eq('id', params.supervisorId)
+        .single();
+      if (sup?.name) supervisorName = sup.name;
+    }
+
+    const changeId = crypto.randomUUID();
+    const reasonText = params.reason?.trim() || 'Advance changed by supervisor';
+
+    if (diff !== 0) {
+      if (diff > 0) {
+        // Increase running advance by diff (does not touch supervisor cash in hand)
+        const advId = crypto.randomUUID();
+        await admin.from('audit_log').insert({
+          table_name: 'worker_online_advances',
+          action: 'ONLINE_ADVANCE',
+          row_id: advId,
+          new_data: {
+            id: advId,
+            worker_id: workerId,
+            worker_name: workerName,
+            factory_id: factoryId,
+            supervisor_id: params.supervisorId || null,
+            supervisor_name: supervisorName,
+            amount: diff,
+            note: `Advance adjustment (+₹${diff.toLocaleString('en-IN')}) • ${reasonText}`,
+            payment_method: 'online',
+            created_at: new Date().toISOString(),
+          },
+          changed_by: params.supervisorId || null,
+          changed_at: new Date().toISOString(),
+        });
+      } else {
+        // Decrease running advance by abs(diff) via advance_recovery
+        const reduceAmount = Math.abs(diff);
+        await insertSalaryLedgerEntry({
+          worker_id: workerId,
+          factory_id: factoryId,
+          type: 'advance_recovery',
+          amount: reduceAmount,
+          period_month: 'Adjustment',
+          note: `Advance adjustment (-₹${reduceAmount.toLocaleString('en-IN')}) • ${reasonText}`,
+          created_by: params.supervisorId || null,
+        });
+      }
+    }
+
+    // Always log the change in worker_advance_changes table in audit_log
+    await admin.from('audit_log').insert({
+      table_name: 'worker_advance_changes',
+      action: 'ADVANCE_CHANGE',
+      row_id: changeId,
+      new_data: {
+        id: changeId,
+        worker_id: workerId,
+        worker_name: workerName,
+        worker_phone: workerPhone,
+        factory_id: factoryId,
+        supervisor_id: params.supervisorId || null,
+        supervisor_name: supervisorName,
+        old_advance: oldAdvance,
+        new_advance: cleanNewAdvance,
+        difference: diff,
+        reason: reasonText,
+        created_at: new Date().toISOString(),
+      },
+      changed_by: params.supervisorId || null,
+      changed_at: new Date().toISOString(),
+    });
+
+    revalidatePath('/admin');
+    revalidatePath('/supervisor');
+    revalidatePath('/supervisor/workers');
+
+    return {
+      success: true,
+      oldAdvance,
+      newAdvance: cleanNewAdvance,
+      difference: diff,
+    };
+  } catch (err: any) {
+    console.error('recordWorkerAdvanceChangeAction exception:', err);
+    return { success: false, error: err.message || 'Failed to update advance.' };
+  }
+}
+
+/**
+ * Fetch all worker advance changes for tracking.
+ */
+export async function getWorkerAdvanceChangesAction(
+  factoryId?: string,
+  workerId?: string
+): Promise<WorkerAdvanceChange[]> {
+  try {
+    const admin = createAdminClient();
+    const { data: rows, error } = await admin
+      .from('audit_log')
+      .select('new_data')
+      .eq('table_name', 'worker_advance_changes')
+      .order('changed_at', { ascending: false });
+
+    if (error || !rows) return [];
+
+    return rows
+      .map(r => r.new_data as any)
+      .filter(item => {
+        if (!item) return false;
+        if (factoryId && factoryId !== 'all' && item.factory_id !== factoryId) return false;
+        if (workerId && item.worker_id !== workerId) return false;
+        return true;
+      })
+      .map(item => ({
+        id: item.id || crypto.randomUUID(),
+        worker_id: item.worker_id,
+        worker_name: item.worker_name || 'Worker',
+        worker_phone: item.worker_phone || null,
+        factory_id: item.factory_id,
+        supervisor_id: item.supervisor_id || null,
+        supervisor_name: item.supervisor_name || 'Supervisor',
+        old_advance: Number(item.old_advance || 0),
+        new_advance: Number(item.new_advance || 0),
+        difference: Number(item.difference || 0),
+        reason: item.reason || 'Advance changed',
+        created_at: item.created_at || new Date().toISOString(),
+      }));
+  } catch (err) {
+    console.error('getWorkerAdvanceChangesAction error:', err);
+    return [];
   }
 }

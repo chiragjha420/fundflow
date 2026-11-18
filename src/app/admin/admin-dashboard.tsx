@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import { createOfficeDisbursement, refundWorkerAdvanceAction, adminUpdateWorkerPhoneAction } from '@/app/actions/admin';
 import { AdminAIChat } from './admin-ai-chat';
@@ -861,8 +861,23 @@ export function AdminDashboard({
     return hours >= 24;
   };
 
+  // Helper for date range checks
+  const isWithinDateRange = (isoStr: string, from?: string, to?: string) => {
+    if (!from && !to) return true;
+    const d = new Date(isoStr);
+    if (from) {
+      const start = new Date(from + 'T00:00:00');
+      if (d < start) return false;
+    }
+    if (to) {
+      const end = new Date(to + 'T23:59:59.999');
+      if (d > end) return false;
+    }
+    return true;
+  };
+
   // --- 3. Combine and Filter Ledger Entries (Transactions + Expenses) ---
-  const filteredLedger = [
+  const filteredLedger = useMemo(() => [
     ...localTransactions
       .filter(tx => {
         if (tx.type === 'supervisor_to_worker' && (tx.to_work?.active === false || tx.to_work?.name === 'Deleted Worker')) {
@@ -1031,21 +1046,20 @@ export function AdminDashboard({
 
     return true;
   }).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-
-  // Helper for date range checks
-  function isWithinDateRange(isoStr: string, from?: string, to?: string) {
-    if (!from && !to) return true;
-    const d = new Date(isoStr);
-    if (from) {
-      const start = new Date(from + 'T00:00:00');
-      if (d < start) return false;
-    }
-    if (to) {
-      const end = new Date(to + 'T23:59:59.999');
-      if (d > end) return false;
-    }
-    return true;
-  }
+  }, [
+    localTransactions,
+    localRefundedMap,
+    supervisors,
+    expenses,
+    onlineAdvances,
+    bonuses,
+    salaryLedgerEntries,
+    selectedFactory,
+    selectedSupervisor,
+    selectedPurpose,
+    ledgerFromDate,
+    ledgerToDate,
+  ]);
 
   // --- 4. CSV Export ---
   const exportToCSV = () => {
@@ -1110,79 +1124,83 @@ export function AdminDashboard({
     }
   };
 
-  const activeWorkers = localWorkers.filter(w => w.active !== false && w.worker_name !== 'Deleted Worker');
+  const activeWorkers = useMemo(() => localWorkers.filter(w => w.active !== false && w.worker_name !== 'Deleted Worker'), [localWorkers]);
 
-  const workerReports = activeWorkers.map(w => {
-    // Total refunded for this worker
-    const workerRefundedAmt = localTransactions
-      .filter(t => t.type === 'supervisor_to_worker' && t.to_worker_id === w.worker_id && localRefundedMap[t.id])
-      .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+  const workerReports = useMemo(() => {
+    return activeWorkers.map(w => {
+      // Total refunded for this worker
+      const workerRefundedAmt = localTransactions
+        .filter(t => t.type === 'supervisor_to_worker' && t.to_worker_id === w.worker_id && localRefundedMap[t.id])
+        .reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
-    const adjustedRunningAdvance = Math.max(0, Number(w.running_advance || 0) - workerRefundedAmt);
-    const adjustedTotalDisbursed = Math.max(0, Number(w.total_cash_disbursed || 0) - workerRefundedAmt);
-    const adjustedUnpaidSalary = Math.max(0, Number(w.unpaid_salary || 0));
-    const adjustedNetPayable = adjustedUnpaidSalary - adjustedRunningAdvance;
+      const adjustedRunningAdvance = Math.max(0, Number(w.running_advance || 0) - workerRefundedAmt);
+      const adjustedTotalDisbursed = Math.max(0, Number(w.total_cash_disbursed || 0) - workerRefundedAmt);
+      const adjustedUnpaidSalary = Math.max(0, Number(w.unpaid_salary || 0));
+      const adjustedNetPayable = adjustedUnpaidSalary - adjustedRunningAdvance;
 
-    const allDisbursements = localTransactions.filter(
-      t => t.type === 'supervisor_to_worker' && t.to_worker_id === w.worker_id && t.status === 'confirmed'
-    );
-    const periodDisbursements = allDisbursements.filter(t => 
-      isWithinDateRange(t.created_at, workerFromDate, workerToDate)
-    );
-    const validPeriodDisbursements = periodDisbursements.filter(t => !localRefundedMap[t.id]);
-    
-    // Split period disbursements
-    const periodSalaryPaid = validPeriodDisbursements
-      .filter(t => (t as any).payment_type === 'salary_payment' || t.note?.includes('[TYPE:salary_payment]'))
-      .reduce((sum, t) => sum + Number(t.amount), 0);
-    const periodAdvanceGiven = validPeriodDisbursements
-      .filter(t => (t as any).payment_type !== 'salary_payment' && !t.note?.includes('[TYPE:salary_payment]'))
-      .reduce((sum, t) => sum + Number(t.amount), 0);
-    const periodAdvance = validPeriodDisbursements.reduce((sum, t) => sum + Number(t.amount), 0);
-    const periodCount = validPeriodDisbursements.length;
+      const allDisbursements = localTransactions.filter(
+        t => t.type === 'supervisor_to_worker' && t.to_worker_id === w.worker_id && t.status === 'confirmed'
+      );
+      const periodDisbursements = allDisbursements.filter(t => 
+        isWithinDateRange(t.created_at, workerFromDate, workerToDate)
+      );
+      const validPeriodDisbursements = periodDisbursements.filter(t => !localRefundedMap[t.id]);
+      
+      // Split period disbursements
+      const periodSalaryPaid = validPeriodDisbursements
+        .filter(t => (t as any).payment_type === 'salary_payment' || t.note?.includes('[TYPE:salary_payment]'))
+        .reduce((sum, t) => sum + Number(t.amount), 0);
+      const periodAdvanceGiven = validPeriodDisbursements
+        .filter(t => (t as any).payment_type !== 'salary_payment' && !t.note?.includes('[TYPE:salary_payment]'))
+        .reduce((sum, t) => sum + Number(t.amount), 0);
+      const periodAdvance = validPeriodDisbursements.reduce((sum, t) => sum + Number(t.amount), 0);
+      const periodCount = validPeriodDisbursements.length;
 
-    const factoryName = factories.find(f => f.id === w.factory_id)?.name || 'Unknown Factory';
-    const supervisorName = supervisors.find(s => s.id === w.supervisor_id)?.name || 'Unknown Supervisor';
-    const effectivePhone = localWorkerPhoneOverrides[w.worker_id] !== undefined
-      ? localWorkerPhoneOverrides[w.worker_id]
-      : w.worker_phone;
+      const factoryName = factories.find(f => f.id === w.factory_id)?.name || 'Unknown Factory';
+      const supervisorName = supervisors.find(s => s.id === w.supervisor_id)?.name || 'Unknown Supervisor';
+      const effectivePhone = localWorkerPhoneOverrides[w.worker_id] !== undefined
+        ? localWorkerPhoneOverrides[w.worker_id]
+        : w.worker_phone;
 
-    return {
-      worker: {
-        ...w,
-        worker_phone: effectivePhone,
-        running_advance: adjustedRunningAdvance,
-        total_cash_disbursed: adjustedTotalDisbursed,
-        unpaid_salary: adjustedUnpaidSalary,
-        net_payable: adjustedNetPayable,
-      },
-      periodAdvance,
-      periodSalaryPaid,
-      periodAdvanceGiven,
-      periodCount,
-      periodDisbursements,
-      allDisbursements,
-      factoryName,
-      supervisorName,
-    };
-  });
+      return {
+        worker: {
+          ...w,
+          worker_phone: effectivePhone,
+          running_advance: adjustedRunningAdvance,
+          total_cash_disbursed: adjustedTotalDisbursed,
+          unpaid_salary: adjustedUnpaidSalary,
+          net_payable: adjustedNetPayable,
+        },
+        periodAdvance,
+        periodSalaryPaid,
+        periodAdvanceGiven,
+        periodCount,
+        periodDisbursements,
+        allDisbursements,
+        factoryName,
+        supervisorName,
+      };
+    });
+  }, [activeWorkers, localTransactions, localRefundedMap, workerFromDate, workerToDate, factories, supervisors, localWorkerPhoneOverrides]);
 
-  const filteredWorkerReports = workerReports.filter(item => {
-    if (workerFactoryId !== 'all' && item.worker.factory_id !== workerFactoryId) return false;
-    if (workerSupervisorId !== 'all' && item.worker.supervisor_id !== workerSupervisorId) return false;
-    if (workerSearchQuery) {
-      const q = workerSearchQuery.toLowerCase();
-      const matchName = item.worker.worker_name.toLowerCase().includes(q);
-      const matchPhone = item.worker.worker_phone && item.worker.worker_phone.includes(q);
-      if (!matchName && !matchPhone) return false;
-    }
-    return true;
-  }).sort((a, b) => {
-    if (workerFromDate || workerToDate) {
-      if (b.periodAdvance !== a.periodAdvance) return b.periodAdvance - a.periodAdvance;
-    }
-    return Number(b.worker.running_advance) - Number(a.worker.running_advance);
-  });
+  const filteredWorkerReports = useMemo(() => {
+    return workerReports.filter(item => {
+      if (workerFactoryId !== 'all' && item.worker.factory_id !== workerFactoryId) return false;
+      if (workerSupervisorId !== 'all' && item.worker.supervisor_id !== workerSupervisorId) return false;
+      if (workerSearchQuery) {
+        const q = workerSearchQuery.toLowerCase();
+        const matchName = item.worker.worker_name.toLowerCase().includes(q);
+        const matchPhone = item.worker.worker_phone && item.worker.worker_phone.includes(q);
+        if (!matchName && !matchPhone) return false;
+      }
+      return true;
+    }).sort((a, b) => {
+      if (workerFromDate || workerToDate) {
+        if (b.periodAdvance !== a.periodAdvance) return b.periodAdvance - a.periodAdvance;
+      }
+      return Number(b.worker.running_advance) - Number(a.worker.running_advance);
+    });
+  }, [workerReports, workerFactoryId, workerSupervisorId, workerSearchQuery, workerFromDate, workerToDate]);
 
   const totalWorkerPeriodAdvance = filteredWorkerReports.reduce((sum, item) => sum + item.periodAdvance, 0);
   const workersWithPeriodAdvance = filteredWorkerReports.filter(item => item.periodAdvance > 0).length;
@@ -1709,8 +1727,8 @@ export function AdminDashboard({
       <div id="worker-advances-section" className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden space-y-0">
         {/* Header */}
         <div 
-          onClick={() => setIsWorkerAdvancesCollapsed(!isWorkerAdvancesCollapsed)}
-          className="px-4 sm:px-5 py-3.5 sm:py-4 border-b border-slate-200 bg-slate-50 flex flex-col xl:flex-row xl:items-center justify-between gap-3 cursor-pointer hover:bg-slate-100/70 transition-colors select-none"
+          onClick={() => setIsWorkerAdvancesCollapsed(prev => !prev)}
+          className="px-4 sm:px-5 py-3.5 sm:py-4 border-b border-slate-200 bg-slate-50 flex flex-col xl:flex-row xl:items-center justify-between gap-3 cursor-pointer hover:bg-slate-100/70 transition-colors select-none touch-manipulation"
         >
           <div className="flex items-center gap-2.5">
             <div className="h-9 w-9 rounded-lg bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-700 shrink-0">
@@ -1836,18 +1854,18 @@ export function AdminDashboard({
 
             <button
               type="button"
-              onClick={() => setIsWorkerAdvancesCollapsed(!isWorkerAdvancesCollapsed)}
-              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 sm:py-2 text-xs font-bold text-slate-700 shadow-xs hover:bg-slate-50 transition-colors min-h-[36px]"
+              onClick={() => setIsWorkerAdvancesCollapsed(prev => !prev)}
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 sm:py-2 text-xs font-bold text-slate-700 shadow-xs hover:bg-slate-50 transition-colors min-h-[36px] touch-manipulation select-none"
             >
               {isWorkerAdvancesCollapsed ? (
                 <>
-                  <ChevronDown className="h-4 w-4 text-slate-500" />
-                  <span>Expand</span>
+                  <ChevronDown className="h-4 w-4 text-slate-500 pointer-events-none" />
+                  <span className="pointer-events-none">Expand</span>
                 </>
               ) : (
                 <>
-                  <ChevronUp className="h-4 w-4 text-slate-500" />
-                  <span>Collapse</span>
+                  <ChevronUp className="h-4 w-4 text-slate-500 pointer-events-none" />
+                  <span className="pointer-events-none">Collapse</span>
                 </>
               )}
             </button>
@@ -2636,12 +2654,12 @@ export function AdminDashboard({
           <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden space-y-0">
             {/* Header */}
             <div 
-              onClick={() => setIsBonusesCollapsed(!isBonusesCollapsed)}
-              className="px-4 sm:px-5 py-3.5 sm:py-4 border-b border-slate-200 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer hover:bg-slate-100/70 transition-colors select-none"
+              onClick={() => setIsBonusesCollapsed(prev => !prev)}
+              className="px-4 sm:px-5 py-3.5 sm:py-4 border-b border-slate-200 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer hover:bg-slate-100/70 transition-colors select-none touch-manipulation"
             >
               <div className="flex items-center gap-2.5">
                 <div className="h-9 w-9 rounded-lg bg-purple-50 border border-purple-200 flex items-center justify-center text-purple-700 shrink-0">
-                  <Gift className="h-5 w-5" />
+                  <Gift className="h-5 w-5 pointer-events-none" />
                 </div>
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
@@ -2663,19 +2681,19 @@ export function AdminDashboard({
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    setIsBonusesCollapsed(!isBonusesCollapsed);
+                    setIsBonusesCollapsed(prev => !prev);
                   }}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-xs hover:bg-slate-50 transition-colors min-h-[36px]"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-xs hover:bg-slate-50 transition-colors min-h-[36px] touch-manipulation select-none"
                 >
                   {isBonusesCollapsed ? (
                     <>
-                      <ChevronDown className="h-4 w-4 text-slate-500" />
-                      <span>Expand</span>
+                      <ChevronDown className="h-4 w-4 text-slate-500 pointer-events-none" />
+                      <span className="pointer-events-none">Expand</span>
                     </>
                   ) : (
                     <>
-                      <ChevronUp className="h-4 w-4 text-slate-500" />
-                      <span>Collapse</span>
+                      <ChevronUp className="h-4 w-4 text-slate-500 pointer-events-none" />
+                      <span className="pointer-events-none">Collapse</span>
                     </>
                   )}
                 </button>
@@ -2808,31 +2826,35 @@ export function AdminDashboard({
       <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">
         {/* Header */}
         <div 
-          onClick={() => setIsLedgerLogCollapsed(!isLedgerLogCollapsed)}
-          className="px-5 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between flex-wrap gap-2 cursor-pointer hover:bg-slate-100/60 transition-colors"
+          onClick={() => setIsLedgerLogCollapsed(prev => !prev)}
+          className="px-5 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between flex-wrap gap-2 cursor-pointer hover:bg-slate-100/60 transition-colors select-none touch-manipulation"
         >
           <div className="flex items-center gap-2">
-            <History className="h-5 w-5 text-slate-600" />
-            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-900">Ledger Transactions Log</h2>
-            <span className="text-xs text-slate-500 font-medium">({filteredLedger.length} records)</span>
+            <History className="h-5 w-5 text-slate-600 pointer-events-none" />
+            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-900 pointer-events-none">Ledger Transactions Log</h2>
+            <span className="text-xs text-slate-500 font-medium pointer-events-none">({filteredLedger.length} records)</span>
           </div>
 
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              setIsLedgerLogCollapsed(!isLedgerLogCollapsed);
+              setIsLedgerLogCollapsed(prev => !prev);
             }}
-            className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-xs hover:bg-slate-50 transition-colors min-h-[34px]"
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-xs hover:bg-slate-50 transition-colors min-h-[34px] touch-manipulation select-none"
           >
             {isLedgerLogCollapsed ? (
               <>
-                <ChevronDown className="h-3.5 w-3.5" />
-                <span>Expand Log</span>
+                <ChevronDown className="h-3.5 w-3.5 pointer-events-none" />
+                <span className="pointer-events-none">Expand Log</span>
               </>
             ) : (
               <>
-                <ChevronUp className="h-3.5 w-3.5" />
+                <ChevronUp className="h-3.5 w-3.5 pointer-events-none" />
+                <span className="pointer-events-none">Collapse Log</span>
+              </>
+            )}
+          </button>
                 <span>Collapse</span>
               </>
             )}

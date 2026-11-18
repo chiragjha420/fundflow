@@ -40,7 +40,8 @@ export default async function AdminDashboardPage() {
     supabase
       .from('cash_transactions')
       .select('*, from:from_supervisor_id(name), to_sup:to_supervisor_id(name, factory_id), to_work:to_worker_id(name, factory_id, active)')
-      .order('created_at', { ascending: false }),
+      .order('created_at', { ascending: false })
+      .limit(300),
     getFactoryExpensesAction(),
     getAllWorkersWithSalaryBalancesAction(),
     getRefundedTransactionsAction(),

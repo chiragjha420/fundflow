@@ -16,6 +16,8 @@ import {
   recoverWorkerAdvanceAction,
   addWorkerSalaryWithDeductionAction,
   recordWorkerHisaabAction,
+  recordWorkerAdvanceChangeAction,
+  recordWorkerBonusAction,
   createAdvanceCorrectionRequestAction
 } from '@/app/actions/workers';
 import { compressImage } from '@/lib/image-compressor';
@@ -38,7 +40,8 @@ import {
   Calculator,
   Plus,
   QrCode,
-  CreditCard
+  CreditCard,
+  Gift
 } from 'lucide-react';
 
 interface Worker {
@@ -103,7 +106,10 @@ export function SupervisorWorkersClientPage() {
   });
   const [hisaabToDate, setHisaabToDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
   const [hisaabTotalWages, setHisaabTotalWages] = useState<string>('');
-  const [hisaabAdvanceDeduct, setHisaabAdvanceDeduct] = useState<string>('0');
+  const [hisaabNewAdvance, setHisaabNewAdvance] = useState<string>('');
+  const [hisaabBonusAmount, setHisaabBonusAmount] = useState<string>('');
+  const [hisaabBonusNote, setHisaabBonusNote] = useState<string>('');
+  const [hisaabBonusPaymentMethod, setHisaabBonusPaymentMethod] = useState<'cash' | 'online'>('cash');
   const [hisaabCashAmount, setHisaabCashAmount] = useState<string>('');
   const [hisaabOnlineAmount, setHisaabOnlineAmount] = useState<string>('');
   const [hisaabNote, setHisaabNote] = useState<string>('');
@@ -155,34 +161,46 @@ export function SupervisorWorkersClientPage() {
   const handleExecuteHisaab = async () => {
     if (!hisaabWorker || !factoryId) return;
     const wagesNum = parseFloat(hisaabTotalWages);
-    const deductNum = Math.max(0, parseFloat(hisaabAdvanceDeduct || '0'));
     if (isNaN(wagesNum) || wagesNum <= 0) {
-      setHisaabError('Please enter valid total wages earned.');
+      setHisaabError('Please enter valid wages (Kitne paise diye).');
       return;
     }
     if (!hisaabFromDate || !hisaabToDate) {
       setHisaabError('Please specify both From and To dates.');
       return;
     }
-    const currentAdv = hisaabWorker.running_advance || 0;
-    if (deductNum > currentAdv) {
-      setHisaabError(`Deduction cannot exceed worker advance of ${formatINR(currentAdv)}.`);
-      return;
-    }
-    if (deductNum > wagesNum) {
-      setHisaabError(`Deduction cannot exceed wages earned of ${formatINR(wagesNum)}.`);
-      return;
-    }
 
-    const netWages = Math.max(0, wagesNum - deductNum);
     const cashNum = Math.max(0, parseFloat(hisaabCashAmount || '0'));
     const onlineNum = Math.max(0, parseFloat(hisaabOnlineAmount || '0'));
-    const totalPayout = cashNum + onlineNum;
-    const extraAdvanceAdded = Math.max(0, totalPayout - netWages);
+    const parsedBonus = parseFloat(hisaabBonusAmount) || 0;
 
     setHisaabLoading(true);
     setHisaabError('');
     try {
+      // Check if supervisor changed the advance amount
+      const newAdvNum = hisaabNewAdvance !== '' ? parseFloat(hisaabNewAdvance) : undefined;
+      if (newAdvNum !== undefined && !isNaN(newAdvNum) && newAdvNum !== (hisaabWorker.running_advance || 0)) {
+        await recordWorkerAdvanceChangeAction({
+          workerId: hisaabWorker.worker_id,
+          factoryId,
+          supervisorId: supervisor?.id,
+          newAdvance: newAdvNum,
+          reason: 'Advance updated during Hisaab',
+        });
+      }
+
+      // Record optional bonus (not added to worker's advance)
+      if (parsedBonus > 0) {
+        await recordWorkerBonusAction({
+          workerId: hisaabWorker.worker_id,
+          factoryId,
+          supervisorId: supervisor?.id,
+          amount: parsedBonus,
+          note: hisaabBonusNote.trim() || 'Bonus awarded during Hisaab',
+          paymentMethod: hisaabBonusPaymentMethod,
+        });
+      }
+
       // Upload paper hisaab photo if attached
       let hisaabPhotoUrl: string | null = null;
       if (hisaabPhotoFile) {
@@ -224,7 +242,7 @@ export function SupervisorWorkersClientPage() {
         fromDate: hisaabFromDate,
         toDate: hisaabToDate,
         totalWages: wagesNum,
-        advanceDeducted: deductNum,
+        advanceDeducted: 0,
         cashPaid: cashNum,
         onlinePaid: onlineNum,
         note: hisaabNote || undefined,
@@ -239,7 +257,9 @@ export function SupervisorWorkersClientPage() {
       setShowHisaabModal(false);
       setHisaabWorker(null);
       setHisaabTotalWages('');
-      setHisaabAdvanceDeduct('0');
+      setHisaabNewAdvance('');
+      setHisaabBonusAmount('');
+      setHisaabBonusNote('');
       setHisaabCashAmount('');
       setHisaabOnlineAmount('');
       setHisaabNote('');
@@ -1000,7 +1020,7 @@ export function SupervisorWorkersClientPage() {
                   {/* Collapsible header container */}
                   <div 
                     onClick={() => setExpandedWorkerId(prev => prev === w.worker_id ? null : w.worker_id)}
-                    className="p-4 flex items-center justify-between hover:bg-slate-50 cursor-pointer transition-colors duration-150"
+                    className="p-4 flex items-center justify-between hover:bg-slate-50 cursor-pointer transition-colors duration-150 touch-manipulation select-none"
                   >
                     <div className="flex items-center gap-3">
                       <div className="relative h-12 w-12 rounded-full border border-slate-200 bg-slate-100 overflow-hidden flex items-center justify-center shrink-0">
@@ -1076,7 +1096,9 @@ export function SupervisorWorkersClientPage() {
                           onClick={() => {
                             setHisaabWorker(w);
                             setHisaabTotalWages('');
-                            setHisaabAdvanceDeduct(w.running_advance > 0 ? String(w.running_advance) : '0');
+                            setHisaabNewAdvance(String(w.running_advance || 0));
+                            setHisaabBonusAmount('');
+                            setHisaabBonusNote('');
                             const d = new Date();
                             setHisaabFromDate(new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split('T')[0]);
                             setHisaabToDate(new Date().toISOString().split('T')[0]);
@@ -1238,33 +1260,31 @@ export function SupervisorWorkersClientPage() {
               </button>
             </div>
 
-            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs space-y-1.5">
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs space-y-2">
               <div className="flex justify-between items-center">
                 <span className="text-slate-500 font-medium">Worker:</span>
                 <span className="font-bold text-slate-900">{hisaabWorker.worker_name}</span>
               </div>
-              <div className="flex justify-between items-center">
-                <span className="text-slate-500 font-medium">Current Advance:</span>
-                <span className={`font-bold ${(hisaabWorker.running_advance || 0) > 0 ? 'text-amber-800 font-black' : 'text-slate-700'}`}>
+              <div className="flex items-center justify-between pt-1 border-t border-slate-200">
+                <span className="text-xs font-bold text-amber-950 uppercase tracking-wider">Current Advance:</span>
+                <span className="text-xs font-black text-amber-950 bg-amber-100 px-2 py-0.5 rounded border border-amber-300">
                   {formatINR(hisaabWorker.running_advance || 0)}
                 </span>
               </div>
-              <div className="flex justify-end pt-0.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const w = hisaabWorker;
-                    setShowHisaabModal(false);
-                    setCorrectionWorker(w);
-                    setCorrectionRequestedAmount(String(w.running_advance || 0));
-                    setCorrectionReason('');
-                    setCorrectionError('');
-                    setShowCorrectionModal(true);
-                  }}
-                  className="text-[10px] text-indigo-700 font-bold underline hover:text-indigo-900"
-                >
-                  Advance incorrect? Request correction
-                </button>
+              <div className="flex items-center gap-2 pt-1 border-t border-slate-200">
+                <span className="text-xs font-bold text-slate-800 shrink-0">Change Advance:</span>
+                <div className="relative flex-1">
+                  <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center text-slate-500 text-xs font-bold pointer-events-none">₹</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={hisaabNewAdvance}
+                    onChange={(e) => setHisaabNewAdvance(e.target.value)}
+                    placeholder={String(hisaabWorker.running_advance || 0)}
+                    disabled={hisaabLoading}
+                    className="w-full rounded border border-slate-300 pl-6 pr-2 py-1 text-xs text-slate-950 font-bold bg-white focus:ring-1 focus:ring-slate-900"
+                  />
+                </div>
               </div>
             </div>
 
@@ -1307,10 +1327,10 @@ export function SupervisorWorkersClientPage() {
                 </div>
               </div>
 
-              {/* Total Wages Made */}
+              {/* Kitne paise diye (INR) */}
               <div>
                 <label htmlFor="hisaabTotalWagesModal" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                  Total Wages Made (INR)
+                  Kitne paise diye (INR)
                 </label>
                 <div className="relative">
                   <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 text-sm font-bold pointer-events-none">₹</span>
@@ -1320,249 +1340,164 @@ export function SupervisorWorkersClientPage() {
                     min="1"
                     disabled={hisaabLoading}
                     value={hisaabTotalWages}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setHisaabTotalWages(val);
-                      if (hisaabWorker && hisaabWorker.running_advance > 0) {
-                        const wagesNum = parseFloat(val) || 0;
-                        const currentDeduct = parseFloat(hisaabAdvanceDeduct) || 0;
-                        if (currentDeduct > wagesNum) {
-                          setHisaabAdvanceDeduct(String(Math.min(wagesNum, hisaabWorker.running_advance)));
-                        }
-                      }
-                    }}
+                    onChange={(e) => setHisaabTotalWages(e.target.value)}
                     placeholder="e.g. 10000"
                     className="block w-full rounded-lg border border-slate-300 pl-8 pr-3 py-2 text-slate-950 text-sm font-bold focus:ring-2 focus:ring-slate-900 min-h-[44px]"
                   />
                 </div>
               </div>
 
-              {/* Deduct from Advance */}
-              {(hisaabWorker.running_advance || 0) > 0 ? (
-                <div className="rounded-lg p-2.5 bg-amber-50/70 border border-amber-200 space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <label htmlFor="hisaabAdvanceDeductModal" className="block text-xs font-bold text-amber-950 uppercase tracking-wider">
-                      Deduct from Advance
-                    </label>
-                    <span className="text-[10px] text-amber-800 font-bold">
-                      Advance: {formatINR(hisaabWorker.running_advance || 0)}
-                    </span>
-                  </div>
-
-                  <div className="relative">
-                    <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 text-sm font-bold pointer-events-none">₹</span>
-                    <input
-                      id="hisaabAdvanceDeductModal"
-                      type="number"
-                      min="0"
-                      max={Math.min(hisaabWorker.running_advance || 0, parseFloat(hisaabTotalWages) || 0)}
-                      disabled={hisaabLoading}
-                      value={hisaabAdvanceDeduct}
-                      onChange={(e) => setHisaabAdvanceDeduct(e.target.value)}
-                      placeholder="0"
-                      className="block w-full rounded border border-amber-300 pl-8 pr-3 py-1.5 text-slate-950 text-sm font-bold bg-white focus:ring-2 focus:ring-amber-500 min-h-[40px]"
-                    />
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-1 pt-0.5">
+              {/* Optional Bonus Section */}
+              <div className="rounded-lg p-3 bg-slate-50 border border-slate-200 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                    <Gift className="h-4 w-4 text-emerald-600" />
+                    <span>Bonus (Optional)</span>
+                  </label>
+                  <div className="flex items-center gap-1 bg-slate-200/80 p-0.5 rounded">
                     <button
                       type="button"
-                      onClick={() => setHisaabAdvanceDeduct('0')}
-                      className="text-[11px] px-2 py-0.5 rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition-colors"
+                      onClick={() => setHisaabBonusPaymentMethod('cash')}
+                      className={`text-[11px] font-bold px-2 py-0.5 rounded transition-all ${
+                        hisaabBonusPaymentMethod === 'cash' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600'
+                      }`}
                     >
-                      Deduct ₹0
+                      Cash
                     </button>
-                    {(() => {
-                      const wagesNum = parseFloat(hisaabTotalWages) || 0;
-                      const maxD = Math.min(hisaabWorker.running_advance || 0, wagesNum > 0 ? wagesNum : (hisaabWorker.running_advance || 0));
-                      if (maxD <= 0) return null;
-                      return (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => setHisaabAdvanceDeduct(String(maxD))}
-                            className="text-[11px] px-2 py-0.5 rounded border border-amber-300 bg-amber-100 text-amber-900 font-bold hover:bg-amber-200 transition-colors"
-                          >
-                            Full ({formatINR(maxD)})
-                          </button>
-                          {maxD > 1000 && (
-                            <button
-                              type="button"
-                              onClick={() => setHisaabAdvanceDeduct(String(Math.round(maxD / 2)))}
-                              className="text-[11px] px-2 py-0.5 rounded border border-amber-200 bg-white text-amber-900 font-medium hover:bg-amber-50 transition-colors"
-                            >
-                              Half ({formatINR(Math.round(maxD / 2))})
-                            </button>
-                          )}
-                        </>
-                      );
-                    })()}
+                    <button
+                      type="button"
+                      onClick={() => setHisaabBonusPaymentMethod('online')}
+                      className={`text-[11px] font-bold px-2 py-0.5 rounded transition-all ${
+                        hisaabBonusPaymentMethod === 'online' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600'
+                      }`}
+                    >
+                      Online By Office
+                    </button>
                   </div>
                 </div>
-              ) : (
-                <div className="rounded-lg p-2.5 bg-slate-50 border border-slate-200 text-xs text-slate-600 flex items-center justify-between">
-                  <span>Worker owes ₹0 advance. No advance deduction.</span>
-                  <span className="font-semibold text-emerald-700">Clear</span>
-                </div>
-              )}
 
-              {/* Live Hisaab Breakdown */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label htmlFor="hisaabBonusAmountModal" className="block text-[11px] font-semibold text-slate-600 uppercase tracking-wider mb-1">
+                      Bonus Amount (INR)
+                    </label>
+                    <div className="relative">
+                      <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center text-slate-400 text-xs font-bold pointer-events-none">₹</span>
+                      <input
+                        id="hisaabBonusAmountModal"
+                        type="number"
+                        min="0"
+                        value={hisaabBonusAmount}
+                        onChange={(e) => setHisaabBonusAmount(e.target.value)}
+                        disabled={hisaabLoading}
+                        placeholder="0"
+                        className="block w-full rounded border border-slate-300 pl-6 pr-2 py-1 text-slate-950 text-xs font-bold bg-white"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label htmlFor="hisaabBonusNoteModal" className="block text-[11px] font-semibold text-slate-600 uppercase tracking-wider mb-1">
+                      What for / Reason
+                    </label>
+                    <input
+                      id="hisaabBonusNoteModal"
+                      type="text"
+                      value={hisaabBonusNote}
+                      onChange={(e) => setHisaabBonusNote(e.target.value)}
+                      disabled={hisaabLoading}
+                      placeholder="e.g. Festival, Overtime"
+                      className="block w-full rounded border border-slate-300 px-2 py-1 text-slate-950 text-xs bg-white"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Live Breakdown */}
               {(() => {
                 const wagesNum = parseFloat(hisaabTotalWages) || 0;
-                const deductNum = Math.max(0, parseFloat(hisaabAdvanceDeduct) || 0);
-                const curAdv = hisaabWorker.running_advance || 0;
-
                 if (wagesNum <= 0) return null;
-
-                const netRemaining = Math.max(0, wagesNum - deductNum);
-                const remainingAdv = Math.max(0, curAdv - deductNum);
 
                 return (
                   <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 space-y-1 text-xs">
                     <div className="flex justify-between items-center text-slate-700">
-                      <span>Total Wages Made:</span>
+                      <span>Kitne paise diye:</span>
                       <span className="font-bold text-slate-900">{formatINR(wagesNum)}</span>
                     </div>
-                    {curAdv > 0 && (
-                      <div className="flex justify-between items-center text-amber-800">
-                        <span>Advance Deducted:</span>
-                        <span className="font-bold">-{formatINR(deductNum)}</span>
-                      </div>
-                    )}
                     <div className="border-t border-slate-200 pt-1 flex justify-between items-center">
-                      <span className="font-semibold text-slate-800">Net Wages Remaining for Worker:</span>
-                      <span className="font-bold text-emerald-700">{formatINR(netRemaining)}</span>
-                    </div>
-                    <div className="flex justify-between items-center text-[11px] text-slate-600">
-                      <span>Advance Remaining After Hisaab:</span>
-                      <span className="font-bold text-slate-900">{formatINR(remainingAdv)}</span>
+                      <span className="font-semibold text-slate-800">Current Advance:</span>
+                      <span className="font-bold text-amber-700">{formatINR(hisaabWorker.running_advance || 0)}</span>
                     </div>
                   </div>
                 );
               })()}
 
-              {/* Worker Payout Distribution (Cash vs Online QR) */}
+              {/* Worker Payout Distribution (Cash vs Online By Office) */}
               {(() => {
                 const wagesNum = parseFloat(hisaabTotalWages) || 0;
-                const deductNum = Math.max(0, parseFloat(hisaabAdvanceDeduct) || 0);
-                const netPayable = Math.max(0, wagesNum - deductNum);
-
                 if (wagesNum <= 0) return null;
 
                 const cashNum = parseFloat(hisaabCashAmount) || 0;
                 const onlineNum = parseFloat(hisaabOnlineAmount) || 0;
                 const totalPayout = cashNum + onlineNum;
-                const remainingUnpaid = Math.max(0, netPayable - totalPayout);
-                const isOver = totalPayout > netPayable;
 
                 return (
                   <div className="rounded-lg p-3 bg-slate-50 border border-slate-200 space-y-2.5">
                     <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                          <CreditCard className="h-4 w-4 text-indigo-600" />
-                          <span>Payout Distribution</span>
-                        </label>
-                        <p className="text-[11px] text-slate-500 mt-0.5">
-                          Specify cash handed over vs money paid online to their QR code.
-                        </p>
-                      </div>
+                      <label className="block text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                        <CreditCard className="h-4 w-4 text-indigo-600" />
+                        <span>Payout Distribution</span>
+                      </label>
                       <span className="text-xs font-black text-slate-900 shrink-0">
-                        Net: {formatINR(netPayable)}
+                        {formatINR(wagesNum)}
                       </span>
                     </div>
 
                     {/* 1-Tap Preset Chips */}
-                    {netPayable > 0 ? (
-                      <div className="flex flex-wrap items-center gap-1.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setHisaabCashAmount(String(wagesNum));
+                          setHisaabOnlineAmount('0');
+                        }}
+                        className="text-xs px-2.5 py-1 rounded border border-emerald-300 bg-emerald-50 text-emerald-900 font-bold hover:bg-emerald-100 transition-colors"
+                      >
+                        All in Cash ({formatINR(wagesNum)})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setHisaabCashAmount('0');
+                          setHisaabOnlineAmount(String(wagesNum));
+                        }}
+                        className="text-xs px-2.5 py-1 rounded border border-indigo-300 bg-indigo-50 text-indigo-900 font-bold hover:bg-indigo-100 transition-colors"
+                      >
+                        All Online By Office ({formatINR(wagesNum)})
+                      </button>
+                      {wagesNum > 1000 && (
                         <button
                           type="button"
                           onClick={() => {
-                            setHisaabCashAmount(String(netPayable));
-                            setHisaabOnlineAmount('0');
+                            const half = Math.floor(wagesNum / 2);
+                            setHisaabCashAmount(String(half));
+                            setHisaabOnlineAmount(String(wagesNum - half));
                           }}
-                          className="text-xs px-2.5 py-1 rounded border border-emerald-300 bg-emerald-50 text-emerald-900 font-bold hover:bg-emerald-100 transition-colors"
+                          className="text-xs px-2.5 py-1 rounded border border-slate-300 bg-white text-slate-700 font-medium hover:bg-slate-50 transition-colors"
                         >
-                          All in Cash ({formatINR(netPayable)})
+                          Split Half
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setHisaabCashAmount('0');
-                            setHisaabOnlineAmount(String(netPayable));
-                          }}
-                          className="text-xs px-2.5 py-1 rounded border border-indigo-300 bg-indigo-50 text-indigo-900 font-bold hover:bg-indigo-100 transition-colors"
-                        >
-                          All Online QR ({formatINR(netPayable)})
-                        </button>
-                        {netPayable > 1000 && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const half = Math.floor(netPayable / 2);
-                              setHisaabCashAmount(String(half));
-                              setHisaabOnlineAmount(String(netPayable - half));
-                            }}
-                            className="text-xs px-2.5 py-1 rounded border border-slate-300 bg-white text-slate-700 font-medium hover:bg-slate-50 transition-colors"
-                          >
-                            Split Half
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setHisaabCashAmount('0');
-                            setHisaabOnlineAmount('0');
-                          }}
-                          className="text-xs px-2.5 py-1 rounded border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition-colors"
-                        >
-                          No Payout Now (₹0)
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setHisaabCashAmount('500');
-                            setHisaabOnlineAmount('0');
-                          }}
-                          className="text-xs px-2.5 py-1 rounded border border-emerald-300 bg-emerald-50 text-emerald-900 font-bold hover:bg-emerald-100 transition-colors"
-                        >
-                          +₹500 Cash Adv
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setHisaabCashAmount('1000');
-                            setHisaabOnlineAmount('0');
-                          }}
-                          className="text-xs px-2.5 py-1 rounded border border-emerald-300 bg-emerald-50 text-emerald-900 font-bold hover:bg-emerald-100 transition-colors"
-                        >
-                          +₹1,000 Cash Adv
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setHisaabCashAmount('0');
-                            setHisaabOnlineAmount('1000');
-                          }}
-                          className="text-xs px-2.5 py-1 rounded border border-indigo-300 bg-indigo-50 text-indigo-900 font-bold hover:bg-indigo-100 transition-colors"
-                        >
-                          +₹1,000 Online Adv
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setHisaabCashAmount('0');
-                            setHisaabOnlineAmount('0');
-                          }}
-                          className="text-xs px-2.5 py-1 rounded border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition-colors"
-                        >
-                          No Payout Now (₹0)
-                        </button>
-                      </div>
-                    )}
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setHisaabCashAmount('0');
+                          setHisaabOnlineAmount('0');
+                        }}
+                        className="text-xs px-2.5 py-1 rounded border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition-colors"
+                      >
+                        No Payout Now (₹0)
+                      </button>
+                    </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-0.5">
                       {/* Cash Handover Input */}
@@ -1585,16 +1520,13 @@ export function SupervisorWorkersClientPage() {
                             className="block w-full rounded-lg border border-slate-300 pl-7 pr-3 py-2 text-slate-950 text-sm font-bold bg-white focus:ring-2 focus:ring-slate-500 min-h-[44px]"
                           />
                         </div>
-                        <p className="text-[10px] text-slate-500">
-                          Deducted from your cash in hand balance.
-                        </p>
                       </div>
 
-                      {/* Online QR Payment Input */}
+                      {/* Online By Office Input */}
                       <div className="space-y-1">
                         <label htmlFor="hisaabOnlineAmountModal" className="block text-xs font-bold text-indigo-950 flex items-center gap-1">
                           <QrCode className="h-3.5 w-3.5 text-indigo-600" />
-                          <span>Online / QR Transfer (INR)</span>
+                          <span>Online By Office (INR)</span>
                         </label>
                         <div className="relative rounded shadow-xs">
                           <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
@@ -1611,67 +1543,24 @@ export function SupervisorWorkersClientPage() {
                             className="block w-full rounded-lg border border-indigo-300 pl-7 pr-3 py-2 text-slate-950 text-sm font-bold bg-white focus:ring-2 focus:ring-indigo-500 min-h-[44px]"
                           />
                         </div>
-                        <p className="text-[10px] text-indigo-700 font-medium">
-                          Paid via QR code. Not deducted from your balance.
-                        </p>
                       </div>
                     </div>
 
                     {/* Summary Row */}
-                    {(() => {
-                      const extraAdv = Math.max(0, totalPayout - netPayable);
-                      const baseAdvLeft = Math.max(0, (hisaabWorker.running_advance || 0) - deductNum);
-                      const finalAdvTotal = baseAdvLeft + extraAdv;
-
-                      return (
-                        <div className="bg-white rounded border border-slate-200 p-2.5 text-xs space-y-1">
-                          <div className="flex justify-between items-center text-slate-600">
-                            <span>Physical Cash Handover:</span>
-                            <span className="font-bold text-slate-900">{formatINR(cashNum)}</span>
-                          </div>
-                          <div className="flex justify-between items-center text-indigo-700">
-                            <span>Online QR Payment:</span>
-                            <span className="font-bold">{formatINR(onlineNum)}</span>
-                          </div>
-                          <div className="border-t border-slate-100 pt-1 flex justify-between items-center font-bold">
-                            <span className="text-slate-800">Total Payout Now:</span>
-                            <span className="text-slate-950">{formatINR(totalPayout)}</span>
-                          </div>
-                          {extraAdv > 0 && (
-                            <div className="flex justify-between items-center text-blue-700 font-bold">
-                              <span>Extra Advance Added:</span>
-                              <span>+{formatINR(extraAdv)}</span>
-                            </div>
-                          )}
-                          <div className="flex justify-between items-center text-[11px] text-slate-600 pt-0.5 border-t border-slate-50">
-                            <span>New Advance Balance:</span>
-                            <span className="font-bold text-slate-900">{formatINR(finalAdvTotal)}</span>
-                          </div>
-                          {remainingUnpaid > 0 && (
-                            <div className="flex justify-between items-center text-[11px] text-amber-700">
-                              <span>Remaining Unpaid Wages:</span>
-                              <span className="font-semibold">{formatINR(remainingUnpaid)}</span>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })()}
-
-                    {totalPayout > netPayable && (
-                      <div className="rounded p-2.5 bg-blue-50 border border-blue-200 text-xs text-blue-900 space-y-0.5">
-                        <div className="flex items-center gap-1.5 font-bold">
-                          <Coins className="h-3.5 w-3.5 text-blue-600 shrink-0" />
-                          <span>
-                            {netPayable === 0
-                              ? `Net wages is ₹0. Full payout of ${formatINR(totalPayout)} will be added as advance.`
-                              : `Payout exceeds net wages by ${formatINR(totalPayout - netPayable)} (added as advance).`}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-blue-700">
-                          Worker's running advance will increase accordingly.
-                        </p>
+                    <div className="bg-white rounded border border-slate-200 p-2.5 text-xs space-y-1">
+                      <div className="flex justify-between items-center text-slate-600">
+                        <span>Cash Handover:</span>
+                        <span className="font-bold text-slate-900">{formatINR(cashNum)}</span>
                       </div>
-                    )}
+                      <div className="flex justify-between items-center text-indigo-700">
+                        <span>Online By Office:</span>
+                        <span className="font-bold">{formatINR(onlineNum)}</span>
+                      </div>
+                      <div className="border-t border-slate-100 pt-1 flex justify-between items-center font-bold">
+                        <span className="text-slate-800">Total Payout:</span>
+                        <span className="text-slate-950">{formatINR(totalPayout)}</span>
+                      </div>
+                    </div>
                   </div>
                 );
               })()}
