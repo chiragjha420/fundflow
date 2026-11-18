@@ -465,12 +465,16 @@ export async function recordWorkerHisaabAction(params: {
   bonusAmount?: number;
   bonusReason?: string;
   bonusPaymentMethod?: 'cash' | 'online';
+  jamaHain?: number;
 }): Promise<HisaabResult> {
   try {
     const { workerId } = params;
     let factoryId = params.factoryId || '';
     const cleanWages = Math.max(0, Math.round(Number(params.totalWages) || 0));
     const cleanDeduct = Math.max(0, Math.round(Number(params.advanceDeducted) || 0));
+    const cleanJamaHain = params.jamaHain !== undefined && params.jamaHain !== null && !isNaN(Number(params.jamaHain))
+      ? Math.max(0, Math.round(Number(params.jamaHain)))
+      : undefined;
 
     if (!workerId) {
       return { success: false, error: 'Please select a worker for Hisaab.' };
@@ -611,6 +615,7 @@ export async function recordWorkerHisaabAction(params: {
       unpaid_remaining: unpaidRemaining,
       previous_advance: currentAdv,
       new_advance: finalAdvance,
+      jama_hain: cleanJamaHain !== undefined ? cleanJamaHain : unpaidRemaining,
       note: hisaabNote,
       photo_url: params.photoUrl || null,
       created_at: new Date().toISOString(),
@@ -798,6 +803,21 @@ export async function recordWorkerHisaabAction(params: {
         });
       } catch (aErr) {
         console.warn('Advance update failed during Hisaab:', aErr);
+      }
+    }
+
+    // Optional Jama Hain (unpaid salary) direct update if provided
+    if (cleanJamaHain !== undefined) {
+      try {
+        await recordWorkerJamaChangeAction({
+          workerId,
+          factoryId,
+          supervisorId: params.supervisorId,
+          newJama: cleanJamaHain,
+          reason: `Updated during Hisaab (${periodStr})`,
+        });
+      } catch (jErr) {
+        console.warn('Jama Hain update failed during Hisaab:', jErr);
       }
     }
 
@@ -2800,6 +2820,194 @@ export async function getWorkerAdvanceChangesAction(
       }));
   } catch (err) {
     console.error('getWorkerAdvanceChangesAction error:', err);
+    return [];
+  }
+}
+
+export interface WorkerJamaChange {
+  id: string;
+  worker_id: string;
+  worker_name: string;
+  worker_phone?: string | null;
+  factory_id: string;
+  supervisor_id?: string | null;
+  supervisor_name: string;
+  old_jama: number;
+  new_jama: number;
+  difference: number;
+  reason: string;
+  created_at: string;
+}
+
+/**
+ * Record a direct change to worker's Jama Hain (unpaid salary).
+ */
+export async function recordWorkerJamaChangeAction(params: {
+  workerId: string;
+  factoryId?: string;
+  supervisorId?: string;
+  newJama: number;
+  reason?: string;
+}): Promise<{
+  success: boolean;
+  oldJama?: number;
+  newJama?: number;
+  difference?: number;
+  error?: string;
+}> {
+  try {
+    const { workerId } = params;
+    const cleanNewJama = Math.max(0, Math.round(Number(params.newJama) || 0));
+
+    if (!workerId) {
+      return { success: false, error: 'Worker ID is required.' };
+    }
+
+    const admin = createAdminClient();
+    let factoryId = params.factoryId;
+    let workerName = 'Worker';
+    let workerPhone: string | null = null;
+
+    const { data: worker } = await admin
+      .from('workers')
+      .select('id, name, phone, factory_id')
+      .eq('id', workerId)
+      .single();
+
+    if (!worker) {
+      return { success: false, error: 'Worker not found.' };
+    }
+
+    workerName = worker.name;
+    workerPhone = worker.phone;
+    factoryId = factoryId || worker.factory_id;
+
+    // Fetch current unpaid salary
+    const allWorkers = await getAllWorkersWithSalaryBalancesAction(factoryId || undefined);
+    const curWorker = allWorkers.find(w => w.worker_id === workerId);
+    const oldJama = curWorker ? (curWorker.unpaid_salary || 0) : 0;
+    const diff = cleanNewJama - oldJama;
+
+    let supervisorName = 'Supervisor';
+    if (params.supervisorId) {
+      const { data: sup } = await admin
+        .from('supervisors')
+        .select('name')
+        .eq('id', params.supervisorId)
+        .single();
+      if (sup?.name) supervisorName = sup.name;
+    }
+
+    const changeId = crypto.randomUUID();
+    const reasonText = params.reason?.trim() || 'Jama Hain (unpaid salary) updated by supervisor';
+
+    if (diff !== 0) {
+      if (diff > 0) {
+        // Increase worker unpaid salary balance via salary_earned
+        await insertSalaryLedgerEntry({
+          worker_id: workerId,
+          factory_id: factoryId || '',
+          type: 'salary_earned',
+          amount: diff,
+          period_month: 'Adjustment',
+          note: `Jama Hain adjustment (+₹${diff.toLocaleString('en-IN')}) • ${reasonText}`,
+          created_by: params.supervisorId || null,
+        });
+      } else {
+        // Decrease worker unpaid salary balance via advance_recovery
+        const reduceAmount = Math.abs(diff);
+        await insertSalaryLedgerEntry({
+          worker_id: workerId,
+          factory_id: factoryId || '',
+          type: 'advance_recovery',
+          amount: reduceAmount,
+          period_month: 'Adjustment',
+          note: `Jama Hain adjustment (-₹${reduceAmount.toLocaleString('en-IN')}) • ${reasonText}`,
+          created_by: params.supervisorId || null,
+        });
+      }
+    }
+
+    // Always log the change in worker_jama_changes in audit_log
+    await admin.from('audit_log').insert({
+      table_name: 'worker_jama_changes',
+      action: 'JAMA_CHANGE',
+      row_id: changeId,
+      new_data: {
+        id: changeId,
+        worker_id: workerId,
+        worker_name: workerName,
+        worker_phone: workerPhone,
+        factory_id: factoryId,
+        supervisor_id: params.supervisorId || null,
+        supervisor_name: supervisorName,
+        old_jama: oldJama,
+        new_jama: cleanNewJama,
+        difference: diff,
+        reason: reasonText,
+        created_at: new Date().toISOString(),
+      },
+      changed_by: params.supervisorId || null,
+      changed_at: new Date().toISOString(),
+    });
+
+    revalidatePath('/admin');
+    revalidatePath('/supervisor');
+    revalidatePath('/supervisor/workers');
+
+    return {
+      success: true,
+      oldJama,
+      newJama: cleanNewJama,
+      difference: diff,
+    };
+  } catch (err: any) {
+    console.error('recordWorkerJamaChangeAction exception:', err);
+    return { success: false, error: err.message || 'Failed to update Jama Hain.' };
+  }
+}
+
+/**
+ * Fetch all worker jama changes for tracking.
+ */
+export async function getWorkerJamaChangesAction(
+  factoryId?: string,
+  workerId?: string
+): Promise<WorkerJamaChange[]> {
+  try {
+    const admin = createAdminClient();
+    const { data: rows, error } = await admin
+      .from('audit_log')
+      .select('new_data')
+      .eq('table_name', 'worker_jama_changes')
+      .order('changed_at', { ascending: false });
+
+    if (error || !rows) return [];
+
+    return rows
+      .map(r => r.new_data as any)
+      .filter(item => {
+        if (!item) return false;
+        if (factoryId && factoryId !== 'all' && item.factory_id !== factoryId) return false;
+        if (workerId && item.worker_id !== workerId) return false;
+        return true;
+      })
+      .map(item => ({
+        id: item.id || crypto.randomUUID(),
+        worker_id: item.worker_id,
+        worker_name: item.worker_name || 'Worker',
+        worker_phone: item.worker_phone || null,
+        factory_id: item.factory_id,
+        supervisor_id: item.supervisor_id || null,
+        supervisor_name: item.supervisor_name || 'Supervisor',
+        old_jama: Number(item.old_jama || 0),
+        new_jama: Number(item.new_jama || 0),
+        difference: Number(item.difference || 0),
+        reason: item.reason || 'Jama Hain updated',
+        created_at: item.created_at || new Date().toISOString(),
+      }));
+  } catch (err) {
+    console.error('getWorkerJamaChangesAction error:', err);
     return [];
   }
 }

@@ -61,7 +61,8 @@ import {
   createAdvanceCorrectionRequestAction,
   recordWorkerAdvanceChangeAction,
   getWorkerAdvanceChangesAction,
-  WorkerAdvanceChange
+  WorkerAdvanceChange,
+  recordWorkerJamaChangeAction
 } from '@/app/actions/workers';
 import { getFactoryExpensesAction, logOnlineExpenseAction, FactoryExpense } from '@/app/actions/expenses';
 
@@ -145,6 +146,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const [hisaabToDate, setHisaabToDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
   const [hisaabTotalWages, setHisaabTotalWages] = useState<string>('');
   const [hisaabNewAdvance, setHisaabNewAdvance] = useState<string>('');
+  const [hisaabJamaHain, setHisaabJamaHain] = useState<string>('');
   const [hisaabCashAmount, setHisaabCashAmount] = useState<string>('');
   const [hisaabOnlineAmount, setHisaabOnlineAmount] = useState<string>('');
   const [hisaabPayCashNow, setHisaabPayCashNow] = useState<boolean>(false);
@@ -303,6 +305,30 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       queryClient.invalidateQueries({ queryKey: ['supervisor-balance', supervisorId] });
     } catch (err: any) {
       showToast('error', err.message || 'Failed to update advance.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleUpdateWorkerJama = async (workerId: string, newJamaVal: number, reason?: string) => {
+    try {
+      setActionLoading(true);
+      const res = await recordWorkerJamaChangeAction({
+        workerId,
+        factoryId,
+        supervisorId,
+        newJama: newJamaVal,
+        reason: reason || 'Jama Hain (unpaid salary) updated by supervisor',
+      });
+      if (!res.success) {
+        throw new Error(res.error || 'Failed to update Jama Hain.');
+      }
+      showToast('success', `Jama Hain updated to ${formatINR(newJamaVal)}.`);
+      queryClient.invalidateQueries({ queryKey: ['workers', factoryId] });
+      queryClient.invalidateQueries({ queryKey: ['supervisor-all-transactions'] });
+      queryClient.invalidateQueries({ queryKey: ['supervisor-balance', supervisorId] });
+    } catch (err: any) {
+      showToast('error', err.message || 'Failed to update Jama Hain.');
     } finally {
       setActionLoading(false);
     }
@@ -1766,6 +1792,18 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           });
         }
 
+        // Check if supervisor changed Jama Hain (unpaid salary)
+        const newJamaNum = hisaabJamaHain !== '' ? parseFloat(hisaabJamaHain) : undefined;
+        if (newJamaNum !== undefined && !isNaN(newJamaNum) && newJamaNum !== (targetWorker.unpaid_salary || 0)) {
+          await recordWorkerJamaChangeAction({
+            workerId,
+            factoryId: factoryId || targetWorker.factory_id,
+            supervisorId: supervisorId || undefined,
+            newJama: newJamaNum,
+            reason: 'Jama Hain (unpaid salary) updated during Hisaab',
+          });
+        }
+
         // Record optional bonus (separate from worker's advance)
         if (parsedBonus > 0) {
           await recordWorkerBonusAction({
@@ -1824,6 +1862,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           onlinePaid,
           note,
           photoUrl: hisaabPhotoUrl,
+          jamaHain: newJamaNum,
         });
 
         if (!res.success) {
@@ -1844,6 +1883,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
 
         setHisaabTotalWages('');
         setHisaabNewAdvance('');
+        setHisaabJamaHain('');
         setHisaabCashAmount('');
         setHisaabOnlineAmount('');
         setBonusAmount('');
@@ -2967,6 +3007,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                                   setHisaabWorkerId(w.worker_id);
                                   setHisaabWorkerSearch('');
                                   setHisaabNewAdvance(String(w.running_advance || 0));
+                                  setHisaabJamaHain(String(w.unpaid_salary || 0));
                                 }}
                                 className="w-full p-2.5 text-left flex items-center justify-between hover:bg-slate-50 active:bg-slate-100 transition-colors"
                               >
@@ -3057,6 +3098,42 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                                 type="button"
                                 disabled={actionLoading || hisaabNewAdvance === '' || Number(hisaabNewAdvance) === (curWorker.running_advance || 0)}
                                 onClick={() => handleUpdateWorkerAdvance(curWorker.worker_id, Number(hisaabNewAdvance))}
+                                className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-white text-xs font-bold rounded transition-colors"
+                              >
+                                Update
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Jama Hain (Unpaid Salary) & Change Option */}
+                          <div className="rounded-lg p-2.5 bg-emerald-50 border border-emerald-200 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-bold text-emerald-950 uppercase tracking-wider">
+                                Current Jama (Unpaid Salary)
+                              </span>
+                              <span className="text-xs font-black text-emerald-950 bg-emerald-200/90 px-2 py-0.5 rounded border border-emerald-300">
+                                {formatINR(curWorker.unpaid_salary || 0)}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2 pt-1.5 border-t border-emerald-200/70">
+                              <label htmlFor="hisaabJamaHain" className="text-xs font-bold text-emerald-950 shrink-0">Jama Hain:</label>
+                              <div className="relative flex-1">
+                                <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center text-emerald-700 text-xs font-bold pointer-events-none">₹</span>
+                                <input
+                                  id="hisaabJamaHain"
+                                  name="hisaabJamaHain"
+                                  type="number"
+                                  min="0"
+                                  value={hisaabJamaHain}
+                                  onChange={(e) => setHisaabJamaHain(e.target.value)}
+                                  placeholder={String(curWorker.unpaid_salary || 0)}
+                                  className="w-full rounded border border-emerald-300 pl-6 pr-2 py-1.5 text-xs text-slate-950 font-bold bg-white focus:ring-1 focus:ring-emerald-500"
+                                />
+                              </div>
+                              <button
+                                type="button"
+                                disabled={actionLoading || hisaabJamaHain === '' || Number(hisaabJamaHain) === (curWorker.unpaid_salary || 0)}
+                                onClick={() => handleUpdateWorkerJama(curWorker.worker_id, Number(hisaabJamaHain))}
                                 className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-white text-xs font-bold rounded transition-colors"
                               >
                                 Update
@@ -3239,6 +3316,10 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                       <div className="border-t border-slate-200 pt-1.5 flex justify-between items-center">
                         <span className="font-semibold text-slate-800">Current Worker Advance:</span>
                         <span className="font-bold text-amber-700">{formatINR(curAdv)}</span>
+                      </div>
+                      <div className="border-t border-slate-200 pt-1.5 flex justify-between items-center">
+                        <span className="font-semibold text-slate-800">Jama Hain:</span>
+                        <span className="font-bold text-emerald-700">{formatINR(Number(hisaabJamaHain !== '' ? hisaabJamaHain : curWorker?.unpaid_salary || 0))}</span>
                       </div>
                     </div>
                   );

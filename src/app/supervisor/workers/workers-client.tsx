@@ -18,7 +18,8 @@ import {
   recordWorkerHisaabAction,
   recordWorkerAdvanceChangeAction,
   recordWorkerBonusAction,
-  createAdvanceCorrectionRequestAction
+  createAdvanceCorrectionRequestAction,
+  recordWorkerJamaChangeAction
 } from '@/app/actions/workers';
 import { compressImage } from '@/lib/image-compressor';
 import { CameraCaptureModal } from '@/components/camera-capture-modal';
@@ -107,6 +108,7 @@ export function SupervisorWorkersClientPage() {
   const [hisaabToDate, setHisaabToDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
   const [hisaabTotalWages, setHisaabTotalWages] = useState<string>('');
   const [hisaabNewAdvance, setHisaabNewAdvance] = useState<string>('');
+  const [hisaabJamaHain, setHisaabJamaHain] = useState<string>('');
   const [hisaabBonusAmount, setHisaabBonusAmount] = useState<string>('');
   const [hisaabBonusNote, setHisaabBonusNote] = useState<string>('');
   const [hisaabBonusPaymentMethod, setHisaabBonusPaymentMethod] = useState<'cash' | 'online'>('cash');
@@ -235,6 +237,18 @@ export function SupervisorWorkersClientPage() {
         } catch {}
       }
 
+      // Check if supervisor changed Jama Hain (unpaid salary)
+      const newJamaNum = hisaabJamaHain !== '' ? parseFloat(hisaabJamaHain) : undefined;
+      if (newJamaNum !== undefined && !isNaN(newJamaNum) && newJamaNum !== (hisaabWorker.unpaid_salary || 0)) {
+        await recordWorkerJamaChangeAction({
+          workerId: hisaabWorker.worker_id,
+          factoryId,
+          supervisorId: supervisor?.id,
+          newJama: newJamaNum,
+          reason: 'Jama Hain (unpaid salary) updated during Hisaab',
+        });
+      }
+
       const res = await recordWorkerHisaabAction({
         workerId: hisaabWorker.worker_id,
         factoryId,
@@ -247,6 +261,7 @@ export function SupervisorWorkersClientPage() {
         onlinePaid: onlineNum,
         note: hisaabNote || undefined,
         photoUrl: hisaabPhotoUrl,
+        jamaHain: newJamaNum,
       });
 
       if (!res.success) {
@@ -258,6 +273,7 @@ export function SupervisorWorkersClientPage() {
       setHisaabWorker(null);
       setHisaabTotalWages('');
       setHisaabNewAdvance('');
+      setHisaabJamaHain('');
       setHisaabBonusAmount('');
       setHisaabBonusNote('');
       setHisaabCashAmount('');
@@ -1097,6 +1113,7 @@ export function SupervisorWorkersClientPage() {
                             setHisaabWorker(w);
                             setHisaabTotalWages('');
                             setHisaabNewAdvance(String(w.running_advance || 0));
+                            setHisaabJamaHain(String(w.unpaid_salary || 0));
                             setHisaabBonusAmount('');
                             setHisaabBonusNote('');
                             const d = new Date();
@@ -1281,6 +1298,28 @@ export function SupervisorWorkersClientPage() {
                     value={hisaabNewAdvance}
                     onChange={(e) => setHisaabNewAdvance(e.target.value)}
                     placeholder={String(hisaabWorker.running_advance || 0)}
+                    disabled={hisaabLoading}
+                    className="w-full rounded border border-slate-300 pl-6 pr-2 py-1 text-xs text-slate-950 font-bold bg-white focus:ring-1 focus:ring-slate-900"
+                  />
+                </div>
+              </div>
+              <div className="flex items-center justify-between pt-1 border-t border-slate-200">
+                <span className="text-xs font-bold text-emerald-950 uppercase tracking-wider">Current Unpaid:</span>
+                <span className="text-xs font-black text-emerald-950 bg-emerald-100 px-2 py-0.5 rounded border border-emerald-300">
+                  {formatINR(hisaabWorker.unpaid_salary || 0)}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 pt-1 border-t border-slate-200">
+                <label htmlFor="hisaabJamaHainModal" className="text-xs font-bold text-slate-800 shrink-0">Jama Hain:</label>
+                <div className="relative flex-1">
+                  <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center text-slate-500 text-xs font-bold pointer-events-none">₹</span>
+                  <input
+                    id="hisaabJamaHainModal"
+                    type="number"
+                    min="0"
+                    value={hisaabJamaHain}
+                    onChange={(e) => setHisaabJamaHain(e.target.value)}
+                    placeholder={String(hisaabWorker.unpaid_salary || 0)}
                     disabled={hisaabLoading}
                     className="w-full rounded border border-slate-300 pl-6 pr-2 py-1 text-xs text-slate-950 font-bold bg-white focus:ring-1 focus:ring-slate-900"
                   />
