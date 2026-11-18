@@ -877,7 +877,8 @@ export function AdminDashboard({
   };
 
   // --- 3. Combine and Filter Ledger Entries (Transactions + Expenses) ---
-  const filteredLedger = useMemo(() => [
+  const filteredLedger = useMemo(() => {
+    return [
     ...localTransactions
       .filter(tx => {
         if (tx.type === 'supervisor_to_worker' && (tx.to_work?.active === false || tx.to_work?.name === 'Deleted Worker')) {
