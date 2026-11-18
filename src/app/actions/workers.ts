@@ -781,6 +781,7 @@ export async function recordWorkerHisaabAction(params: {
           workerId,
           factoryId,
           supervisorId: params.supervisorId,
+          supervisorName,
           amount: Number(params.bonusAmount),
           note: params.bonusReason?.trim() || `Bonus (Hisaab: ${periodStr})`,
           paymentMethod: params.bonusPaymentMethod || 'cash',
@@ -880,7 +881,8 @@ export interface WorkerOnlineAdvance {
 
 export async function recordWorkerOnlineAdvanceAction(params: {
   workerId: string;
-  supervisorId: string;
+  supervisorId?: string | null;
+  supervisorName?: string | null;
   factoryId?: string;
   amount: number;
   note?: string;
@@ -888,18 +890,21 @@ export async function recordWorkerOnlineAdvanceAction(params: {
 }): Promise<{ success: boolean; id?: string; error?: string }> {
   try {
     const { workerId, supervisorId, amount, photoUrl } = params;
-    const cleanAmount = Math.max(1, Math.round(Number(amount) || 0));
+    const cleanAmount = Math.round(Number(amount) || 0);
     if (!workerId) return { success: false, error: 'Worker is required.' };
-    if (cleanAmount <= 0) return { success: false, error: 'Valid amount is required.' };
+    if (!Number.isFinite(cleanAmount) || cleanAmount <= 0) return { success: false, error: 'Valid amount is required.' };
 
+    const cleanSupervisorName = params.supervisorName?.trim();
     const admin = createAdminClient();
     const [workerRes, supRes] = await Promise.all([
       admin.from('workers').select('name, factory_id').eq('id', workerId).single(),
-      admin.from('supervisors').select('name').eq('id', supervisorId).single(),
+      supervisorId && !cleanSupervisorName
+        ? admin.from('supervisors').select('name').eq('id', supervisorId).single()
+        : Promise.resolve({ data: null, error: null }),
     ]);
 
     const workerName = workerRes.data?.name || 'Worker';
-    const supervisorName = supRes.data?.name || 'Supervisor';
+    const supervisorName = cleanSupervisorName || supRes.data?.name || 'Supervisor';
     const effectiveFactoryId = params.factoryId || workerRes.data?.factory_id || '';
 
     const id = crypto.randomUUID();
@@ -910,7 +915,7 @@ export async function recordWorkerOnlineAdvanceAction(params: {
       worker_id: workerId,
       worker_name: workerName,
       factory_id: effectiveFactoryId,
-      supervisor_id: supervisorId,
+      supervisor_id: supervisorId || null,
       supervisor_name: supervisorName,
       amount: cleanAmount,
       note: cleanNote,
@@ -924,7 +929,7 @@ export async function recordWorkerOnlineAdvanceAction(params: {
       action: 'ONLINE_ADVANCE',
       row_id: id,
       new_data: advancePayload,
-      changed_by: supervisorId,
+      changed_by: supervisorId || null,
       changed_at: new Date().toISOString(),
     });
 
@@ -984,7 +989,8 @@ export interface WorkerBonus {
 
 export async function recordWorkerBonusAction(params: {
   workerId: string;
-  supervisorId: string;
+  supervisorId?: string | null;
+  supervisorName?: string | null;
   factoryId?: string;
   amount: number;
   paymentMethod: 'cash' | 'online';
@@ -994,34 +1000,38 @@ export async function recordWorkerBonusAction(params: {
 }): Promise<{ success: boolean; id?: string; error?: string }> {
   try {
     const { workerId, supervisorId, amount, paymentMethod, photoUrl, cashTxId } = params;
-    const cleanAmount = Math.max(1, Math.round(Number(amount) || 0));
+    const cleanAmount = Math.round(Number(amount) || 0);
     if (!workerId) return { success: false, error: 'Worker is required.' };
-    if (cleanAmount <= 0) return { success: false, error: 'Valid amount is required.' };
+    if (!Number.isFinite(cleanAmount) || cleanAmount <= 0) return { success: false, error: 'Valid amount is required.' };
 
+    const cleanPaymentMethod = paymentMethod === 'online' ? 'online' : 'cash';
+    const cleanSupervisorName = params.supervisorName?.trim();
     const admin = createAdminClient();
     const [workerRes, supRes] = await Promise.all([
       admin.from('workers').select('name, factory_id').eq('id', workerId).single(),
-      admin.from('supervisors').select('name').eq('id', supervisorId).single(),
+      supervisorId && !cleanSupervisorName
+        ? admin.from('supervisors').select('name').eq('id', supervisorId).single()
+        : Promise.resolve({ data: null, error: null }),
     ]);
 
     const workerName = workerRes.data?.name || 'Worker';
-    const supervisorName = supRes.data?.name || 'Supervisor';
+    const supervisorName = cleanSupervisorName || supRes.data?.name || 'Supervisor';
     const effectiveFactoryId = params.factoryId || workerRes.data?.factory_id || '';
 
     const id = crypto.randomUUID();
-    const cleanNote = params.note?.trim() || `Bonus (${paymentMethod === 'online' ? 'Online' : 'Cash'})`;
+    const cleanNote = params.note?.trim() || `Bonus (${cleanPaymentMethod === 'online' ? 'Online' : 'Cash'})`;
 
     const bonusPayload: WorkerBonus = {
       id,
       worker_id: workerId,
       worker_name: workerName,
       factory_id: effectiveFactoryId,
-      supervisor_id: supervisorId,
+      supervisor_id: supervisorId || null,
       supervisor_name: supervisorName,
       amount: cleanAmount,
       note: cleanNote,
       photo_url: photoUrl || null,
-      payment_method: paymentMethod,
+      payment_method: cleanPaymentMethod,
       cash_tx_id: cashTxId || null,
       created_at: new Date().toISOString(),
     };
@@ -1031,7 +1041,7 @@ export async function recordWorkerBonusAction(params: {
       action: 'BONUS',
       row_id: id,
       new_data: bonusPayload,
-      changed_by: supervisorId,
+      changed_by: supervisorId || null,
       changed_at: new Date().toISOString(),
     });
 

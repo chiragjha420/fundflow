@@ -1521,6 +1521,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           await recordWorkerBonusAction({
             workerId: targetWorker.worker_id,
             supervisorId: supervisorId!,
+            supervisorName: supervisor?.name,
             factoryId,
             amount,
             paymentMethod: isOnline ? 'online' : 'cash',
@@ -1532,6 +1533,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           await recordWorkerOnlineAdvanceAction({
             workerId: targetWorker.worker_id,
             supervisorId: supervisorId!,
+            supervisorName: supervisor?.name,
             factoryId,
             amount,
             note: finalNote,
@@ -1810,6 +1812,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
             workerId,
             factoryId: factoryId || targetWorker.factory_id,
             supervisorId: supervisorId || undefined,
+            supervisorName: supervisor?.name,
             amount: parsedBonus,
             note: cleanBonusNote || 'Bonus awarded during Hisaab',
             paymentMethod: bonusPaymentMethod,
@@ -3722,38 +3725,37 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
               </div>
             )}
 
-            <button
-              type="submit"
-              disabled={
-                actionLoading || 
-                (activeTab === 'advance' && (!selectedWorkerId || !disburseAmount)) ||
-                (activeTab === 'bonus' && (!bonusWorkerId || !bonusAmount || parseFloat(bonusAmount) <= 0)) ||
-                (activeTab === 'hisaab' && (!hisaabWorkerId || (parseFloat(hisaabTotalWages || '0') <= 0)))
-              }
-              className="w-full flex justify-center items-center rounded-md bg-slate-900 py-3 text-sm font-semibold text-white shadow hover:bg-slate-800 disabled:opacity-50 min-h-[46px] gap-2 transition-all"
-            >
-              {actionLoading ? (
-                <RefreshCw className="h-4 w-4 animate-spin" />
-              ) : activeTab === 'advance' ? (
-                <span>
-                  Disburse {advancePaymentMethod === 'online' ? 'Online' : 'Cash'} Advance {disburseAmount ? formatINR(Number(disburseAmount)) : ''}
-                </span>
-              ) : activeTab === 'bonus' ? (
-                <span>
-                  Award {bonusPaymentMethod === 'online' ? 'Online' : 'Cash'} Bonus {bonusAmount ? formatINR(Number(bonusAmount)) : ''}
-                </span>
-              ) : activeTab === 'hisaab' ? (
-                <span>
-                  Save Hisaab {hisaabTotalWages ? `(${formatINR(Number(hisaabTotalWages))})` : ''}
-                </span>
-              ) : activeTab === 'expense' ? (
-                <span>
-                  Log {expensePaymentMethod === 'online' ? 'Online Bank' : 'Cash'} Kharcha
-                </span>
-              ) : (
-                <span>Submit Entry</span>
-              )}
-            </button>
+            {activeTab !== 'advance_changes' && (
+              <button
+                type="submit"
+                disabled={
+                  actionLoading || 
+                  (activeTab === 'advance' && (!selectedWorkerId || !disburseAmount)) ||
+                  (activeTab === 'hisaab' && (!hisaabWorkerId || (parseFloat(hisaabTotalWages || '0') <= 0)))
+                }
+                className="w-full flex justify-center items-center rounded-md bg-slate-900 py-3 text-sm font-semibold text-white shadow hover:bg-slate-800 disabled:opacity-50 min-h-[46px] gap-2 transition-all"
+              >
+                {actionLoading ? (
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                ) : activeTab === 'advance' ? (
+                  <span>
+                    Disburse {advancePaymentMethod === 'online' ? 'Online' : 'Cash'} Advance {disburseAmount ? formatINR(Number(disburseAmount)) : ''}
+                  </span>
+                ) : activeTab === 'hisaab' ? (
+                  <span>
+                    Save Hisaab {hisaabTotalWages ? `(${formatINR(Number(hisaabTotalWages))})` : ''}
+                  </span>
+                ) : activeTab === 'expense' ? (
+                  <span>
+                    Log {expensePaymentMethod === 'online' ? 'Online Bank' : 'Cash'} Kharcha
+                  </span>
+                ) : activeTab === 'transfer' ? (
+                  <span>Transfer Cash</span>
+                ) : (
+                  <span>Submit Entry</span>
+                )}
+              </button>
+            )}
           </form>
         </div>
       </div>

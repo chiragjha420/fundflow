@@ -197,6 +197,7 @@ export function SupervisorWorkersClientPage() {
           workerId: hisaabWorker.worker_id,
           factoryId,
           supervisorId: supervisor?.id,
+          supervisorName: supervisor?.name,
           amount: parsedBonus,
           note: hisaabBonusNote.trim() || 'Bonus awarded during Hisaab',
           paymentMethod: hisaabBonusPaymentMethod,
