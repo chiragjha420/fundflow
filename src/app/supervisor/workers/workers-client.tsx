@@ -12,9 +12,7 @@ import {
   getFactoryWorkerDisbursementsAction,
   getWorkerDisbursementsAction, 
   deleteWorkerServer,
-  creditWorkerSalaryAction,
   recoverWorkerAdvanceAction,
-  addWorkerSalaryWithDeductionAction,
   recordWorkerHisaabAction,
   recordWorkerAdvanceChangeAction,
   recordWorkerBonusAction,
@@ -112,8 +110,7 @@ export function SupervisorWorkersClientPage() {
   const [hisaabBonusAmount, setHisaabBonusAmount] = useState<string>('');
   const [hisaabBonusNote, setHisaabBonusNote] = useState<string>('');
   const [hisaabBonusPaymentMethod, setHisaabBonusPaymentMethod] = useState<'cash' | 'online'>('cash');
-  const [hisaabCashAmount, setHisaabCashAmount] = useState<string>('');
-  const [hisaabOnlineAmount, setHisaabOnlineAmount] = useState<string>('');
+  const [hisaabPaymentMethod, setHisaabPaymentMethod] = useState<'cash' | 'online'>('cash');
   const [hisaabNote, setHisaabNote] = useState<string>('');
   const [hisaabPhotoFile, setHisaabPhotoFile] = useState<File | null>(null);
   const [hisaabPhotoPreview, setHisaabPhotoPreview] = useState<string | null>(null);
@@ -172,8 +169,8 @@ export function SupervisorWorkersClientPage() {
       return;
     }
 
-    const cashNum = Math.max(0, parseFloat(hisaabCashAmount || '0'));
-    const onlineNum = Math.max(0, parseFloat(hisaabOnlineAmount || '0'));
+    const cashNum = hisaabPaymentMethod === 'cash' ? wagesNum : 0;
+    const onlineNum = hisaabPaymentMethod === 'online' ? wagesNum : 0;
     const parsedBonus = parseFloat(hisaabBonusAmount) || 0;
 
     setHisaabLoading(true);
@@ -277,8 +274,6 @@ export function SupervisorWorkersClientPage() {
       setHisaabJamaHain('');
       setHisaabBonusAmount('');
       setHisaabBonusNote('');
-      setHisaabCashAmount('');
-      setHisaabOnlineAmount('');
       setHisaabNote('');
       setHisaabPhotoFile(null);
       if (hisaabPhotoPreview && hisaabPhotoPreview.startsWith('blob:')) {
@@ -1369,9 +1364,31 @@ export function SupervisorWorkersClientPage() {
 
               {/* Kitne paise diye (INR) */}
               <div>
-                <label htmlFor="hisaabTotalWagesModal" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                  Kitne paise diye (INR)
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label htmlFor="hisaabTotalWagesModal" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                    Kitne paise diye (INR)
+                  </label>
+                  <div className="flex items-center gap-1 bg-slate-200/80 p-0.5 rounded">
+                    <button
+                      type="button"
+                      onClick={() => setHisaabPaymentMethod('cash')}
+                      className={`text-[11px] font-bold px-2 py-0.5 rounded transition-all ${
+                        hisaabPaymentMethod === 'cash' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600'
+                      }`}
+                    >
+                      Cash
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setHisaabPaymentMethod('online')}
+                      className={`text-[11px] font-bold px-2 py-0.5 rounded transition-all ${
+                        hisaabPaymentMethod === 'online' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600'
+                      }`}
+                    >
+                      Online By Office
+                    </button>
+                  </div>
+                </div>
                 <div className="relative">
                   <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 text-sm font-bold pointer-events-none">₹</span>
                   <input
@@ -1461,145 +1478,17 @@ export function SupervisorWorkersClientPage() {
                   <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 space-y-1 text-xs">
                     <div className="flex justify-between items-center text-slate-700">
                       <span>Kitne paise diye:</span>
-                      <span className="font-bold text-slate-900">{formatINR(wagesNum)}</span>
+                      <span className="font-bold text-slate-900">
+                        {formatINR(wagesNum)} ({hisaabPaymentMethod === 'cash' ? 'Cash' : 'Online By Office'})
+                      </span>
                     </div>
                     <div className="border-t border-slate-200 pt-1 flex justify-between items-center">
                       <span className="font-semibold text-slate-800">Current Advance:</span>
                       <span className="font-bold text-amber-700">{formatINR(hisaabWorker.running_advance || 0)}</span>
                     </div>
-                  </div>
-                );
-              })()}
-
-              {/* Worker Payout Distribution (Cash vs Online By Office) */}
-              {(() => {
-                const wagesNum = parseFloat(hisaabTotalWages) || 0;
-                if (wagesNum <= 0) return null;
-
-                const cashNum = parseFloat(hisaabCashAmount) || 0;
-                const onlineNum = parseFloat(hisaabOnlineAmount) || 0;
-                const totalPayout = cashNum + onlineNum;
-
-                return (
-                  <div className="rounded-lg p-3 bg-slate-50 border border-slate-200 space-y-2.5">
-                    <div className="flex items-start justify-between gap-2">
-                      <label className="block text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                        <CreditCard className="h-4 w-4 text-indigo-600" />
-                        <span>Payout Distribution</span>
-                      </label>
-                      <span className="text-xs font-black text-slate-900 shrink-0">
-                        {formatINR(wagesNum)}
-                      </span>
-                    </div>
-
-                    {/* 1-Tap Preset Chips */}
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setHisaabCashAmount(String(wagesNum));
-                          setHisaabOnlineAmount('0');
-                        }}
-                        className="text-xs px-2.5 py-1 rounded border border-emerald-300 bg-emerald-50 text-emerald-900 font-bold hover:bg-emerald-100 transition-colors"
-                      >
-                        All in Cash ({formatINR(wagesNum)})
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setHisaabCashAmount('0');
-                          setHisaabOnlineAmount(String(wagesNum));
-                        }}
-                        className="text-xs px-2.5 py-1 rounded border border-indigo-300 bg-indigo-50 text-indigo-900 font-bold hover:bg-indigo-100 transition-colors"
-                      >
-                        All Online By Office ({formatINR(wagesNum)})
-                      </button>
-                      {wagesNum > 1000 && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const half = Math.floor(wagesNum / 2);
-                            setHisaabCashAmount(String(half));
-                            setHisaabOnlineAmount(String(wagesNum - half));
-                          }}
-                          className="text-xs px-2.5 py-1 rounded border border-slate-300 bg-white text-slate-700 font-medium hover:bg-slate-50 transition-colors"
-                        >
-                          Split Half
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setHisaabCashAmount('0');
-                          setHisaabOnlineAmount('0');
-                        }}
-                        className="text-xs px-2.5 py-1 rounded border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition-colors"
-                      >
-                        No Payout Now (₹0)
-                      </button>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-0.5">
-                      {/* Cash Handover Input */}
-                      <div className="space-y-1">
-                        <label htmlFor="hisaabCashAmountModal" className="block text-xs font-bold text-slate-800">
-                          Cash Handover (INR)
-                        </label>
-                        <div className="relative rounded shadow-xs">
-                          <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-                            <span className="text-slate-500 text-sm font-bold">₹</span>
-                          </div>
-                          <input
-                            id="hisaabCashAmountModal"
-                            type="number"
-                            min="0"
-                            value={hisaabCashAmount}
-                            onChange={(e) => setHisaabCashAmount(e.target.value)}
-                            disabled={hisaabLoading}
-                            placeholder="0"
-                            className="block w-full rounded-lg border border-slate-300 pl-7 pr-3 py-2 text-slate-950 text-sm font-bold bg-white focus:ring-2 focus:ring-slate-500 min-h-[44px]"
-                          />
-                        </div>
-                      </div>
-
-                      {/* Online By Office Input */}
-                      <div className="space-y-1">
-                        <label htmlFor="hisaabOnlineAmountModal" className="block text-xs font-bold text-indigo-950 flex items-center gap-1">
-                          <QrCode className="h-3.5 w-3.5 text-indigo-600" />
-                          <span>Online By Office (INR)</span>
-                        </label>
-                        <div className="relative rounded shadow-xs">
-                          <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-                            <span className="text-indigo-500 text-sm font-bold">₹</span>
-                          </div>
-                          <input
-                            id="hisaabOnlineAmountModal"
-                            type="number"
-                            min="0"
-                            value={hisaabOnlineAmount}
-                            onChange={(e) => setHisaabOnlineAmount(e.target.value)}
-                            disabled={hisaabLoading}
-                            placeholder="0"
-                            className="block w-full rounded-lg border border-indigo-300 pl-7 pr-3 py-2 text-slate-950 text-sm font-bold bg-white focus:ring-2 focus:ring-indigo-500 min-h-[44px]"
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Summary Row */}
-                    <div className="bg-white rounded border border-slate-200 p-2.5 text-xs space-y-1">
-                      <div className="flex justify-between items-center text-slate-600">
-                        <span>Cash Handover:</span>
-                        <span className="font-bold text-slate-900">{formatINR(cashNum)}</span>
-                      </div>
-                      <div className="flex justify-between items-center text-indigo-700">
-                        <span>Online By Office:</span>
-                        <span className="font-bold">{formatINR(onlineNum)}</span>
-                      </div>
-                      <div className="border-t border-slate-100 pt-1 flex justify-between items-center font-bold">
-                        <span className="text-slate-800">Total Payout:</span>
-                        <span className="text-slate-950">{formatINR(totalPayout)}</span>
-                      </div>
+                    <div className="border-t border-slate-200 pt-1 flex justify-between items-center">
+                      <span className="font-semibold text-slate-800">Jama Hain:</span>
+                      <span className="font-bold text-emerald-700">{formatINR(Number(hisaabJamaHain !== '' ? hisaabJamaHain : hisaabWorker?.unpaid_salary || 0))}</span>
                     </div>
                   </div>
                 );
@@ -1681,7 +1570,7 @@ export function SupervisorWorkersClientPage() {
                   <RefreshCw className="h-3.5 w-3.5 animate-spin" />
                 ) : (
                   <span>
-                    Save Hisaab
+                    Save Hisaab {hisaabTotalWages ? `(${formatINR(Number(hisaabTotalWages))} • ${hisaabPaymentMethod === 'cash' ? 'Cash' : 'Online By Office'})` : ''}
                   </span>
                 )}
               </button>

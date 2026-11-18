@@ -7,7 +7,8 @@ import {
   getSalaryLedgerEntries, 
   getWorkerHisaabRecordsAction, 
   getWorkerOnlineAdvancesAction,
-  getWorkerBonusesAction
+  getWorkerBonusesAction,
+  getWorkerAdvanceChangesAction
 } from '@/app/actions/workers';
 import { getFactoryExpensesAction } from '@/app/actions/expenses';
 
@@ -28,6 +29,7 @@ export default async function AdminDashboardPage() {
     hisaabRecords,
     onlineAdvances,
     bonuses,
+    advanceChanges,
   ] = await Promise.all([
     supabase
       .from('factories')
@@ -49,6 +51,7 @@ export default async function AdminDashboardPage() {
     getWorkerHisaabRecordsAction(),
     getWorkerOnlineAdvancesAction(),
     getWorkerBonusesAction(),
+    getWorkerAdvanceChangesAction(),
   ]);
 
   return (
@@ -63,6 +66,7 @@ export default async function AdminDashboardPage() {
       hisaabRecords={hisaabRecords || []}
       onlineAdvances={onlineAdvances || []}
       bonuses={bonuses || []}
+      advanceChanges={advanceChanges || []}
     />
   );
 }

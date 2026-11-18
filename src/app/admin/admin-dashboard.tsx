@@ -55,7 +55,8 @@ import {
   getAdvanceCorrectionRequestsAction,
   reviewAdvanceCorrectionAction,
   AdvanceCorrectionRequest,
-  getAllWorkersWithSalaryBalancesAction
+  getAllWorkersWithSalaryBalancesAction,
+  WorkerAdvanceChange
 } from '@/app/actions/workers';
 
 interface Factory {
@@ -116,6 +117,7 @@ interface AdminDashboardProps {
   hisaabRecords?: any[];
   onlineAdvances?: any[];
   bonuses?: WorkerBonus[];
+  advanceChanges?: WorkerAdvanceChange[];
 }
 
 export function AdminDashboard({
@@ -129,6 +131,7 @@ export function AdminDashboard({
   hisaabRecords = [],
   onlineAdvances = [],
   bonuses = [],
+  advanceChanges = [],
 }: AdminDashboardProps) {
   const [formError, setFormError] = useState<string | null>(null);
   const [formSuccess, setFormSuccess] = useState(false);
@@ -426,6 +429,25 @@ export function AdminDashboard({
   const [bonusSearchQuery, setBonusSearchQuery] = useState<string>('');
   const [bonusFactoryFilter, setBonusFactoryFilter] = useState<string>('all');
   const [isLedgerLogCollapsed, setIsLedgerLogCollapsed] = useState<boolean>(false);
+
+  // Worker Advance Changes Section State (Admin Only)
+  const [isAdvanceLogCollapsed, setIsAdvanceLogCollapsed] = useState<boolean>(true);
+  const [advanceLogSearchQuery, setAdvanceLogSearchQuery] = useState<string>('');
+  const [advanceLogFactoryFilter, setAdvanceLogFactoryFilter] = useState<string>('all');
+
+  const filteredAdvanceChanges = useMemo(() => {
+    return (advanceChanges || []).filter(c => {
+      if (advanceLogFactoryFilter !== 'all' && c.factory_id !== advanceLogFactoryFilter) return false;
+      if (!advanceLogSearchQuery.trim()) return true;
+      const q = advanceLogSearchQuery.toLowerCase();
+      return (
+        c.worker_name.toLowerCase().includes(q) ||
+        (c.supervisor_name && c.supervisor_name.toLowerCase().includes(q)) ||
+        (c.reason && c.reason.toLowerCase().includes(q)) ||
+        (c.worker_phone && c.worker_phone.includes(q))
+      );
+    });
+  }, [advanceChanges, advanceLogFactoryFilter, advanceLogSearchQuery]);
 
   // Local Workers state for instantaneous optimistic updates
   const [localWorkers, setLocalWorkers] = useState<FactoryWorkerBalance[]>(workers);
@@ -3177,6 +3199,149 @@ export function AdminDashboard({
       </>
     )}
   </div>
+
+      {/* Worker Advance Changes Log Section (Admin Only) */}
+      <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">
+        {/* Header */}
+        <div 
+          onClick={() => setIsAdvanceLogCollapsed(prev => !prev)}
+          className="px-5 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between flex-wrap gap-2 cursor-pointer hover:bg-slate-100/60 transition-colors select-none touch-manipulation"
+        >
+          <div className="flex items-center gap-2">
+            <History className="h-5 w-5 text-slate-600 pointer-events-none" />
+            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-900 pointer-events-none">Worker Advance Changes Log</h2>
+            <span className="text-xs text-slate-500 font-medium pointer-events-none">({filteredAdvanceChanges.length} changes tracked)</span>
+          </div>
+
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsAdvanceLogCollapsed(prev => !prev);
+            }}
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-xs hover:bg-slate-50 transition-colors min-h-[34px] touch-manipulation select-none"
+          >
+            {isAdvanceLogCollapsed ? (
+              <>
+                <ChevronDown className="h-3.5 w-3.5 pointer-events-none" />
+                <span className="pointer-events-none">Expand Log</span>
+              </>
+            ) : (
+              <>
+                <ChevronUp className="h-3.5 w-3.5 pointer-events-none" />
+                <span className="pointer-events-none">Collapse Log</span>
+              </>
+            )}
+          </button>
+        </div>
+
+        {!isAdvanceLogCollapsed && (
+          <>
+            {/* Filter Bar */}
+            <div className="px-5 py-3 border-b border-slate-200 bg-slate-50/70">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {/* Search */}
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={advanceLogSearchQuery}
+                    onChange={(e) => setAdvanceLogSearchQuery(e.target.value)}
+                    placeholder="Search worker, supervisor, reason..."
+                    className="w-full pl-9 pr-3 py-2 text-xs rounded-md border border-slate-300 bg-white focus:outline-none focus:ring-1 focus:ring-slate-400 min-h-[38px]"
+                  />
+                </div>
+
+                {/* Factory Filter */}
+                <div>
+                  <select
+                    value={advanceLogFactoryFilter}
+                    onChange={(e) => setAdvanceLogFactoryFilter(e.target.value)}
+                    className="w-full px-3 py-2 text-xs rounded-md border border-slate-300 bg-white focus:outline-none focus:ring-1 focus:ring-slate-400 min-h-[38px] font-medium"
+                  >
+                    <option value="all">All Factories</option>
+                    {factories.map((f) => (
+                      <option key={f.id} value={f.id}>{f.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* Changes Table */}
+            <div className="overflow-x-auto">
+              {filteredAdvanceChanges.length === 0 ? (
+                <div className="p-8 text-center text-xs text-slate-500">
+                  {advanceLogSearchQuery || advanceLogFactoryFilter !== 'all' ? 'No matching advance changes found.' : 'No advance changes recorded yet.'}
+                </div>
+              ) : (
+                <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
+                  <thead className="bg-slate-50 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                    <tr>
+                      <th className="px-5 py-3">Date & Time</th>
+                      <th className="px-5 py-3">Worker</th>
+                      <th className="px-5 py-3">Factory</th>
+                      <th className="px-5 py-3">Changed By</th>
+                      <th className="px-5 py-3 text-right">Old Advance</th>
+                      <th className="px-5 py-3 text-right">New Advance</th>
+                      <th className="px-5 py-3 text-center">Difference</th>
+                      <th className="px-5 py-3">Reason / Remarks</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {filteredAdvanceChanges.map((change) => {
+                      const factory = factories.find(f => f.id === change.factory_id);
+                      return (
+                        <tr key={change.id} className="hover:bg-slate-50/70 transition-colors">
+                          <td className="px-5 py-3 text-slate-500 whitespace-nowrap font-medium">
+                            {new Date(change.created_at).toLocaleString('en-IN', {
+                              day: 'numeric',
+                              month: 'short',
+                              year: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </td>
+                          <td className="px-5 py-3 whitespace-nowrap">
+                            <span className="font-bold text-slate-900 block">{change.worker_name}</span>
+                            {change.worker_phone && <span className="text-[11px] text-slate-400">{change.worker_phone}</span>}
+                          </td>
+                          <td className="px-5 py-3 text-slate-600 whitespace-nowrap font-medium">
+                            {factory?.name || 'Factory'}
+                          </td>
+                          <td className="px-5 py-3 text-slate-700 whitespace-nowrap font-medium">
+                            {change.supervisor_name || 'Supervisor'}
+                          </td>
+                          <td className="px-5 py-3 text-right text-slate-400 line-through whitespace-nowrap">
+                            {formatINR(change.old_advance)}
+                          </td>
+                          <td className="px-5 py-3 text-right font-black text-slate-900 whitespace-nowrap">
+                            {formatINR(change.new_advance)}
+                          </td>
+                          <td className="px-5 py-3 text-center whitespace-nowrap">
+                            <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-bold ${
+                              change.difference > 0
+                                ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                                : change.difference < 0
+                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                : 'bg-slate-100 text-slate-600'
+                            }`}>
+                              {change.difference > 0 ? `+${formatINR(change.difference)}` : formatINR(change.difference)}
+                            </span>
+                          </td>
+                          <td className="px-5 py-3 text-slate-600 text-xs max-w-xs truncate">
+                            {change.reason || '-'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </>
+        )}
+      </div>
 
       {/* Full-Screen Handover Photo Viewer Modal */}
       {adminViewingPhotoUrl && (

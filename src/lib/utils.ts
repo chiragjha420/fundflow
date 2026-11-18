@@ -34,6 +34,7 @@ export function parseHandoverNote(rawNote: string | null | undefined): { note: s
     .replace(/\[handover_photo:https?:\/\/[^\]]+\]/g, '')
     .replace(/\[TYPE:[^\]]+\]/gi, '')
     .replace(/\[CATEGORY:[^\]]+\]/gi, '')
+    .replace(/\[HISAAB_[A-Z_]+\]/gi, '')
     .trim();
   return { note: cleanNote, photoUrl, category };
 }

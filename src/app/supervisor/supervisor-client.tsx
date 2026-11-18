@@ -35,8 +35,6 @@ import {
   Briefcase, 
   Coins, 
   CalendarDays, 
-  QrCode, 
-  CreditCard,
   Utensils,
   Gift,
   History
@@ -60,8 +58,6 @@ import {
   WorkerBonus,
   createAdvanceCorrectionRequestAction,
   recordWorkerAdvanceChangeAction,
-  getWorkerAdvanceChangesAction,
-  WorkerAdvanceChange,
   recordWorkerJamaChangeAction
 } from '@/app/actions/workers';
 import { getFactoryExpensesAction, logOnlineExpenseAction, FactoryExpense } from '@/app/actions/expenses';
@@ -125,9 +121,10 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const queryClient = useQueryClient();
 
   // Active Tab for Quick Actions
-  const [activeTab, setActiveTab] = useState<'advance' | 'hisaab' | 'expense' | 'advance_changes' | 'transfer'>('advance');
+  const [activeTab, setActiveTab] = useState<'advance' | 'hisaab' | 'expense' | 'transfer'>('advance');
   const [expensePaymentMethod, setExpensePaymentMethod] = useState<'cash' | 'online'>('cash');
   const [advancePaymentMethod, setAdvancePaymentMethod] = useState<'cash' | 'online'>('cash');
+  const [hisaabPaymentMethod, setHisaabPaymentMethod] = useState<'cash' | 'online'>('cash');
 
   // Bonus States (Optionally used inside Hisaab)
   const [bonusWorkerId, setBonusWorkerId] = useState<string>('');
@@ -147,17 +144,11 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   const [hisaabTotalWages, setHisaabTotalWages] = useState<string>('');
   const [hisaabNewAdvance, setHisaabNewAdvance] = useState<string>('');
   const [hisaabJamaHain, setHisaabJamaHain] = useState<string>('');
-  const [hisaabCashAmount, setHisaabCashAmount] = useState<string>('');
-  const [hisaabOnlineAmount, setHisaabOnlineAmount] = useState<string>('');
-  const [hisaabPayCashNow, setHisaabPayCashNow] = useState<boolean>(false);
   const [hisaabNote, setHisaabNote] = useState<string>('');
   const [hisaabPhotoFile, setHisaabPhotoFile] = useState<File | null>(null);
   const [hisaabPhotoPreview, setHisaabPhotoPreview] = useState<string | null>(null);
-  const [hisaabLoading, setHisaabLoading] = useState<boolean>(false);
-  const [hisaabError, setHisaabError] = useState<string>('');
 
-  // Advance Changes States
-  const [advanceChangeSearch, setAdvanceChangeSearch] = useState<string>('');
+  // Advance Changes States (Modal for quick balance update)
   const [showAdvanceChangeModal, setShowAdvanceChangeModal] = useState<boolean>(false);
   const [advanceChangeWorker, setAdvanceChangeWorker] = useState<Worker | null>(null);
   const [advanceChangeNewAmount, setAdvanceChangeNewAmount] = useState<string>('');
@@ -738,49 +729,6 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
   }, [factoryId, factoryBonuses]);
 
   const activeBonuses = factoryBonuses !== undefined ? factoryBonuses : cachedBonuses;
-
-  // 8. Fetch Worker Advance Changes for tracking
-  const { data: advanceChanges = [], isLoading: advanceChangesLoading } = useQuery({
-    queryKey: ['worker-advance-changes', factoryId],
-    queryFn: async () => {
-      if (!factoryId) return [];
-      try {
-        const data = await getWorkerAdvanceChangesAction(factoryId);
-        await setOfflineCache(`adv-changes-${factoryId}`, data);
-        return data;
-      } catch (err) {
-        console.warn('Failed to fetch advance changes, falling back to offline cache:', err);
-        const cached = await getOfflineCache<WorkerAdvanceChange[]>(`adv-changes-${factoryId}`);
-        return cached || [];
-      }
-    },
-    enabled: !!factoryId,
-    staleTime: 30 * 1000,
-    refetchOnWindowFocus: false,
-  });
-
-  const [cachedAdvChanges, setCachedAdvChanges] = useState<WorkerAdvanceChange[]>([]);
-  useEffect(() => {
-    if (factoryId) {
-      getOfflineCache<WorkerAdvanceChange[]>(`adv-changes-${factoryId}`).then(data => {
-        if (data) setCachedAdvChanges(data);
-      });
-    }
-  }, [factoryId, advanceChanges]);
-
-  const activeAdvChanges = advanceChanges !== undefined ? advanceChanges : cachedAdvChanges;
-
-  const filteredAdvanceChanges = useMemo(() => {
-    return (activeAdvChanges || []).filter(c => {
-      if (!advanceChangeSearch.trim()) return true;
-      const q = advanceChangeSearch.toLowerCase();
-      return (
-        c.worker_name.toLowerCase().includes(q) ||
-        (c.reason && c.reason.toLowerCase().includes(q)) ||
-        (c.supervisor_name && c.supervisor_name.toLowerCase().includes(q))
-      );
-    });
-  }, [activeAdvChanges, advanceChangeSearch]);
 
   const getCategoryBadge = (category: string) => {
     const cat = (category || 'other').toLowerCase();
@@ -1777,8 +1725,8 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
           throw new Error('Selected worker not found.');
         }
 
-        const cashPaid = Math.max(0, parseFloat((formData.get('hisaabCashAmount') as string) || hisaabCashAmount || '0'));
-        const onlinePaid = Math.max(0, parseFloat((formData.get('hisaabOnlineAmount') as string) || hisaabOnlineAmount || '0'));
+        const cashPaid = hisaabPaymentMethod === 'cash' ? totalWages : 0;
+        const onlinePaid = hisaabPaymentMethod === 'online' ? totalWages : 0;
         const parsedBonus = parseFloat(bonusAmount) || 0;
         const cleanBonusNote = bonusNote.trim();
 
@@ -1887,12 +1835,9 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         setHisaabTotalWages('');
         setHisaabNewAdvance('');
         setHisaabJamaHain('');
-        setHisaabCashAmount('');
-        setHisaabOnlineAmount('');
         setBonusAmount('');
         setBonusNote('');
         setHisaabNote('');
-        setHisaabPayCashNow(false);
         setHisaabPhotoFile(null);
         if (hisaabPhotoPreview && hisaabPhotoPreview.startsWith('blob:')) {
           URL.revokeObjectURL(hisaabPhotoPreview);
@@ -2500,7 +2445,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
       <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
         {/* Quick Action Tabs */}
         <div className="p-2 border-b border-slate-100 bg-slate-50/60">
-          <div className="grid grid-cols-5 gap-1 bg-slate-200/70 p-1 rounded-xl text-xs font-bold">
+          <div className="grid grid-cols-4 gap-1.5 bg-slate-200/70 p-1 rounded-xl text-xs font-bold">
             <button
               type="button"
               onPointerDown={() => {
@@ -2512,7 +2457,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                 }
               }}
               onClick={() => { setActiveTab('advance'); setActionMessage(null); setLastDisburseSms(null); }}
-              className={`py-2 px-1 text-center rounded-lg transition-all min-h-[38px] flex items-center justify-center cursor-pointer select-none touch-manipulation ${
+              className={`py-2 px-1 text-center rounded-lg transition-all min-h-[38px] flex items-center justify-center cursor-pointer select-none touch-manipulation whitespace-nowrap shrink-0 ${
                 activeTab === 'advance'
                   ? 'bg-white text-slate-950 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/40'
@@ -2530,7 +2475,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                 }
               }}
               onClick={() => { setActiveTab('hisaab'); setActionMessage(null); }}
-              className={`py-2 px-1 text-center rounded-lg transition-all min-h-[38px] flex items-center justify-center cursor-pointer select-none touch-manipulation ${
+              className={`py-2 px-1 text-center rounded-lg transition-all min-h-[38px] flex items-center justify-center cursor-pointer select-none touch-manipulation whitespace-nowrap shrink-0 ${
                 activeTab === 'hisaab'
                   ? 'bg-white text-slate-950 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/40'
@@ -2548,31 +2493,13 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                 }
               }}
               onClick={() => { setActiveTab('expense'); setActionMessage(null); }}
-              className={`py-2 px-1 text-center rounded-lg transition-all min-h-[38px] flex items-center justify-center cursor-pointer select-none touch-manipulation ${
+              className={`py-2 px-1 text-center rounded-lg transition-all min-h-[38px] flex items-center justify-center cursor-pointer select-none touch-manipulation whitespace-nowrap shrink-0 ${
                 activeTab === 'expense'
                   ? 'bg-white text-slate-950 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/40'
               }`}
             >
               Factory Kharcha
-            </button>
-            <button
-              type="button"
-              onPointerDown={() => {
-                setActiveTab('advance_changes');
-                setActionMessage(null);
-                if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
-                  document.activeElement.blur();
-                }
-              }}
-              onClick={() => { setActiveTab('advance_changes'); setActionMessage(null); }}
-              className={`py-2 px-1 text-center rounded-lg transition-all min-h-[38px] flex items-center justify-center cursor-pointer select-none touch-manipulation ${
-                activeTab === 'advance_changes'
-                  ? 'bg-white text-slate-950 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/40'
-              }`}
-            >
-              Advance Log
             </button>
             <button
               type="button"
@@ -2584,7 +2511,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                 }
               }}
               onClick={() => { setActiveTab('transfer'); setActionMessage(null); }}
-              className={`py-2 px-1 text-center rounded-lg transition-all min-h-[38px] flex items-center justify-center cursor-pointer select-none touch-manipulation ${
+              className={`py-2 px-1 text-center rounded-lg transition-all min-h-[38px] flex items-center justify-center cursor-pointer select-none touch-manipulation whitespace-nowrap shrink-0 ${
                 activeTab === 'transfer'
                   ? 'bg-white text-slate-950 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/40'
@@ -2879,85 +2806,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
               </>
             )}
 
-            {/* ADVANCE CHANGES TAB */}
-            {activeTab === 'advance_changes' && (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Worker Advance Changes</h3>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (activeWorkers.length > 0) {
-                        setAdvanceChangeWorker(activeWorkers[0]);
-                        setAdvanceChangeNewAmount(String(activeWorkers[0].running_advance || 0));
-                        setAdvanceChangeReason('');
-                        setShowAdvanceChangeModal(true);
-                      }
-                    }}
-                    className="px-2.5 py-1 text-xs font-bold text-white bg-slate-900 rounded hover:bg-slate-800 transition-colors"
-                  >
-                    + Change Advance
-                  </button>
-                </div>
 
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400 pointer-events-none" />
-                  <input
-                    type="text"
-                    value={advanceChangeSearch}
-                    onChange={(e) => setAdvanceChangeSearch(e.target.value)}
-                    placeholder="Search advance changes..."
-                    className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-900 bg-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-400 min-h-[36px]"
-                  />
-                </div>
-
-                {advanceChangesLoading && advanceChanges.length === 0 ? (
-                  <div className="p-8 text-center text-xs text-slate-500">
-                    <RefreshCw className="h-5 w-5 animate-spin mx-auto text-slate-400 mb-2" />
-                    Loading advance changes...
-                  </div>
-                ) : filteredAdvanceChanges.length === 0 ? (
-                  <div className="p-8 text-center text-xs text-slate-500 bg-slate-50 rounded-lg border border-slate-200">
-                    No advance changes recorded yet.
-                  </div>
-                ) : (
-                  <ul className="divide-y divide-slate-100 bg-white border border-slate-200 rounded-lg max-h-80 overflow-y-auto">
-                    {filteredAdvanceChanges.map((change) => (
-                      <li key={change.id} className="p-3 hover:bg-slate-50 transition-colors">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <span className="text-xs font-bold text-slate-900">{change.worker_name}</span>
-                            <p className="text-[11px] text-slate-500 mt-0.5">{change.reason}</p>
-                          </div>
-                          <div className="text-right">
-                            <div className="flex items-center gap-1.5 justify-end">
-                              <span className="text-xs text-slate-400 line-through">{formatINR(change.old_advance)}</span>
-                              <span className="text-xs text-slate-400">→</span>
-                              <span className="text-xs font-black text-slate-950">{formatINR(change.new_advance)}</span>
-                            </div>
-                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded mt-0.5 inline-block ${
-                              change.difference > 0
-                                ? 'bg-red-50 text-red-700 border border-red-200'
-                                : change.difference < 0
-                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                : 'bg-slate-100 text-slate-600'
-                            }`}>
-                              {change.difference > 0 ? `+${formatINR(change.difference)}` : formatINR(change.difference)}
-                            </span>
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1.5 mt-1 border-t border-slate-50">
-                          <span>By {change.supervisor_name}</span>
-                          <span>{new Date(change.created_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
 
             {/* HISAAB SETTLEMENT FORM */}
             {activeTab === 'hisaab' && (
@@ -3191,11 +3040,33 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                   </div>
                 </div>
 
-                {/* Kitne paise diye (INR) Input */}
+                {/* Kitne paise diye (INR) Input with Cash / Online By Office Switch */}
                 <div>
-                  <label htmlFor="hisaabTotalWages" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                    Kitne paise diye (INR)
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label htmlFor="hisaabTotalWages" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                      Kitne paise diye (INR)
+                    </label>
+                    <div className="flex items-center gap-1 bg-slate-200/80 p-0.5 rounded">
+                      <button
+                        type="button"
+                        onClick={() => setHisaabPaymentMethod('cash')}
+                        className={`text-[11px] font-bold px-2.5 py-0.5 rounded transition-all ${
+                          hisaabPaymentMethod === 'cash' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        Cash
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHisaabPaymentMethod('online')}
+                        className={`text-[11px] font-bold px-2.5 py-0.5 rounded transition-all ${
+                          hisaabPaymentMethod === 'online' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        Online By Office
+                      </button>
+                    </div>
+                  </div>
                   <div className="relative mt-1 rounded shadow-sm">
                     <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
                       <span className="text-slate-500 text-sm font-bold">₹</span>
@@ -3314,7 +3185,9 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                     <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-1.5 text-xs">
                       <div className="flex justify-between items-center text-slate-700">
                         <span>Kitne paise diye:</span>
-                        <span className="font-bold text-slate-900">{formatINR(wagesNum)}</span>
+                        <span className="font-bold text-slate-900">
+                          {formatINR(wagesNum)} ({hisaabPaymentMethod === 'cash' ? 'Cash' : 'Online By Office'})
+                        </span>
                       </div>
                       <div className="border-t border-slate-200 pt-1.5 flex justify-between items-center">
                         <span className="font-semibold text-slate-800">Current Worker Advance:</span>
@@ -3323,142 +3196,6 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
                       <div className="border-t border-slate-200 pt-1.5 flex justify-between items-center">
                         <span className="font-semibold text-slate-800">Jama Hain:</span>
                         <span className="font-bold text-emerald-700">{formatINR(Number(hisaabJamaHain !== '' ? hisaabJamaHain : curWorker?.unpaid_salary || 0))}</span>
-                      </div>
-                    </div>
-                  );
-                })()}
-
-                {/* WORKER PAYOUT DISTRIBUTION (Cash Handover vs Online By Office) */}
-                {(() => {
-                  const wagesNum = parseFloat(hisaabTotalWages) || 0;
-                  if (wagesNum <= 0) return null;
-
-                  const cashNum = parseFloat(hisaabCashAmount) || 0;
-                  const onlineNum = parseFloat(hisaabOnlineAmount) || 0;
-                  const totalPayout = cashNum + onlineNum;
-
-                  return (
-                    <div className="rounded-lg p-3.5 bg-slate-50 border border-slate-200 space-y-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <label className="block text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                          <CreditCard className="h-4 w-4 text-indigo-600" />
-                          <span>Worker Payout Distribution</span>
-                        </label>
-                        <span className="text-xs font-black text-slate-900 shrink-0">
-                          {formatINR(wagesNum)}
-                        </span>
-                      </div>
-
-                      {/* 1-Tap Preset Chips */}
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setHisaabCashAmount(String(wagesNum));
-                            setHisaabOnlineAmount('0');
-                          }}
-                          className="text-xs px-2.5 py-1 rounded border border-emerald-300 bg-emerald-50 text-emerald-900 font-bold hover:bg-emerald-100 transition-colors"
-                        >
-                          All in Cash ({formatINR(wagesNum)})
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setHisaabCashAmount('0');
-                            setHisaabOnlineAmount(String(wagesNum));
-                          }}
-                          className="text-xs px-2.5 py-1 rounded border border-indigo-300 bg-indigo-50 text-indigo-900 font-bold hover:bg-indigo-100 transition-colors"
-                        >
-                          All Online By Office ({formatINR(wagesNum)})
-                        </button>
-                        {wagesNum > 1000 && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const half = Math.floor(wagesNum / 2);
-                              setHisaabCashAmount(String(half));
-                              setHisaabOnlineAmount(String(wagesNum - half));
-                            }}
-                            className="text-xs px-2.5 py-1 rounded border border-slate-300 bg-white text-slate-700 font-medium hover:bg-slate-50 transition-colors"
-                          >
-                            Split Half & Half
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setHisaabCashAmount('0');
-                            setHisaabOnlineAmount('0');
-                          }}
-                          className="text-xs px-2.5 py-1 rounded border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition-colors"
-                        >
-                          No Payout Now (₹0)
-                        </button>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                        {/* Cash Handover Input */}
-                        <div className="space-y-1">
-                          <label htmlFor="hisaabCashAmount" className="block text-xs font-bold text-slate-800">
-                            Cash Handover (INR)
-                          </label>
-                          <div className="relative rounded shadow-xs">
-                            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-                              <span className="text-slate-500 text-sm font-bold">₹</span>
-                            </div>
-                            <input
-                              id="hisaabCashAmount"
-                              name="hisaabCashAmount"
-                              type="number"
-                              min="0"
-                              value={hisaabCashAmount}
-                              onChange={(e) => setHisaabCashAmount(e.target.value)}
-                              disabled={actionLoading}
-                              placeholder="0"
-                              className="block w-full rounded border border-slate-300 pl-7 pr-3 py-2 text-slate-950 text-sm font-bold bg-white focus:ring-2 focus:ring-slate-500 min-h-[44px]"
-                            />
-                          </div>
-                        </div>
-
-                        {/* Online By Office Input */}
-                        <div className="space-y-1">
-                          <label htmlFor="hisaabOnlineAmount" className="block text-xs font-bold text-indigo-950 flex items-center gap-1">
-                            <QrCode className="h-3.5 w-3.5 text-indigo-600" />
-                            <span>Online By Office (INR)</span>
-                          </label>
-                          <div className="relative rounded shadow-xs">
-                            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-                              <span className="text-indigo-500 text-sm font-bold">₹</span>
-                            </div>
-                            <input
-                              id="hisaabOnlineAmount"
-                              name="hisaabOnlineAmount"
-                              type="number"
-                              min="0"
-                              value={hisaabOnlineAmount}
-                              onChange={(e) => setHisaabOnlineAmount(e.target.value)}
-                              disabled={actionLoading}
-                              placeholder="0"
-                              className="block w-full rounded border border-indigo-300 pl-7 pr-3 py-2 text-slate-950 text-sm font-bold bg-white focus:ring-2 focus:ring-indigo-500 min-h-[44px]"
-                            />
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Real-time Summary Card */}
-                      <div className="bg-white rounded border border-slate-200 p-2.5 text-xs space-y-1">
-                        <div className="flex justify-between items-center text-slate-600">
-                          <span>Cash Handover:</span>
-                          <span className="font-bold text-slate-900">{formatINR(cashNum)}</span>
-                        </div>
-                        <div className="flex justify-between items-center text-indigo-700">
-                          <span>Online By Office:</span>
-                          <span className="font-bold">{formatINR(onlineNum)}</span>
-                        </div>
-                        <div className="border-t border-slate-100 pt-1 flex justify-between items-center font-bold">
-                          <span className="text-slate-800">Total Payout:</span>
-                          <span className="text-slate-950">{formatINR(totalPayout)}</span>
-                        </div>
                       </div>
                     </div>
                   );
@@ -3725,37 +3462,35 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
               </div>
             )}
 
-            {activeTab !== 'advance_changes' && (
-              <button
-                type="submit"
-                disabled={
-                  actionLoading || 
-                  (activeTab === 'advance' && (!selectedWorkerId || !disburseAmount)) ||
-                  (activeTab === 'hisaab' && (!hisaabWorkerId || (parseFloat(hisaabTotalWages || '0') <= 0)))
-                }
-                className="w-full flex justify-center items-center rounded-md bg-slate-900 py-3 text-sm font-semibold text-white shadow hover:bg-slate-800 disabled:opacity-50 min-h-[46px] gap-2 transition-all"
-              >
-                {actionLoading ? (
-                  <RefreshCw className="h-4 w-4 animate-spin" />
-                ) : activeTab === 'advance' ? (
-                  <span>
-                    Disburse {advancePaymentMethod === 'online' ? 'Online' : 'Cash'} Advance {disburseAmount ? formatINR(Number(disburseAmount)) : ''}
-                  </span>
-                ) : activeTab === 'hisaab' ? (
-                  <span>
-                    Save Hisaab {hisaabTotalWages ? `(${formatINR(Number(hisaabTotalWages))})` : ''}
-                  </span>
-                ) : activeTab === 'expense' ? (
-                  <span>
-                    Log {expensePaymentMethod === 'online' ? 'Online Bank' : 'Cash'} Kharcha
-                  </span>
-                ) : activeTab === 'transfer' ? (
-                  <span>Transfer Cash</span>
-                ) : (
-                  <span>Submit Entry</span>
-                )}
-              </button>
-            )}
+            <button
+              type="submit"
+              disabled={
+                actionLoading || 
+                (activeTab === 'advance' && (!selectedWorkerId || !disburseAmount)) ||
+                (activeTab === 'hisaab' && (!hisaabWorkerId || (parseFloat(hisaabTotalWages || '0') <= 0)))
+              }
+              className="w-full flex justify-center items-center rounded-md bg-slate-900 py-3 text-sm font-semibold text-white shadow hover:bg-slate-800 disabled:opacity-50 min-h-[46px] gap-2 transition-all"
+            >
+              {actionLoading ? (
+                <RefreshCw className="h-4 w-4 animate-spin" />
+              ) : activeTab === 'advance' ? (
+                <span>
+                  Disburse {advancePaymentMethod === 'online' ? 'Online' : 'Cash'} Advance {disburseAmount ? formatINR(Number(disburseAmount)) : ''}
+                </span>
+              ) : activeTab === 'hisaab' ? (
+                <span>
+                  Save Hisaab {hisaabTotalWages ? `(${formatINR(Number(hisaabTotalWages))} • ${hisaabPaymentMethod === 'cash' ? 'Cash' : 'Online By Office'})` : ''}
+                </span>
+              ) : activeTab === 'expense' ? (
+                <span>
+                  Log {expensePaymentMethod === 'online' ? 'Online Bank' : 'Cash'} Kharcha
+                </span>
+              ) : activeTab === 'transfer' ? (
+                <span>Transfer Cash</span>
+              ) : (
+                <span>Submit Entry</span>
+              )}
+            </button>
           </form>
         </div>
       </div>
@@ -4170,89 +3905,7 @@ export function SupervisorClientPage({ initialData }: SupervisorClientPageProps 
         )}
       </div>
 
-      {/* 4. Worker Advance Changes History Section */}
-      <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-100 bg-slate-50/60 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <History className="h-4 w-4 text-slate-700" />
-            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-800">
-              Advance Changes History
-            </h2>
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              if (activeWorkers.length > 0) {
-                setAdvanceChangeWorker(activeWorkers[0]);
-                setAdvanceChangeNewAmount(String(activeWorkers[0].running_advance || 0));
-                setAdvanceChangeReason('');
-                setShowAdvanceChangeModal(true);
-              }
-            }}
-            className="px-2.5 py-1 text-xs font-bold text-white bg-slate-900 rounded hover:bg-slate-800 transition-colors"
-          >
-            Change Advance
-          </button>
-        </div>
 
-        <div className="p-3 bg-white border-b border-slate-100">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400 pointer-events-none" />
-            <input
-              type="text"
-              value={advanceChangeSearch}
-              onChange={(e) => setAdvanceChangeSearch(e.target.value)}
-              placeholder="Search by worker name or reason..."
-              className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-900 bg-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-400 min-h-[36px]"
-            />
-          </div>
-        </div>
-
-        {advanceChangesLoading && advanceChanges.length === 0 ? (
-          <div className="p-8 text-center text-xs text-slate-500">
-            <RefreshCw className="h-5 w-5 animate-spin mx-auto text-slate-400 mb-2" />
-            Loading advance changes...
-          </div>
-        ) : filteredAdvanceChanges.length === 0 ? (
-          <div className="p-8 text-center text-xs text-slate-500">
-            {advanceChangeSearch ? 'No matching advance changes found.' : 'No advance changes recorded yet.'}
-          </div>
-        ) : (
-          <ul className="divide-y divide-slate-100 bg-white max-h-96 overflow-y-auto">
-            {filteredAdvanceChanges.map((change) => (
-              <li key={change.id} className="p-3.5 hover:bg-slate-50/70 transition-colors">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <span className="text-xs font-bold text-slate-900 block">{change.worker_name}</span>
-                    <p className="text-[11px] text-slate-500 mt-0.5">{change.reason}</p>
-                    <div className="flex items-center gap-2 text-[10px] text-slate-400 mt-1">
-                      <span>By {change.supervisor_name}</span>
-                      <span>•</span>
-                      <span>{new Date(change.created_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
-                    </div>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <div className="flex items-center gap-1.5 justify-end">
-                      <span className="text-xs text-slate-400 line-through">{formatINR(change.old_advance)}</span>
-                      <span className="text-xs text-slate-400">→</span>
-                      <span className="text-xs font-black text-slate-950">{formatINR(change.new_advance)}</span>
-                    </div>
-                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded mt-1 inline-block ${
-                      change.difference > 0
-                        ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                        : change.difference < 0
-                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                        : 'bg-slate-100 text-slate-600'
-                    }`}>
-                      {change.difference > 0 ? `+${formatINR(change.difference)}` : formatINR(change.difference)}
-                    </span>
-                  </div>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
 
       {/* 1-Tap In-App Camera Viewfinder */}
       <CameraCaptureModal
