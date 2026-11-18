@@ -877,8 +877,7 @@ export function AdminDashboard({
   };
 
   // --- 3. Combine and Filter Ledger Entries (Transactions + Expenses) ---
-  const filteredLedger = useMemo(() => {
-    return [
+  const filteredLedger = [
     ...localTransactions
       .filter(tx => {
         if (tx.type === 'supervisor_to_worker' && (tx.to_work?.active === false || tx.to_work?.name === 'Deleted Worker')) {
@@ -1047,20 +1046,6 @@ export function AdminDashboard({
 
     return true;
   }).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-  }, [
-    localTransactions,
-    localRefundedMap,
-    supervisors,
-    expenses,
-    onlineAdvances,
-    bonuses,
-    salaryLedgerEntries,
-    selectedFactory,
-    selectedSupervisor,
-    selectedPurpose,
-    ledgerFromDate,
-    ledgerToDate,
-  ]);
 
   // --- 4. CSV Export ---
   const exportToCSV = () => {
