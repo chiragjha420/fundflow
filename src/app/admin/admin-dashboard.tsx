@@ -2856,10 +2856,6 @@ export function AdminDashboard({
               </>
             )}
           </button>
-                <span>Collapse</span>
-              </>
-            )}
-          </button>
         </div>
 
         {!isLedgerLogCollapsed && (
